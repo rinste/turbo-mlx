@@ -7,8 +7,8 @@ first launch the app sets up its own engine and downloads the models the user pi
 ![Turbo MLX: settings on the left, the image with its zoom controls and metadata on the right, the history below](docs/screenshot.webp)
 
 - **Left column:** model (with download and status), the prompt as blocks (each one a piece of the
-  final text, so the subject and the style can be written and moved separately; renamable, with
-  examples), format (aspect ratio and resolution, or a custom size), steps, guidance, seed, number
+  final text, so the subject and the style can be written separately; renamable, and put in order
+  by dragging), format (aspect ratio and resolution, or a custom size), steps, guidance, seed, number
   of images, transparent or white background, memory saving. The main button does what the current state needs:
   *Install Image Engine* → *Download and Generate* → *Generate*.
 - **Right column:** the image (on a checkerboard when transparent) with its metadata, the running

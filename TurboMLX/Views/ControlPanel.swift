@@ -10,7 +10,7 @@ struct ControlPanel: View {
         Form {
             ModelSection()
             if let model = app.selectedModel {
-                PromptSection(settings: $app.settings, family: model.family, focus: $focusedBlock)
+                PromptSection(settings: $app.settings, focus: $focusedBlock)
                 FormatSection(settings: $app.settings)
                 ParametersSection(settings: $app.settings, model: model)
                 MemorySection(settings: $app.settings, family: model.family)
@@ -231,53 +231,61 @@ private struct ModelMenu: View {
 
 // MARK: - Prompt
 
-/// The prompt as blocks: each one a piece of the final text, renamable, movable, removable.
+/// The prompt as blocks: each one a piece of the final text, renamable, removable, and put in
+/// order by dragging its handle (or with its arrows).
 private struct PromptSection: View {
     @Binding var settings: GenerationSettings
-    let family: ModelFamily
     var focus: FocusState<PromptBlock.ID?>.Binding
 
+    /// The block being dragged; back to nil when it's let go, or when the drag is cancelled.
+    @GestureState(resetTransaction: Transaction(animation: .snappy)) private var drag: BlockDrag? = nil
+    /// Each block's height, to know where a dragged block would land.
+    @State private var heights: [PromptBlock.ID: CGFloat] = [:]
+
+    private static let space = NamedCoordinateSpace.named("promptBlocks")
+
     var body: some View {
+        let reordering = drag.flatMap { Reordering(of: settings.blocks, heights: heights, drag: $0) }
         Section {
-            ForEach($settings.blocks) { $block in
-                PromptBlockEditor(
-                    block: $block,
-                    position: position(of: block.id),
-                    count: settings.blocks.count,
-                    focus: focus,
-                    onMove: { move(block.id, by: $0) },
-                    onRemove: { remove(block.id) }
-                )
+            // All the blocks in one row, so the dragged one can be drawn over the others.
+            VStack(spacing: 0) {
+                ForEach($settings.blocks) { $block in
+                    let index = position(of: block.id)
+                    let isDragged = reordering?.source == index
+                    let offset = reordering?.offset(at: index) ?? 0
+                    let place = reordering?.place(of: index) ?? index
+                    PromptBlockEditor(
+                        block: $block,
+                        position: index,
+                        count: settings.blocks.count,
+                        isDragged: isDragged,
+                        showsSeparator: !isDragged && place > 0,
+                        focus: focus,
+                        reorder: reorderGesture(for: block.id),
+                        onMove: { move(block.id, by: $0) },
+                        onRemove: { remove(block.id) }
+                    )
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { heights[block.id] = $0 }
+                    .offset(y: offset)
+                    // The dragged block sticks to the pointer; the others slide out of its way.
+                    .animation(isDragged ? nil : .snappy, value: offset)
+                    .zIndex(isDragged ? 1 : 0)
+                }
             }
+            .coordinateSpace(Self.space)
         } header: {
-            HStack(spacing: 10) {
-                Text("Prompt")
-                Spacer()
-                Menu("Examples") {
-                    ForEach(PromptExamples.for(family), id: \.title) { example in
-                        Button(example.title) { fillFirstBlock(with: example.prompt) }
-                    }
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .textCase(nil)
-                Button {
-                    addBlock()
-                } label: {
-                    Image(systemName: "plus.circle")
-                }
-                .buttonStyle(.borderless)
-                .help("Add a block: the blocks are joined, in order, into one prompt")
-            }
+            Text("Prompt")
         } footer: {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 8) {
+                Button("Add Prompt Block", systemImage: "plus") { addBlock() }
+                    .labelStyle(.titleAndIcon)
+                    .help("Add a block at the end: the blocks are joined, in order, into one prompt")
                 if settings.blocks.count > 1 {
                     Text("The blocks are joined, in order, into one prompt.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                Text(family.promptTip)
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
         }
     }
 
@@ -307,32 +315,59 @@ private struct PromptSection: View {
         }
     }
 
-    /// Examples go into the first block; the others (a style, say) stay as they are.
-    private func fillFirstBlock(with text: String) {
-        if settings.blocks.isEmpty {
-            settings.blocks = [PromptBlock(name: "Prompt 1", text: text)]
-        } else {
-            settings.blocks[0].text = text
-        }
-        focus.wrappedValue = settings.blocks.first?.id
+    /// The blocks make room while one is dragged; the list itself changes when it's let go.
+    private func reorderGesture(for id: PromptBlock.ID) -> some Gesture {
+        DragGesture(minimumDistance: 2, coordinateSpace: Self.space)
+            .updating($drag) { value, state, _ in
+                state = BlockDrag(id: id, translation: value.translation.height)
+            }
+            .onEnded { value in
+                let drop = BlockDrag(id: id, translation: value.translation.height)
+                guard let reordering = Reordering(of: settings.blocks, heights: heights, drag: drop),
+                      reordering.destination != reordering.source
+                else { return }
+                var blocks = settings.blocks
+                blocks.insert(blocks.remove(at: reordering.source), at: reordering.destination)
+                withAnimation(.snappy) { settings.blocks = blocks }
+            }
     }
 }
 
-private struct PromptBlockEditor: View {
+private struct PromptBlockEditor<Reorder: Gesture>: View {
     @Binding var block: PromptBlock
     /// Index in the list, and how many blocks there are: the arrows stop at the ends.
     let position: Int
     let count: Int
+    /// Lifted above the others while its handle is dragged.
+    let isDragged: Bool
+    let showsSeparator: Bool
     var focus: FocusState<PromptBlock.ID?>.Binding
+    /// The drag that starts on the handle.
+    let reorder: Reorder
     let onMove: (Int) -> Void
     let onRemove: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 2) {
+                if count > 1 {
+                    Image(systemName: "line.3.horizontal")
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                        .pointerStyle(isDragged ? .grabActive : .grabIdle)
+                        .gesture(reorder)
+                        .padding(.trailing, 4)
+                        .help("Drag to move the block")
+                        .accessibilityHidden(true)
+                }
+                // The name is the block's title, renamed in place; Return goes on to the text.
                 TextField("Name", text: $block.name)
+                    .labelsHidden()
                     .textFieldStyle(.plain)
-                    .font(.subheadline.weight(.medium))
+                    .multilineTextAlignment(.leading)
+                    .font(.headline)
+                    .onSubmit { focus.wrappedValue = block.id }
                     .help("Click to rename the block")
                 Button {
                     onMove(-1)
@@ -360,9 +395,8 @@ private struct PromptBlockEditor: View {
             .foregroundStyle(.secondary)
 
             TextEditor(text: $block.text)
-                .font(.body)
                 .scrollContentBackground(.hidden)
-                .frame(minHeight: 64, idealHeight: 96, maxHeight: 240)
+                .frame(minHeight: 72, idealHeight: 110, maxHeight: 260)
                 .focused(focus, equals: block.id)
                 .overlay(alignment: .topLeading) {
                     if block.text.isEmpty {
@@ -372,6 +406,8 @@ private struct PromptBlockEditor: View {
                             .allowsHitTesting(false)
                     }
                 }
+                // Larger than the controls around it: the prompt is what gets read and written here.
+                .font(.system(size: 15))
         }
         .contextMenu {
             Button("Move Up") { onMove(-1) }
@@ -382,12 +418,78 @@ private struct PromptBlockEditor: View {
             Button("Remove Block", role: .destructive) { onRemove() }
                 .disabled(count <= 1)
         }
+        .padding(.vertical, 6)
+        .background {
+            if isDragged {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.regularMaterial)
+                    .shadow(color: .black.opacity(0.2), radius: 6, y: 2)
+                    .padding(.horizontal, -6)
+            }
+        }
+        .overlay(alignment: .top) {
+            if showsSeparator { Divider() }
+        }
     }
 
     private var placeholder: String {
         position == 0
             ? "Describe the image: subject, style, light, colors. Put any text to render in quotes."
             : "A piece of the prompt: the style, the lighting, a detail. It follows the block above."
+    }
+}
+
+/// A block dragged by its handle, and how far the pointer has moved since.
+private struct BlockDrag {
+    let id: PromptBlock.ID
+    let translation: CGFloat
+}
+
+/// Where the blocks are drawn while one of them is dragged: that one follows the pointer, kept
+/// within the list, and the others slide out of the way of the place it would land in.
+private struct Reordering {
+    /// The dragged block's index, and the index it would land at.
+    let source: Int
+    let destination: Int
+    private let translation: CGFloat
+    private let draggedHeight: CGFloat
+
+    init?(of blocks: [PromptBlock], heights: [PromptBlock.ID: CGFloat], drag: BlockDrag) {
+        guard let source = blocks.firstIndex(where: { $0.id == drag.id }) else { return nil }
+        let height: (PromptBlock) -> CGFloat = { heights[$0.id] ?? 0 }
+        let others = blocks.filter { $0.id != drag.id }
+        let top: CGFloat = blocks[..<source].reduce(0) { $0 + height($1) }
+        let othersHeight: CGFloat = others.reduce(0) { $0 + height($1) }
+        let translation = min(max(drag.translation, -top), othersHeight - top)
+        // It lands in the place whose top is nearest its own: past the middle of a neighbor, it
+        // takes the neighbor's place.
+        var destination = 0
+        var placeTop: CGFloat = 0
+        for other in others {
+            guard top + translation > placeTop + height(other) / 2 else { break }
+            destination += 1
+            placeTop += height(other)
+        }
+        self.source = source
+        self.destination = destination
+        self.translation = translation
+        draggedHeight = height(blocks[source])
+    }
+
+    /// How far the block at `index` is drawn from its place in the list.
+    func offset(at index: Int) -> CGFloat {
+        if index == source { return translation }
+        if index < source, index >= destination { return draggedHeight }
+        if index > source, index <= destination { return -draggedHeight }
+        return 0
+    }
+
+    /// Where the block at `index` is drawn, counting from the top.
+    func place(of index: Int) -> Int {
+        if index == source { return destination }
+        if index < source, index >= destination { return index + 1 }
+        if index > source, index <= destination { return index - 1 }
+        return index
     }
 }
 
