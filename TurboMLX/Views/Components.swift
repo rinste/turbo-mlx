@@ -74,6 +74,42 @@ struct MetadataChip: View {
     }
 }
 
+extension Color {
+    /// What is active or selected: a soft white in the dark appearance, a dark gray in the light
+    /// one, next to the gray accent of the other controls (Assets → ActiveColor).
+    static let active = Color("ActiveColor")
+}
+
+/// The main action of a view, drawn in the active color with its text in the opposite tone;
+/// disabled, it drops back to a quiet gray.
+struct PrimaryActionButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.colorScheme) private var colorScheme
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(isEnabled ? labelColor : Color.secondary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .frame(minHeight: 36)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isEnabled ? Color.active : Color.primary.opacity(0.08))
+            )
+            .opacity(configuration.isPressed ? 0.75 : 1)
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// Dark text on the soft white, white text on the dark gray.
+    private var labelColor: Color {
+        colorScheme == .dark ? Color(white: 0.1) : Color(white: 0.98)
+    }
+}
+
+extension ButtonStyle where Self == PrimaryActionButtonStyle {
+    static var primaryAction: PrimaryActionButtonStyle { PrimaryActionButtonStyle() }
+}
+
 /// A rectangle drawn in a given aspect ratio, used by the format picker.
 struct AspectGlyph: View {
     let ratio: Double
@@ -84,10 +120,10 @@ struct AspectGlyph: View {
         let width = ratio >= 1 ? side : side * ratio
         let height = ratio >= 1 ? side / ratio : side
         RoundedRectangle(cornerRadius: 3)
-            .strokeBorder(isSelected ? Color.accentColor : Color.secondary, lineWidth: 1.5)
+            .strokeBorder(isSelected ? Color.active : Color.secondary, lineWidth: 1.5)
             .background(
                 RoundedRectangle(cornerRadius: 3)
-                    .fill(isSelected ? Color.accentColor.opacity(0.18) : .clear)
+                    .fill(isSelected ? Color.active.opacity(0.18) : .clear)
             )
             .frame(width: width, height: height)
             .frame(width: side, height: side)

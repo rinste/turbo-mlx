@@ -41,17 +41,11 @@ private struct ModelSelection: View {
         @Bindable var app = app
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
+                // One flat list: the names say the family, and the menu stays short.
                 Picker("Model", selection: $app.selectedModelID) {
-                    ForEach(ModelFamily.allCases, id: \.self) { family in
-                        let members = app.models.filter { $0.family == family }
-                        if !members.isEmpty {
-                            Section(family.displayName) {
-                                ForEach(members) { model in
-                                    Label(model.name, systemImage: app.isInstalled(model) ? "checkmark.circle.fill" : "arrow.down.circle")
-                                        .tag(model.id)
-                                }
-                            }
-                        }
+                    ForEach(app.models) { model in
+                        Label(model.name, systemImage: app.isInstalled(model) ? "checkmark.circle.fill" : "arrow.down.circle")
+                            .tag(model.id)
                     }
                 }
                 .labelsHidden()
@@ -588,7 +582,7 @@ private struct FormatSection: View {
                         .padding(.vertical, 5)
                         .background(
                             RoundedRectangle(cornerRadius: 6)
-                                .fill(isSelected ? Color.accentColor.opacity(0.12) : .clear)
+                                .fill(isSelected ? Color.active.opacity(0.12) : .clear)
                         )
                         .contentShape(Rectangle())
                     }
@@ -811,9 +805,9 @@ private struct MemoryRows: View {
     private var saveMemoryDescription: String {
         let base = switch family {
         case .ming:
-            "Frees the text encoder (about 12 GB) once the prompt is read and decodes the image in tiles: about 15 GB instead of 35 GB at 1024 px. A prompt that was not in the queue yet reloads the model."
+            "Frees the text encoder (about 12 GB) once the prompt is read and decodes the image in tiles: about 15 GB instead of 35 GB at 1024 px. A prompt that was not in the queue yet loads it again."
         case .qwenImage:
-            "Frees the text encoder (about 14 GB) once the prompt is read and decodes the image in tiles. A prompt that was not in the queue yet reloads the model."
+            "Frees the text encoder (about 14 GB) once the prompt is read and decodes the image in tiles. A prompt that was not in the queue yet loads it again."
         case .zImageTurbo, .flux2Klein:
             "Keeps less in memory and, where it doesn’t affect the image, decodes it in tiles."
         }
@@ -876,8 +870,7 @@ private struct GenerateBar: View {
             }
 
             primaryButton
-                .buttonStyle(.borderedProminent)
-                .controlSize(.extraLarge)
+                .buttonStyle(.primaryAction)
 
             if let caption {
                 Text(caption)

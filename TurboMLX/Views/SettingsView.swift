@@ -8,7 +8,7 @@ struct SettingsView: View {
             Tab("History", systemImage: "clock.arrow.circlepath") { HistorySettings() }
             Tab("About", systemImage: "info.circle") { AboutSettings() }
         }
-        .frame(width: 560, height: 440)
+        .frame(width: 560, height: 500)
     }
 }
 
@@ -31,17 +31,6 @@ private struct EngineSettings: View {
             }
 
             Section {
-                LabeledContent("Python environment") {
-                    Button("Show in Finder") {
-                        NSWorkspace.shared.activateFileViewerSelecting([BackendController.venvDirectory])
-                    }
-                    .disabled(!backend.isInstalled)
-                }
-                LabeledContent("mflux version") {
-                    Text(verbatim: "commit " + BackendController.mfluxCommit.prefix(7))
-                        .monospaced()
-                        .foregroundStyle(.secondary)
-                }
                 LabeledContent("Native engine") {
                     if let url = BackendController.nativeEngineURL {
                         Text(url.path(percentEncoded: false))
@@ -54,18 +43,45 @@ private struct EngineSettings: View {
                     }
                 }
             } footer: {
-                Text("Repair rebuilds the app’s Python environment from scratch, reusing the packages already downloaded. Use it if the engine no longer starts.")
+                Text(backend.hasNativeEngine
+                     ? "MLX Swift, part of the app: every model runs on it, and nothing else is installed."
+                     : "The app builds it from Engine/ and embeds it; without it, the Python engine below does the work.")
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                LabeledContent("Python environment") {
+                    HStack(spacing: 8) {
+                        Text(backend.isInstalled ? "Installed" : "Not installed")
+                            .foregroundStyle(.secondary)
+                        Button("Show in Finder") {
+                            NSWorkspace.shared.activateFileViewerSelecting([BackendController.venvDirectory])
+                        }
+                        .disabled(!backend.isInstalled)
+                    }
+                }
+                LabeledContent("mflux version") {
+                    Text(verbatim: "commit " + BackendController.mfluxCommit.prefix(7))
+                        .monospaced()
+                        .foregroundStyle(.secondary)
+                }
+                HStack {
+                    Button(backend.isInstalled ? "Repair Python Engine" : "Install Python Engine") {
+                        backend.install(clean: backend.isInstalled)
+                    }
+                    .disabled(app.isBusy || backend.status == .installing)
+                }
+            } footer: {
+                Text(backend.hasNativeEngine
+                     ? "The fallback of builds without the native engine (mflux on Python); this build does not use it. Repair rebuilds its environment from scratch, reusing the packages already downloaded."
+                     : "mflux on Python, installed on first use. Repair rebuilds its environment from scratch, reusing the packages already downloaded; use it if the engine no longer starts.")
                     .foregroundStyle(.secondary)
             }
 
             Section {
                 HStack {
-                    Button(backend.isInstalled ? "Repair Engine" : "Install Engine") {
-                        backend.install(clean: backend.isInstalled)
-                    }
-                    .disabled(app.isBusy || backend.status == .installing)
                     Button("Restart Engine") { backend.restartWorker() }
-                        .disabled(!backend.isInstalled || app.isBusy)
+                        .disabled(!(backend.hasNativeEngine || backend.isInstalled) || app.isBusy)
                     Spacer()
                     Button("Log…") { openWindow(id: WindowID.log) }
                 }
@@ -174,9 +190,10 @@ private struct AboutSettings: View {
                     .foregroundStyle(.secondary)
             }
             Section("Components") {
-                LabeledContent("mflux", value: "MIT · mflux-community")
-                LabeledContent("MLX", value: "MIT · Apple")
-                LabeledContent("uv", value: "MIT · Astral")
+                LabeledContent("MLX Swift", value: "MIT · Apple")
+                LabeledContent("swift-transformers", value: "Apache 2.0 · Hugging Face")
+                LabeledContent("mflux", value: "MIT · mflux-community · Python fallback")
+                LabeledContent("uv", value: "MIT · Astral · Python fallback")
             }
             Section("Models") {
                 ForEach(app.models.filter(\.isBuiltIn)) { model in

@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Shown in place of the image until the mflux environment exists.
+/// Shown in place of the image until the Python engine exists: only in a build without the
+/// native engine, which needs no setup.
 struct BackendSetupView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.openWindow) private var openWindow
@@ -15,7 +16,7 @@ struct BackendSetupView: View {
             VStack(spacing: 8) {
                 Text(backend.isUpdating ? "Updating the Image Engine" : "Set Up the Image Engine")
                     .font(.title2.bold())
-                Text("Turbo MLX generates images right on your Mac, on the GPU. The first time, it downloads its engine (Python, MLX and mflux, about 1 GB) into a folder of its own: there’s nothing else to install, and the rest of your system is left untouched.")
+                Text("Turbo MLX generates images right on your Mac, on the GPU. This build has no native engine, so the first time it downloads the Python one (Python, MLX and mflux, about 1 GB) into a folder of its own: there’s nothing else to install, and the rest of your system is left untouched.")
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
             }
@@ -51,8 +52,7 @@ struct BackendSetupView: View {
                     Label("Install Image Engine", systemImage: "arrow.down.circle")
                         .padding(.horizontal, 8)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                .buttonStyle(.primaryAction)
             }
 
             if !backend.installOutput.isEmpty {
@@ -110,8 +110,7 @@ struct ModelDownloadCard: View {
                     Label(model.sizeBytes.map { "Download · \(Format.bytes($0))" } ?? "Download", systemImage: "arrow.down.circle")
                         .padding(.horizontal, 8)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                .buttonStyle(.primaryAction)
                 .disabled(model.repo == nil)
                 Text("Downloaded once from Hugging Face\(model.license.map { " · \($0) license" } ?? ""). You can pick another model in the menu on the left.")
                     .font(.caption)
@@ -234,7 +233,7 @@ struct BackendDetails: View {
             Divider()
 
             HStack {
-                if backend.isInstalled {
+                if backend.hasNativeEngine || backend.isInstalled {
                     Button("Restart") { backend.restartWorker() }
                         .disabled(app.isBusy)
                     Button("Free Memory") { app.freeMemory() }

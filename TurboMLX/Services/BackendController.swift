@@ -15,9 +15,10 @@ nonisolated enum EngineKind: String, Sendable {
     }
 }
 
-/// Owns the engines: the Python virtual environment with mflux and its worker, the native
-/// `turbo-engine` when the build has one, and whichever of the two is running now, keeping a
-/// model loaded between generations.
+/// Owns the engines: the native `turbo-engine` the app ships with, the Python virtual environment
+/// with mflux and its worker as the fallback of a build without it, and whichever of the two is
+/// running now, keeping a model loaded between generations. With the native engine present,
+/// Python is neither installed, updated nor started.
 @Observable
 final class BackendController {
     enum Status: Equatable {
@@ -60,8 +61,9 @@ final class BackendController {
     /// whenever the executable is there; the Python engine only serves what it does not run.
     static let nativeFamilies: Set<ModelFamily> = [.flux2Klein, .zImageTurbo, .qwenImage, .ming]
 
-    /// The native engine: `TURBO_ENGINE` (a development build), the one in the app bundle, or one
-    /// dropped into the app's data folder by `scripts/build-engine.sh`.
+    /// The native engine: `TURBO_ENGINE` (a development build), the one in the app bundle (put
+    /// there by the "Embed turbo-engine" build phase, `scripts/embed-engine.sh`), or one dropped
+    /// into the app's data folder by `scripts/build-engine.sh`.
     static var nativeEngineURL: URL? {
         var candidates: [URL] = []
         if let custom = ProcessInfo.processInfo.environment["TURBO_ENGINE"], !custom.isEmpty {
@@ -103,6 +105,8 @@ final class BackendController {
         let marker = Self.venvDirectory.appending(path: ".turbo-mflux-requirement")
         return (try? String(contentsOf: marker, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+    /// The Python environment exists but was installed for another mflux than this app expects.
+    private var pythonNeedsUpdate: Bool { isInstalled && installedRequirement != Self.mfluxRequirement }
     var isRunning: Bool { worker != nil }
 
     private var workerScript: URL? { Bundle.main.url(forResource: "turbo_worker", withExtension: "py") }
@@ -119,35 +123,35 @@ final class BackendController {
         hasNativeEngine && Self.nativeFamilies.contains(model.family) ? .native : .python
     }
 
-    /// Resolves the environment and brings the Python engine up to date when a new version of the
-    /// app expects a different mflux. Starting a worker is left to `ensureWorker(for:)`, which
-    /// knows which engine the selected model needs.
+    /// Resolves the login shell's environment (`HF_HOME`, `HF_TOKEN`, PATH) and reports whether an
+    /// engine is there. Nothing is installed or started here: that is left to `ensureWorker(for:)`,
+    /// which knows which engine the selected model needs, so a build with the native engine never
+    /// touches Python.
     func prepare() async {
         environment = await ShellEnvironment.resolve()
-        if !isInstalled {
-            status = .notInstalled
-        } else if installedRequirement != Self.mfluxRequirement {
-            // Update in place (the other packages are already there, so this is quick).
-            isUpdating = true
-            install()
-        } else {
-            status = .stopped
-        }
+        status = hasNativeEngine || isInstalled ? .stopped : .notInstalled
     }
 
     /// Makes `kind` the running engine: starts it, or replaces the other one (the loaded model goes
-    /// with it). For the Python engine when it is not installed, reports that instead.
+    /// with it). The Python engine is first brought up to date when a new version of the app
+    /// expects a different mflux (in place: the other packages are already there, so it is
+    /// quick); when it is not installed, reports that instead.
     func ensureWorker(for kind: EngineKind) {
         if worker != nil, activeKind == kind { return }
         guard installer == nil else { return }
+        if kind == .python, pythonNeedsUpdate {
+            isUpdating = true
+            install()
+            return
+        }
         if worker != nil { stopWorker() }
         startWorker(kind: kind)
     }
 
     // MARK: Installation
 
-    /// Creates the Python environment with mflux, then starts the worker. `clean` rebuilds it
-    /// from scratch (packages come from uv's cache, so it is quick).
+    /// Creates the Python environment with mflux, then starts an engine. `clean` rebuilds it from
+    /// scratch (packages come from uv's cache, so it is quick).
     func install(clean: Bool = false) {
         guard installer == nil, let setupScript else { return }
         stopWorker()
@@ -186,13 +190,16 @@ final class BackendController {
         installer = nil
         let wasUpdate = isUpdating
         isUpdating = false
+        // The Python engine was just installed for a build without the native one; after a repair
+        // in a build that has it, the native engine comes back.
+        let kind: EngineKind = hasNativeEngine ? .native : .python
         if code == 0, isInstalled {
-            startWorker(kind: .python)
+            startWorker(kind: kind)
         } else if wasUpdate, isInstalled {
-            // Offline, say: keep using the engine that is there; the update is retried next launch.
+            // Offline, say: keep using the engine that is there; the update is retried next time.
             log.append("[turbo] engine update failed (exit code \(code)); keeping the installed version")
             installOutput = []
-            startWorker(kind: .python)
+            startWorker(kind: kind)
         } else {
             status = .failed("The installation failed (exit code \(code)). The log has the details.")
         }
@@ -252,7 +259,7 @@ final class BackendController {
     }
 
     func restartWorker() {
-        let kind = activeKind ?? .python
+        let kind = activeKind ?? (hasNativeEngine ? .native : .python)
         stopWorker()
         startWorker(kind: kind)
     }

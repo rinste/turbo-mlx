@@ -44,17 +44,25 @@ are never co-resident); the other two keep everything loaded.
 
 Requires Xcode 26 (mlx-swift 0.31.6 asks for a Swift 6.3 toolchain) and a Mac with Apple silicon.
 `swift build` alone does not compile mlx-swift's Metal shaders on macOS; use Xcode or `xcodebuild`
-(from `Engine/`, with `-skipPackagePluginValidation` for mlx-swift's package plug-in):
+(from `Engine/`, with `-skipPackagePluginValidation` for mlx-swift's package plug-in).
+
+The app's build does it: its *Embed turbo-engine* phase runs `scripts/embed-engine.sh`, which
+builds the engine in Release (`scripts/build-engine.sh`, derived data in `build/engine`) and puts
+it in the bundle, `turbo-engine` in `Contents/MacOS` and the resource bundles it loads
+(mlx-swift's Metal library among them) in `Contents/Resources`, signed like the app. Start the
+app: the engine status shows "turbo-engine 0.2" and every built-in model runs natively; the
+Python engine is neither installed nor started. The engine is rebuilt only when `Engine/`
+changed; when it fails to build, the phase warns and the app runs on the Python engine.
+
+An engine can also be installed for an app built without one (`TURBO_NO_ENGINE=1`):
 
 ```bash
 scripts/build-engine.sh            # builds Release and installs the binary for the app
 ```
 
-The script puts `turbo-engine` in `~/Library/Application Support/TurboMLX/bin/`, with the resource
-bundles it loads (mlx-swift's Metal library among them), where the app looks for it (after
-`TURBO_ENGINE` and the app bundle). Start the app: the engine status shows "turbo-engine 0.2" and
-every built-in model runs natively; the Python engine is neither installed nor started. Deleting
-the `bin` folder puts everything back on Python.
+That puts `turbo-engine` and its bundles in `~/Library/Application Support/TurboMLX/bin/`, where
+the app looks after `TURBO_ENGINE` and its own bundle. Deleting the `bin` folder puts such a
+build back on Python.
 
 To work on the engine in Xcode, open `Engine/Package.swift` and run the `turbo-engine` scheme
 with the arguments below.

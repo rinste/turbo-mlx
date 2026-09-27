@@ -1,14 +1,19 @@
 #!/bin/zsh
 # Builds the native engine (Engine/Package.swift) in Release with xcodebuild, which compiles
 # mlx-swift's Metal shaders (`swift build` does not on macOS), and installs the binary where the
-# app looks for it.
+# app looks for it. The app's own build runs this (scripts/embed-engine.sh) to embed the engine in
+# the bundle, so running it by hand is only for an app built without one.
 #
-# Usage: scripts/build-engine.sh               -> ~/Library/Application Support/TurboMLX/bin/turbo-engine
-#        scripts/build-engine.sh path/to/dir   -> that directory instead
+# Usage: scripts/build-engine.sh                 -> ~/Library/Application Support/TurboMLX/bin/turbo-engine
+#        scripts/build-engine.sh path/to/bin      -> that directory instead
+#        scripts/build-engine.sh path/to/bin path/to/resources
+#                                                -> the resource bundles go there instead of next to
+#                                                   the binary (Contents/Resources inside an app)
 set -euo pipefail
 
 cd "${0:A:h}/.."
 DEST="${1:-$HOME/Library/Application Support/TurboMLX/bin}"
+RESOURCES="${2:-$DEST}"
 DERIVED="build/engine"
 
 step() { print -P "%F{cyan}==>%f $*" }
@@ -24,13 +29,16 @@ BIN=$(find "$DERIVED/Build/Products/Release" -maxdepth 1 -type f -name turbo-eng
 [[ -n "$BIN" ]] || { print -u2 "turbo-engine was not produced; see the xcodebuild output"; exit 1 }
 
 step "Installing to $DEST"
-mkdir -p "$DEST"
+mkdir -p "$DEST" "$RESOURCES"
 install -m 755 "$BIN" "$DEST/turbo-engine"
 # The resource bundles sit next to the binary in the products folder, mlx-swift's Metal library
-# (mlx-swift_Cmlx.bundle) among them; the binary finds them next to itself.
+# (mlx-swift_Cmlx.bundle) among them. MLX looks for them next to the binary, then in the
+# resources of the main bundle: Contents/Resources when the engine runs from inside the app.
 for lib in "$DERIVED"/Build/Products/Release/*.bundle(N); do
-  rm -rf "$DEST/${lib:t}"
-  cp -R "$lib" "$DEST/"
+  rm -rf "$RESOURCES/${lib:t}"
+  cp -R "$lib" "$RESOURCES/"
 done
 print "Installed: $DEST/turbo-engine"
-print "The app picks it up on its next launch (Settings → Engine shows the path)."
+if [[ $# -eq 0 ]]; then
+  print "The app picks it up on its next launch (Settings → Engine shows the path)."
+fi

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Everything the Python side printed: mflux output, warnings and tracebacks.
+/// Everything the engine printed: its log lines, warnings and, from the Python one, tracebacks.
 struct LogView: View {
     @Environment(AppModel.self) private var app
 
@@ -30,7 +30,7 @@ struct LogView: View {
         .overlay {
             if log.lines.isEmpty {
                 ContentUnavailableView("The Log Is Empty", systemImage: "text.alignleft",
-                                       description: Text("Output from mflux and the Python engine appears here."))
+                                       description: Text("What the image engine prints appears here."))
             }
         }
         .toolbar {
