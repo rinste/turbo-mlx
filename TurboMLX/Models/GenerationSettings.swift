@@ -102,7 +102,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
 
     var blocks = PromptBlock.defaults()
     var aspect = AspectRatio.square
-    var resolution = 1024
+    var resolution = 768
     var usesCustomSize = false
     var customWidth = 1024
     var customHeight = 1024
