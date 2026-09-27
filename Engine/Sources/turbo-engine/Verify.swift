@@ -28,7 +28,29 @@ enum Verify {
 
             // 1. Text encoder.
             let encoded = model.encode(inputIds: try reference("input_ids"), attentionMask: try reference("attention_mask"))
-            ok = report("text encoder", got: encoded.embeds, want: try reference("prompt_embeds")) && ok
+            // In bf16, 28 layers carry rounding that depends on the MLX version's kernels (and
+            // random weights amplify it): a few percent apart even when every operation is the
+            // same. With a float32 reference, that check decides and these lines only inform.
+            let float32Reference = references["prompt_embeds_f32"]
+            let counts = float32Reference == nil
+            ok = report("text encoder", got: encoded.embeds, want: try reference("prompt_embeds"), counts: counts) && ok
+            // Each hidden state on its own: an error that grows with depth is rounding carried
+            // through the layers, one that is large from the first is a wrong operation.
+            let hidden = config.textEncoder.hiddenSize
+            for (index, layer) in config.textEncoderOutLayers.enumerated() {
+                let columns = (index * hidden) ..< ((index + 1) * hidden)
+                _ = report("  layer \(layer)", got: encoded.embeds[.ellipsis, columns], want: try reference("prompt_embeds")[.ellipsis, columns], counts: false)
+            }
+            // The same encoder with float32 activations, against mflux run the same way: rounding
+            // then stays at float32's level, so what differs here is the math itself.
+            if let wanted = float32Reference {
+                let embeds32 = model.textEncoder.promptEmbeds(
+                    inputIds: try reference("input_ids"), attentionMask: try reference("attention_mask"),
+                    layers: config.textEncoderOutLayers, computeType: .float32
+                )
+                eval(embeds32)
+                ok = report("text encoder f32", got: embeds32, want: wanted) && ok
+            }
             ok = report("text ids", got: encoded.ids, want: try reference("text_ids")) && ok
 
             // 2. Initial noise and ids for the fixture's seed and size.
@@ -46,8 +68,8 @@ enum Verify {
             eval(noise)
             ok = report("transformer pass", got: noise, want: try reference("noise")) && ok
 
-            // 4. The scheduler and the loop.
-            let schedule = FlowMatchSchedule(steps: steps)
+            // 4. The scheduler (shifted for the image's token count, as Klein runs it) and the loop.
+            let schedule = FlowMatchSchedule(steps: steps, imageSeqLen: initial.latentHeight * initial.latentWidth)
             ok = report("sigmas", got: MLXArray(schedule.sigmas), want: try reference("sigmas")) && ok
             ok = report("timesteps", got: MLXArray(schedule.timesteps), want: try reference("timesteps")) && ok
             var latents = try reference("latents")
@@ -74,8 +96,9 @@ enum Verify {
         }
     }
 
-    /// Largest absolute difference over the largest reference magnitude.
-    static func report(_ stage: String, got: MLXArray, want: MLXArray) -> Bool {
+    /// Largest absolute difference over the largest reference magnitude. A stage that does not
+    /// `count` is shown with "·" and always passes.
+    static func report(_ stage: String, got: MLXArray, want: MLXArray, counts: Bool = true) -> Bool {
         guard got.shape == want.shape else {
             print("  \(stage): shape \(got.shape), expected \(want.shape)")
             return false
@@ -85,9 +108,12 @@ enum Verify {
         let difference = abs(a - b).max().item(Float.self)
         let scale = Swift.max(abs(b).max().item(Float.self), 1e-6)
         let relative = difference / scale
+        // The typical error, next to the worst one: RMS of the difference over RMS of the reference.
+        let rms = sqrt(square(a - b).mean()).item(Float.self) / Swift.max(sqrt(square(b).mean()).item(Float.self), 1e-6)
         let pass = relative <= tolerance
-        print(String(format: "  %@ %-18@ max |Δ| %.5f  (%.3f of the reference's %.4f)", pass ? "✓" : "✗", stage, difference, relative, scale))
-        return pass
+        let mark = !counts ? "·" : pass ? "✓" : "✗"
+        print(String(format: "  %@ %-18@ max |Δ| %.5f  (%.3f of the reference's %.4f), RMS %.4f", mark, stage, difference, relative, scale, rms))
+        return pass || !counts
     }
 
     enum VerifyError: LocalizedError {

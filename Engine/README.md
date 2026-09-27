@@ -19,16 +19,19 @@ tensor where its key says.
 ## Building
 
 Requires Xcode 26 (mlx-swift 0.31.6 asks for a Swift 6.3 toolchain) and a Mac with Apple silicon.
-`swift build` alone does not compile mlx-swift's Metal shaders on macOS; use Xcode or `xcodebuild`:
+`swift build` alone does not compile mlx-swift's Metal shaders on macOS; use Xcode or `xcodebuild`
+(from `Engine/`, with `-skipPackagePluginValidation` for mlx-swift's package plug-in):
 
 ```bash
 scripts/build-engine.sh            # builds Release and installs the binary for the app
 ```
 
-The script puts `turbo-engine` in `~/Library/Application Support/TurboMLX/bin/`, where the app
-looks for it (after `TURBO_ENGINE` and the app bundle). Start the app: the engine status shows
-"turbo-engine 0.1" once a FLUX.2 Klein model is selected, and Klein images run natively. The
-Python engine keeps serving the other families.
+The script puts `turbo-engine` in `~/Library/Application Support/TurboMLX/bin/`, with the resource
+bundles it loads (mlx-swift's Metal library among them), where the app looks for it (after
+`TURBO_ENGINE` and the app bundle). Start the app: the engine status shows "turbo-engine 0.1" once
+a FLUX.2 Klein model is selected, and Klein images run natively. The Python engine keeps serving
+the other families, and Klein's base checkpoints, which need classifier-free guidance. Deleting
+the `bin` folder puts Klein back on Python.
 
 To work on the engine in Xcode, open `Engine/Package.swift` and run the `turbo-engine` scheme
 with the arguments below.
@@ -45,11 +48,17 @@ Before trusting it with a real checkpoint, compare it with mflux on a small one:
 turbo-engine verify /tmp/klein-fixture
 ```
 
-`verify` reports, stage by stage, the largest difference relative to the reference's scale: the
-text encoder's prompt embeddings, the initial noise and ids for the fixture's seed, one
-transformer pass, the scheduler's sigmas, the whole denoising loop, and the VAE decode. Anything
-above 3% fails. Identical math on the same kernels lands well below that; a wrong reshape, a
-swapped rotary pair or a missing cast shows up as a large error at the first stage it touches.
+`verify` reports, stage by stage, the largest difference relative to the reference's scale (and
+the RMS one): the text encoder's prompt embeddings, the initial noise and ids for the fixture's
+seed, one transformer pass, the scheduler's sigmas (shifted for the image's token count, as Klein
+runs them), the whole denoising loop, and the VAE decode. Anything above 3% fails. Identical math
+lands well below that; a wrong reshape, a swapped rotary pair or a missing cast shows up as a
+large error at the first stage it touches.
+
+The text encoder is also run with float32 activations, and that check decides for it: in bf16 its
+28 layers carry the rounding of MLX's kernels, which differ between mlx-swift's MLX (0.31) and the
+Python one, and the fixture's random weights amplify it to a few percent (shown, marked "·"). In
+float32 the two agree to about 1e-6.
 
 Then the real thing: generate the same prompt and seed with the app on the Python engine and on
 the native one (rename the engine binary to switch), and compare the two PNGs.

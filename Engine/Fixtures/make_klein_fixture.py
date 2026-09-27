@@ -53,6 +53,17 @@ CONFIG = {
 }
 
 
+class _Float32Output(nn.Module):
+    """Wraps the token embedding so everything after it runs in float32."""
+
+    def __init__(self, inner: nn.Module):
+        super().__init__()
+        self.inner = inner
+
+    def __call__(self, ids: mx.array) -> mx.array:
+        return self.inner(ids).astype(mx.float32)
+
+
 def randomize(module: nn.Module, seed: int, scale: float) -> None:
     """Small normal weights (norms at 1 + noise), so activations stay in a sane range."""
     key = mx.random.key(seed)
@@ -101,6 +112,16 @@ def main(out: Path) -> None:
     text_ids = Flux2PromptEncoder.prepare_text_ids(prompt_embeds)
     mx.eval(prompt_embeds, text_ids)
 
+    # The same encoder with float32 activations: two correct implementations then agree to float32
+    # rounding, so `verify` can tell a wrong operation from bf16 rounding carried through 28 layers.
+    embed_tokens = text_encoder.embed_tokens
+    text_encoder.embed_tokens = _Float32Output(embed_tokens)
+    prompt_embeds_f32 = text_encoder.get_prompt_embeds(
+        input_ids=input_ids, attention_mask=attention_mask, hidden_state_layers=tuple(cfg["text_encoder_out_layers"])
+    )
+    text_encoder.embed_tokens = embed_tokens
+    mx.eval(prompt_embeds_f32)
+
     # --- reference: one transformer pass --------------------------------------------------------
     latents, latent_ids, latent_height, latent_width = Flux2LatentCreator.prepare_packed_latents(
         seed=cfg["seed"], height=cfg["height"], width=cfg["width"], batch_size=1
@@ -118,6 +139,9 @@ def main(out: Path) -> None:
         model_config = None
 
     scheduler = FlowMatchEulerDiscreteScheduler(_Config())
+    # Klein's model configs set requires_sigma_shift, so mflux's Config shifts the schedule by the
+    # image's token count before generating; do the same.
+    scheduler.set_image_seq_len(latent_height * latent_width)
     sigmas, timesteps = scheduler.sigmas, scheduler.timesteps
     x = latents
     for t in range(cfg["steps"]):
@@ -142,6 +166,7 @@ def main(out: Path) -> None:
         "input_ids": input_ids,
         "attention_mask": attention_mask,
         "prompt_embeds": prompt_embeds,
+        "prompt_embeds_f32": prompt_embeds_f32,
         "text_ids": text_ids,
         "latents": latents,
         "latent_ids": latent_ids,

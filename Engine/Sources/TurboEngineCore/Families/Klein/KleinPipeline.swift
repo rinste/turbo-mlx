@@ -30,6 +30,33 @@ public struct FlowMatchSchedule: Equatable, Sendable {
         sigmas = stretched.map { Float($0) } + [0]
         timesteps = stretched.map { Float($0 * trainSteps) }
     }
+
+    /// The schedule FLUX.2 actually runs: its model configs set `requires_sigma_shift`, so mflux's
+    /// `Config` replaces the one above with `set_image_seq_len`: `steps` sigmas from 1 down to
+    /// 1/steps, shifted by an empirical mu of the image's token count and the step count, then 0.
+    public init(steps: Int, imageSeqLen: Int) {
+        let expMu = Float(exp(Self.empiricalMu(imageSeqLen: imageSeqLen, steps: steps)))
+        let shifted = (0 ..< steps).map { i -> Float in
+            // mx.linspace(1, 1/steps, steps) in float32.
+            let t = steps > 1 ? 1 + Float(i) * (1 / Float(steps) - 1) / Float(steps - 1) : 1
+            return expMu / (expMu + (1 / t - 1))
+        }
+        sigmas = shifted + [0]
+        timesteps = shifted.map { $0 * 1000 }
+    }
+
+    /// `_compute_empirical_mu`: a fit over the sequence length, interpolated in the step count.
+    static func empiricalMu(imageSeqLen: Int, steps: Int) -> Double {
+        let (a1, b1) = (8.73809524e-05, 1.89833333)
+        let (a2, b2) = (0.00016927, 0.45666666)
+        let length = Double(imageSeqLen)
+        if imageSeqLen > 4300 { return a2 * length + b2 }
+        let m200 = a2 * length + b2
+        let m10 = a1 * length + b1
+        let a = (m200 - m10) / 190
+        let b = m200 - 200 * a
+        return a * Double(steps) + b
+    }
 }
 
 /// What the text encoder produces for a prompt: the embeddings and the ids the transformer's
@@ -170,8 +197,8 @@ public final class KleinModel {
         if isCancelled() { throw GenerationError.cancelled }
 
         phase(.denoising)
-        let schedule = FlowMatchSchedule(steps: steps)
         let initial = Self.initialLatents(width: width, height: height, seed: seed)
+        let schedule = FlowMatchSchedule(steps: steps, imageSeqLen: initial.latentHeight * initial.latentWidth)
         var latents = initial.latents
         for t in 0 ..< steps {
             let noise = transformer(latents: latents, prompt: encoded.embeds, timestep: schedule.timesteps[t], imageIds: initial.ids, textIds: encoded.ids)
@@ -194,9 +221,10 @@ public final class KleinModel {
         return Self.toPixels(decoded)
     }
 
-    /// [B, H, W, 3] in [-1, 1] → [H, W, 3] uint8.
+    /// [B, H, W, 3] in [-1, 1] → [H, W, 3] uint8. As mflux: halved, shifted and clipped in the
+    /// decoder's dtype, then scaled and rounded in float32.
     public static func toPixels(_ decoded: MLXArray) -> MLXArray {
-        let unit = clip(decoded.asType(.float32) / 2 + 0.5, min: 0, max: 1)
+        let unit = clip(decoded / 2 + 0.5, min: 0, max: 1).asType(.float32)
         return (unit * 255).round().asType(.uint8)[0]
     }
 }

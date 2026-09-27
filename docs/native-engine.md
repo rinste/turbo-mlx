@@ -11,8 +11,23 @@ models itself (`Services/HubDownloader.swift`), routes each family to an engine
 `Engine/` holds the native engine: FLUX.2 Klein (4B and 9B geometry) on MLX Swift, loading the
 mflux checkpoints unchanged, behind the JSON protocol, with a `verify` mode that compares every
 stage with mflux on a small random-weight checkpoint (`Engine/Fixtures/make_klein_fixture.py`).
-It was written without a Mac at hand: it has not been compiled or run yet. First build, `verify`,
-then a same-seed comparison against the Python engine are the next steps (`Engine/README.md`).
+It was written without a Mac at hand; checked on an M1 Max (64 GB) the same day:
+
+- **Build.** It compiled as written (Xcode 26.6, mlx-swift 0.31.6, whose MLX core is 0.31.1);
+  `xcodebuild` needs `-skipPackagePluginValidation` for mlx-swift's plug-in
+  (`scripts/build-engine.sh` passes it).
+- **`verify`** passes. Noise, ids, sigmas and timesteps match exactly; one transformer pass, the
+  denoising loop and the VAE are within 0.8%. The text encoder is 3–4% off in bf16 but agrees to
+  about 1e-6 in float32: the math is the same and the gap is the rounding of two MLX versions'
+  kernels, which the fixture's random weights amplify. Two differences from mflux turned up and
+  were fixed: FLUX.2's schedule is shifted by the image's token count (`requires_sigma_shift`),
+  and the pixels are denormalized in the decoder's dtype.
+- **Same prompt and seed**, through the app's protocol, with `flux2-klein-4b-mflux-q4`: the same
+  image as mflux (composition, text, lighting), with small local differences (PSNR 23–27 dB at
+  1024 × 1024 and 1536 × 864), what 4 steps make of bf16 rounding that differs between kernels.
+  At 1024 × 1024 the native engine took 33.4 s against 29.9 s and peaked at 12.7 GB against
+  10.6 GB: the older MLX core is the first suspect.
+- Klein's base checkpoints stay on mflux: the native engine has no classifier-free guidance yet.
 
 ## The question
 

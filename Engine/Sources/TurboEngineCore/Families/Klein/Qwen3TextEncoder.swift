@@ -153,9 +153,11 @@ public final class Qwen3TextEncoder: Module {
 
     /// The hidden states, embeddings first, then one per layer (before the final norm), as the
     /// reference returns them with `output_hidden_states`.
-    public func hiddenStates(inputIds: MLXArray, attentionMask: MLXArray) -> [MLXArray] {
+    /// `computeType` overrides the activations' dtype (the parity check runs it in float32).
+    public func hiddenStates(inputIds: MLXArray, attentionMask: MLXArray, computeType: DType? = nil) -> [MLXArray] {
         let (batch, length) = (inputIds.shape[0], inputIds.shape[1])
         var h = embedTokens(inputIds)
+        if let computeType { h = h.asType(computeType) }
         let dtype = h.dtype
 
         // Padding (keys of padded tokens) plus causality, additive.
@@ -179,8 +181,8 @@ public final class Qwen3TextEncoder: Module {
     }
 
     /// The concatenated hidden states of `layers` for every token: the prompt the transformer reads.
-    public func promptEmbeds(inputIds: MLXArray, attentionMask: MLXArray, layers outLayers: [Int]) -> MLXArray {
-        let states = hiddenStates(inputIds: inputIds, attentionMask: attentionMask)
+    public func promptEmbeds(inputIds: MLXArray, attentionMask: MLXArray, layers outLayers: [Int], computeType: DType? = nil) -> MLXArray {
+        let states = hiddenStates(inputIds: inputIds, attentionMask: attentionMask, computeType: computeType)
         return concatenated(outLayers.map { states[$0] }, axis: -1)
     }
 
