@@ -63,6 +63,13 @@ class Cancelled(Exception):
 class MingFamily:
     """inclusionAI Ming-Image-0.1-Design: graphic design, RGBA output."""
 
+    # Its ~16B text encoder is freed after encoding in low-RAM mode (see Worker._generate).
+    releases_text_encoder = True
+
+    @staticmethod
+    def is_cached(model, prompt: str) -> bool:
+        return prompt in model._prompt_cache
+
     @staticmethod
     def load(spec: dict):
         from mflux.models.common.resolution.config_resolution import ConfigResolution
@@ -163,7 +170,67 @@ class Flux2KleinFamily:
         )
 
 
-FAMILIES = {"ming": MingFamily, "z-image-turbo": ZImageTurboFamily, "flux2-klein": Flux2KleinFamily}
+class QwenImageFamily:
+    """Alibaba Qwen-Image 2512: 20B MMDiT, true CFG (two transformer passes per step)."""
+
+    # Its Qwen2.5-VL text encoder (~14 GB) is freed after encoding in low-RAM mode.
+    releases_text_encoder = True
+    # Qwen's own pipeline encodes an empty negative prompt as a single space.
+    NEGATIVE_PROMPT = " "
+
+    @staticmethod
+    def load(spec: dict):
+        from mflux.models.common.resolution.config_resolution import ConfigResolution
+        from mflux.models.qwen.variants.txt2img.qwen_image import QwenImage
+
+        config = ConfigResolution.resolve_restricted(None, "qwen-image", model_path=spec["path"])
+        return QwenImage(model_config=config, model_path=spec["path"])
+
+    @staticmethod
+    def is_cached(model, prompt: str) -> bool:
+        return f"{prompt}|NEG|{QwenImageFamily.NEGATIVE_PROMPT}" in model.prompt_cache
+
+    @staticmethod
+    def encode(model, prompt: str, spec: dict) -> None:
+        # Encoding ahead of generate_image fills the prompt cache, which generate_image then reads
+        # without touching the text encoder, so low-RAM mode can free it before denoising.
+        import gc
+
+        import mlx.core as mx
+        from mflux.models.qwen.model.qwen_text_encoder.qwen_prompt_encoder import QwenPromptEncoder
+
+        if not QwenImageFamily.is_cached(model, prompt):
+            mx.eval(QwenPromptEncoder.encode_prompt(
+                prompt=prompt,
+                negative_prompt=QwenImageFamily.NEGATIVE_PROMPT,
+                prompt_cache=model.prompt_cache,
+                qwen_tokenizer=model.tokenizers["qwen"],
+                qwen_text_encoder=model.text_encoder,
+            ))
+        if spec.get("low_ram") and model.text_encoder is not None:
+            model.text_encoder = None
+            gc.collect()
+            mx.clear_cache()
+
+    @staticmethod
+    def generate(model, p: dict):
+        return model.generate_image(
+            seed=int(p["seed"]),
+            prompt=p["prompt"],
+            negative_prompt=QwenImageFamily.NEGATIVE_PROMPT,
+            width=int(p["width"]),
+            height=int(p["height"]),
+            num_inference_steps=int(p["steps"]),
+            guidance=float(p["guidance"]),
+        )
+
+
+FAMILIES = {
+    "ming": MingFamily,
+    "z-image-turbo": ZImageTurboFamily,
+    "flux2-klein": Flux2KleinFamily,
+    "qwen-image": QwenImageFamily,
+}
 
 
 class ProgressReporter:
@@ -193,6 +260,8 @@ class Worker:
         self.commands: queue.Queue = queue.Queue()
         self.model = None
         self.model_key = None
+        # Whether the loaded model has generated: its weights are then resident, not lazy.
+        self.model_used = False
         self.job_id = None
         self._default_cache_limit = None
         self._cancelled_ids: set[str] = set()
@@ -248,7 +317,7 @@ class Worker:
             started = time.time()
             model = family.load(spec)
             model.callbacks.register(ProgressReporter(self))
-            self.model, self.model_key = model, key
+            self.model, self.model_key, self.model_used = model, key, False
             log(f"[turbo] model loaded in {time.time() - started:.1f}s: {spec['path']}")
             emit("model_loaded", path=spec["path"], seconds=round(time.time() - started, 1))
         return family, self.model
@@ -260,7 +329,7 @@ class Worker:
 
         import mlx.core as mx
 
-        self.model, self.model_key = None, None
+        self.model, self.model_key, self.model_used = None, None, False
         gc.collect()
         mx.clear_cache()
 
@@ -290,14 +359,23 @@ class Worker:
             self.raise_if_cancelled()
             mx.reset_peak_memory()
             spec = msg.get("model", {})
+            low_ram = bool(spec.get("low_ram"))
             family, model = self._ensure_model(spec)
-            self._apply_memory_mode(model, bool(spec.get("low_ram")))
+            if (low_ram and getattr(family, "releases_text_encoder", False) and self.model_used
+                    and not family.is_cached(model, params["prompt"])):
+                # A new prompt needs the text encoder, but the previous image left the other
+                # weights resident: loading it now would stack both. Start from a fresh, lazily
+                # loaded model, as the mflux CLI does on every run, so they never overlap.
+                self._unload()
+                family, model = self._ensure_model(spec)
+            self._apply_memory_mode(model, low_ram)
             self.raise_if_cancelled()
 
             emit("phase", id=self.job_id, phase="encoding")
             family.encode(model, params["prompt"], spec)
             self.raise_if_cancelled()
 
+            self.model_used = True
             image = family.generate(model, params)
 
             emit("phase", id=self.job_id, phase="saving")

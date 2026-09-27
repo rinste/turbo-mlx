@@ -385,7 +385,9 @@ private struct ParametersSection: View {
                     }
                 } label: {
                     Text("Guidance")
-                        .help("How strictly to follow the prompt. 1 = off; higher values double the time of each step.")
+                        .help(model.family == .qwenImage
+                              ? "How strictly to follow the prompt. 4 is the recommended value."
+                              : "How strictly to follow the prompt. 1 = off; higher values double the time of each step.")
                 }
             }
 
@@ -431,13 +433,23 @@ private struct MemorySection: View {
     @Binding var settings: GenerationSettings
     let family: ModelFamily
 
+    private var saveMemoryDescription: String {
+        let base = switch family {
+        case .ming:
+            "Frees the text encoder (about 12 GB) once the prompt is read and decodes the image in tiles: about 15 GB instead of 35 GB at 1024 px. A new prompt reloads the model."
+        case .qwenImage:
+            "Frees the text encoder (about 14 GB) once the prompt is read and decodes the image in tiles. A new prompt reloads the model."
+        case .zImageTurbo, .flux2Klein:
+            "Keeps less in memory and, where it doesn’t affect the image, decodes it in tiles."
+        }
+        return base + " On by default below 64 GB of memory."
+    }
+
     var body: some View {
         Section("Memory") {
             Toggle(isOn: $settings.lowMemory) {
                 Text("Save memory")
-                Text(family == .ming
-                     ? "Frees the text encoder (about 12 GB) after reading the prompt and decodes the image in tiles: about 15 GB instead of 35 GB at 1024 px. On by default below 48 GB of memory."
-                     : "Keeps less in memory and, where it doesn’t affect the image, decodes it in tiles. On by default below 48 GB of memory.")
+                Text(saveMemoryDescription)
             }
             if app.backend.loadedModelPath != nil {
                 LabeledContent {

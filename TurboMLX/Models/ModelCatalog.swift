@@ -5,12 +5,14 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     case ming
     case zImageTurbo = "z-image-turbo"
     case flux2Klein = "flux2-klein"
+    case qwenImage = "qwen-image"
 
     var displayName: String {
         switch self {
         case .ming: "Ming-Image"
         case .zImageTurbo: "Z-Image Turbo"
         case .flux2Klein: "FLUX.2 Klein"
+        case .qwenImage: "Qwen-Image"
         }
     }
 
@@ -21,14 +23,14 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     var components: [String] {
         switch self {
         case .ming: ["mllm", "connector", "mlp", "transformer", "vae"]
-        case .zImageTurbo, .flux2Klein: ["transformer", "text_encoder", "vae"]
+        case .zImageTurbo, .flux2Klein, .qwenImage: ["transformer", "text_encoder", "vae"]
         }
     }
 
     var tokenizerFile: String {
         switch self {
         case .ming: "mllm/tokenizer.json"
-        case .zImageTurbo, .flux2Klein: "tokenizer/tokenizer.json"
+        case .zImageTurbo, .flux2Klein, .qwenImage: "tokenizer/tokenizer.json"
         }
     }
 
@@ -38,7 +40,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         switch self {
         case .ming: return weights
         case .zImageTurbo: return weights + ["tokenizer/*"]
-        case .flux2Klein: return weights + ["tokenizer/**", "added_tokens.json", "chat_template.jinja"]
+        case .flux2Klein, .qwenImage: return weights + ["tokenizer/**", "added_tokens.json", "chat_template.jinja"]
         }
     }
 
@@ -47,6 +49,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .ming: "Ming-Image is made for graphic design: posters, cards, interfaces, logos and typography."
         case .zImageTurbo: "Z-Image Turbo excels at photorealism and at text inside the image (English and Chinese)."
         case .flux2Klein: "FLUX.2 Klein takes seconds per image: great for exploring many variations."
+        case .qwenImage: "Qwen-Image handles complex scenes and long text inside the image, in English and Chinese."
         }
     }
 }
@@ -93,7 +96,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
 
     var supportsGuidance: Bool {
         switch family {
-        case .ming: true
+        case .ming, .qwenImage: true
         case .zImageTurbo: false
         case .flux2Klein: isKleinBase
         }
@@ -104,11 +107,13 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .ming: 12
         case .zImageTurbo: 9
         case .flux2Klein: isKleinBase ? 50 : 4
+        case .qwenImage: 20
         }
     }
 
+    /// Qwen-Image and FLUX.2 Klein base run real CFG, recommended at 4; the others default to off.
     var defaultGuidance: Double {
-        isKleinBase ? 4 : 1
+        family == .qwenImage || isKleinBase ? 4 : 1
     }
 
     var stepRange: ClosedRange<Int> {
@@ -116,17 +121,20 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .ming: 4...40
         case .zImageTurbo: 4...20
         case .flux2Klein: isKleinBase ? 10...60 : 2...12
+        case .qwenImage: 10...50
         }
     }
 }
 
 /// The built-in models, named after the memory they need rather than their quantization.
 ///
-/// Peak MLX memory for one 1024 × 1024 image with Save memory on (M1 Max, mflux 0.20): Ming-Image
-/// te5 14.7 GB, Z-Image Turbo q4 8.5 GB, FLUX.2 Klein 4B q4 14.1 GB (its VAE cannot decode in
-/// tiles, so Save memory does not lower it). Z-Image Turbo q8 adds the 5.1 GB of larger weights,
-/// ~13.6 GB (activations are bf16 either way). Each model gets the smallest common Mac size it
-/// peaks under 80% of, leaving room for macOS and other apps.
+/// Peak MLX memory for one 1024 × 1024 image with Save memory on (M1 Max, mflux 0.20), also for a
+/// new prompt in a worker that already generated: Ming-Image te5 14.7 GB, Z-Image Turbo q4 8.5 GB,
+/// FLUX.2 Klein 4B q4 14.1 GB (its VAE cannot decode in tiles, so Save memory does not lower it),
+/// Qwen-Image 2512 q4 21.3 GB. Z-Image Turbo q8 adds the 5.1 GB of larger weights, ~13.6 GB
+/// (activations are bf16 either way). Each model gets the smallest common Mac size it peaks under
+/// 80% of, leaving room for macOS and other apps. Without Save memory the peaks are 34.7 GB
+/// (Ming-Image) and 43 GB (Qwen-Image), hence Save memory by default below 64 GB.
 ///
 /// One entry per family and size: Ming-Image ships as te5 only, since the DiT stage sets its peak
 /// at 1024 px and is the same in every conversion (te4 is merely less faithful, te6/te8 match te5
@@ -182,6 +190,16 @@ enum ModelCatalog {
             variant: "flux2-klein-4b",
             license: "Apache 2.0",
             recommendedMemoryGB: 24,
+            isBuiltIn: true
+        ),
+        ModelDescriptor(
+            name: "Qwen-Image 2512 · 32 GB RAM",
+            detail: "Alibaba's 20B model: rich scenes and long text inside the image. Thorough but slow: 20 steps.",
+            family: .qwenImage,
+            source: .huggingFace(repo: "mflux-community/qwen-image-2512-mflux-q4"),
+            sizeBytes: 27_605_801_473,
+            license: "Apache 2.0",
+            recommendedMemoryGB: 32,
             isBuiltIn: true
         ),
     ]

@@ -20,6 +20,7 @@ first launch the app sets up its own engine and downloads the models the user pi
 | [Z-Image Turbo](https://huggingface.co/mflux-community/z-image-turbo-mflux-q4) | 16 GB | 5.9 GB | 8.5 GB | photorealism, text in the image · 4-bit · 9 steps · Apache 2.0 |
 | [Z-Image Turbo](https://huggingface.co/mflux-community/z-image-turbo-mflux-q8) | 24 GB | 11 GB | ~13.6 GB | the 8-bit version, closer to the original |
 | [FLUX.2 Klein 4B](https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4) | 24 GB | 4.6 GB | 14.1 GB | the fastest: 4 steps · Apache 2.0 |
+| [Qwen-Image 2512](https://huggingface.co/mflux-community/qwen-image-2512-mflux-q4) | 32 GB | 27.6 GB | 21.3 GB | 20B, rich scenes and long text · 4-bit · 20 steps · Apache 2.0 |
 
 Measured on an M1 Max with mflux 0.20 (the 8-bit Z-Image peak adds its larger weights to the
 measured 4-bit one). A model is listed under the smallest common Mac memory size it peaks under 80%
@@ -27,9 +28,12 @@ of. Times at 1024 × 1024: FLUX.2 Klein ~30 s, Z-Image Turbo 4-bit ~100 s; Ming-
 1024 × 576. The model stays loaded between images.
 
 Ming-Image comes in one version (te5): at 1024 px its memory peak is set by the DiT, which is the
-same in every conversion, and te6/te8 give the same images as te5 with more memory.
+same in every conversion, and te6/te8 give the same images as te5 with more memory. Qwen-Image
+3.0 has no public weights (it only runs on Alibaba's platform), so Qwen-Image 2512 is the latest
+Qwen model here; Qwen-Image 2.1 is newer but licensed for non-commercial use only.
 
-Peaks are with *Save memory* on, the default below 48 GB (without it Ming-Image peaks at ~35 GB).
+Peaks are with *Save memory* on, the default below 64 GB; without it Ming-Image peaks at ~35 GB
+and Qwen-Image at ~43 GB.
 More mflux checkpoints of the same families can be added from
 **⋯ → Add Model…** (Hugging Face repository or local folder; for Klein you can pick the 4B/9B/base
 variant).
@@ -65,9 +69,10 @@ SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo_worker.py serve ──�
 - **Worker.** `Backend/turbo_worker.py serve` keeps the model in memory, reports phases and
   per-step progress, and stops a generation at the next step. One adapter per model family
   (`FAMILIES`) hides the differences between mflux's classes.
-- **Save memory.** Frees Ming-Image's text encoder after the prompt is read, decodes the image in
-  tiles where the VAE allows it (not FLUX.2, whose tiles would show seams), and keeps MLX's buffer
-  cache small.
+- **Save memory.** Frees the text encoder of Ming-Image and Qwen-Image once the prompt is read
+  (a new prompt reloads the model, so the text encoder and the transformer are never in memory
+  together), decodes the image in tiles where the VAE allows it (not FLUX.2, whose tiles would
+  show seams), and keeps MLX's buffer cache small.
 - **Downloads.** `turbo_worker.py download` fetches into the Hugging Face cache (shared with mflux
   and other tools) and reports bytes; an interrupted download resumes.
 - The app reads the login shell's environment (PATH, `HF_HOME`, `HF_TOKEN`…).

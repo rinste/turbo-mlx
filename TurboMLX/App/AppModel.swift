@@ -95,9 +95,9 @@ final class AppModel {
             settings = saved
         } else {
             var initial = GenerationSettings()
-            // Measured on Ming-Image te5 at 1024 px: ~35 GB with everything resident, ~15 GB in
-            // low-memory mode. Below 48 GB the full-speed mode would swap.
-            initial.lowMemory = ProcessInfo.processInfo.physicalMemory < 48 << 30
+            // At 1024 px with everything resident Ming-Image peaks at ~35 GB and Qwen-Image at
+            // ~43 GB (~15 and ~21 GB with Save memory): below 64 GB the full-speed mode would swap.
+            initial.lowMemory = ProcessInfo.processInfo.physicalMemory < 64 << 30
             if let model = catalog.first(where: { $0.id == selectedID }) {
                 initial.steps = model.defaultSteps
                 initial.guidance = model.defaultGuidance
