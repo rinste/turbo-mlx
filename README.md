@@ -104,6 +104,9 @@ their own.
 **Adding an mflux model family:** a case in `ModelFamily` (`Models/ModelCatalog.swift`: download
 patterns, components, steps, guidance) and an adapter in `FAMILIES` in `turbo_worker.py`.
 
+**Where this is going:** [docs/native-engine.md](docs/native-engine.md) weighs replacing the Python
+worker with an MLX Swift engine and prepares the app for video models (LTX).
+
 ## Distribution
 
 The app is Apple silicon only and uses the hardened runtime; it must be signed with a Developer ID
