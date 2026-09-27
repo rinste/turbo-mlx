@@ -107,6 +107,8 @@ patterns, components, steps, guidance) and an adapter in `FAMILIES` in `turbo_wo
 
 **Where this is going:** [docs/native-engine.md](docs/native-engine.md) weighs replacing the Python
 worker with an MLX Swift engine and prepares the app for video models (LTX).
+[docs/generation-performance.md](docs/generation-performance.md) ranks the ways to make generation
+faster, with the measurements that decide each one.
 
 ## Distribution
 
