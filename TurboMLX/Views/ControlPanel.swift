@@ -17,6 +17,8 @@ struct ControlPanel: View {
             }
         }
         .formStyle(.grouped)
+        // Room between the sections and the scroll bar, which otherwise sits right on their edge.
+        .contentMargins(.trailing, 8, for: .scrollContent)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             GenerateBar()
         }
