@@ -574,9 +574,9 @@ private struct MemorySection: View {
     private var saveMemoryDescription: String {
         let base = switch family {
         case .ming:
-            "Frees the text encoder (about 12 GB) once the prompt is read and decodes the image in tiles: about 15 GB instead of 35 GB at 1024 px. A new prompt reloads the model."
+            "Frees the text encoder (about 12 GB) once the prompt is read and decodes the image in tiles: about 15 GB instead of 35 GB at 1024 px. A prompt that was not in the queue yet reloads the model."
         case .qwenImage:
-            "Frees the text encoder (about 14 GB) once the prompt is read and decodes the image in tiles. A new prompt reloads the model."
+            "Frees the text encoder (about 14 GB) once the prompt is read and decodes the image in tiles. A prompt that was not in the queue yet reloads the model."
         case .zImageTurbo, .flux2Klein:
             "Keeps less in memory and, where it doesn’t affect the image, decodes it in tiles."
         }
