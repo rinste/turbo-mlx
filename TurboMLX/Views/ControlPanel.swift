@@ -15,12 +15,7 @@ struct ControlPanel: View {
                 PromptSection(settings: $app.settings, focus: $focusedBlock)
                 FormatSection(settings: $app.settings)
                 ParametersSection(settings: $app.settings, model: model)
-                AdvancedToggle(isExpanded: $showsAdvanced)
-                if showsAdvanced {
-                    SizeSection(settings: $app.settings)
-                    OutputSection(settings: $app.settings, family: model.family)
-                    MemorySection(settings: $app.settings, family: model.family)
-                }
+                AdvancedSection(isExpanded: $showsAdvanced, settings: $app.settings, family: model.family)
             }
         }
         .formStyle(.grouped)
@@ -673,11 +668,12 @@ private struct SliderIcon: View {
 
 // MARK: - Advanced
 
-/// Shows or hides the sections below it. Folded, it still gives the image size and a fixed seed,
-/// which change the image without being in sight.
-private struct AdvancedToggle: View {
-    @Environment(AppModel.self) private var app
+/// The settings most images don't need, in one box under a row that shows or hides them. Folded,
+/// the row still gives the image size and a fixed seed, which change the image out of sight.
+private struct AdvancedSection: View {
     @Binding var isExpanded: Bool
+    @Binding var settings: GenerationSettings
+    let family: ModelFamily
 
     var body: some View {
         Section {
@@ -703,11 +699,16 @@ private struct AdvancedToggle: View {
             }
             .buttonStyle(.plain)
             .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+
+            if isExpanded {
+                SizeRows(settings: $settings)
+                OutputRows(settings: $settings, family: family)
+                MemoryRows(settings: $settings, family: family)
+            }
         }
     }
 
     private var summary: String {
-        let settings = app.settings
         let size = settings.size
         let dimensions = "\(size.width) × \(size.height) px"
         return settings.randomSeed ? dimensions : "\(dimensions) · seed \(settings.seed)"
@@ -715,90 +716,86 @@ private struct AdvancedToggle: View {
 }
 
 /// The image's size: a resolution for the aspect ratio above, or a width and height of its own.
-private struct SizeSection: View {
+private struct SizeRows: View {
     @Binding var settings: GenerationSettings
 
     var body: some View {
-        Section("Size") {
-            Picker("Resolution", selection: $settings.resolution) {
-                ForEach(GenerationSettings.resolutions, id: \.self) { resolution in
-                    Text(verbatim: "\(resolution)").tag(resolution)
-                }
+        Picker("Resolution", selection: $settings.resolution) {
+            ForEach(GenerationSettings.resolutions, id: \.self) { resolution in
+                Text(verbatim: "\(resolution)").tag(resolution)
             }
-            .pickerStyle(.segmented)
-            .disabled(settings.usesCustomSize)
+        }
+        .pickerStyle(.segmented)
+        .disabled(settings.usesCustomSize)
 
-            Toggle("Custom size", isOn: $settings.usesCustomSize)
+        Toggle("Custom size", isOn: $settings.usesCustomSize)
 
-            if settings.usesCustomSize {
-                HStack {
-                    TextField("Width", value: $settings.customWidth, format: .number.grouping(.never))
-                    Text(verbatim: "×").foregroundStyle(.secondary)
-                    TextField("Height", value: $settings.customHeight, format: .number.grouping(.never))
-                }
-                .multilineTextAlignment(.center)
-                .labelsHidden()
+        if settings.usesCustomSize {
+            HStack {
+                TextField("Width", value: $settings.customWidth, format: .number.grouping(.never))
+                Text(verbatim: "×").foregroundStyle(.secondary)
+                TextField("Height", value: $settings.customHeight, format: .number.grouping(.never))
             }
+            .multilineTextAlignment(.center)
+            .labelsHidden()
+        }
 
-            let size = settings.size
-            LabeledContent("Image") {
-                Text(verbatim: "\(size.width) × \(size.height) px · \(size.megapixels.formatted(.number.precision(.fractionLength(1)))) MP")
-                    .monospacedDigit()
-            }
-            if size.megapixels > 2.5 {
-                Label("High resolutions take much more time and memory.", systemImage: "tortoise")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
+        let size = settings.size
+        LabeledContent("Image") {
+            Text(verbatim: "\(size.width) × \(size.height) px · \(size.megapixels.formatted(.number.precision(.fractionLength(1)))) MP")
+                .monospacedDigit()
+        }
+        if size.megapixels > 2.5 {
+            Label("High resolutions take much more time and memory.", systemImage: "tortoise")
+                .font(.caption)
+                .foregroundStyle(.orange)
         }
     }
 }
 
 /// Which images one click makes: their seeds, how many, and the background.
-private struct OutputSection: View {
+private struct OutputRows: View {
     @Binding var settings: GenerationSettings
     let family: ModelFamily
 
     var body: some View {
-        Section("Output") {
-            LabeledContent("Seed") {
-                HStack(spacing: 8) {
-                    TextField("Seed", value: $settings.seed, format: .number.grouping(.never))
-                        .labelsHidden()
-                        .multilineTextAlignment(.trailing)
-                        .disabled(settings.randomSeed)
-                        .frame(maxWidth: 120)
-                    Toggle("Random", isOn: $settings.randomSeed)
-                        .toggleStyle(.checkbox)
-                }
+        LabeledContent("Seed") {
+            HStack(spacing: 8) {
+                TextField("Seed", value: $settings.seed, format: .number.grouping(.never))
+                    .labelsHidden()
+                    .multilineTextAlignment(.trailing)
+                    .disabled(settings.randomSeed)
+                    .frame(maxWidth: 120)
+                Toggle("Random", isOn: $settings.randomSeed)
+                    .toggleStyle(.checkbox)
             }
+        }
 
-            LabeledContent {
-                HStack(spacing: 8) {
-                    Text(verbatim: "\(settings.batchCount)")
-                        .monospacedDigit()
-                    Stepper("Outputs", value: $settings.batchCount, in: 1...GenerationSettings.maxBatch)
-                        .labelsHidden()
-                }
-            } label: {
-                Text("Outputs")
-                    .help("How many images one click generates, each with its own seed: consecutive from a fixed seed, or random.")
+        LabeledContent {
+            HStack(spacing: 8) {
+                Text(verbatim: "\(settings.batchCount)")
+                    .monospacedDigit()
+                Stepper("Outputs", value: $settings.batchCount, in: 1...GenerationSettings.maxBatch)
+                    .labelsHidden()
             }
+        } label: {
+            Text("Outputs")
+                .help("How many images one click generates, each with its own seed: consecutive from a fixed seed, or random.")
+        }
 
-            if family.producesAlpha {
-                Picker("Background", selection: $settings.transparentBackground) {
-                    Text("Transparent").tag(true)
-                    Text("White").tag(false)
-                }
-                .pickerStyle(.segmented)
+        if family.producesAlpha {
+            Picker("Background", selection: $settings.transparentBackground) {
+                Text("Transparent").tag(true)
+                Text("White").tag(false)
             }
+            .pickerStyle(.segmented)
         }
     }
 }
 
 // MARK: - Memory
 
-private struct MemorySection: View {
+private struct MemoryRows: View {
     @Environment(AppModel.self) private var app
     @Binding var settings: GenerationSettings
     let family: ModelFamily
@@ -816,19 +813,17 @@ private struct MemorySection: View {
     }
 
     var body: some View {
-        Section("Memory") {
-            Toggle(isOn: $settings.lowMemory) {
-                Text("Save memory")
-                Text(saveMemoryDescription)
-            }
-            if app.backend.loadedModelPath != nil {
-                LabeledContent {
-                    Button("Free Memory") { app.freeMemory() }
-                        .disabled(app.activeJob != nil)
-                } label: {
-                    Text("Model loaded")
-                    Text("It stays in memory so the next image starts right away.")
-                }
+        Toggle(isOn: $settings.lowMemory) {
+            Text("Save memory")
+            Text(saveMemoryDescription)
+        }
+        if app.backend.loadedModelPath != nil {
+            LabeledContent {
+                Button("Free Memory") { app.freeMemory() }
+                    .disabled(app.activeJob != nil)
+            } label: {
+                Text("Model loaded")
+                Text("It stays in memory so the next image starts right away.")
             }
         }
     }
