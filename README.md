@@ -62,6 +62,7 @@ open -n --env TURBO_MLX_HOME=/tmp/turbo-first-run "path/to/Turbo MLX.app"
 
 ```
 SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo_worker.py serve ──▶ mflux / MLX (GPU)
+                                    └──▶ turbo-engine serve   ──▶ MLX Swift (GPU)   FLUX.2 Klein
 ```
 
 - **Engine.** Inference runs in [mflux](https://github.com/mflux-community/mflux) (Python + MLX).
@@ -82,8 +83,13 @@ SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo_worker.py serve ──�
   (a new prompt reloads the model, so the text encoder and the transformer are never in memory
   together), decodes the image in tiles where the VAE allows it (not FLUX.2, whose tiles would
   show seams), and keeps MLX's buffer cache small.
-- **Downloads.** `turbo_worker.py download` fetches into the Hugging Face cache (shared with mflux
-  and other tools) and reports bytes; an interrupted download resumes.
+- **Native engine.** `Engine/` is a Swift package that runs FLUX.2 Klein on MLX Swift and speaks
+  the same protocol; when its `turbo-engine` binary is present (`scripts/build-engine.sh` installs
+  it in the app's data folder) Klein images run there and the Python engine serves the rest. See
+  `Engine/README.md` and [docs/native-engine.md](docs/native-engine.md).
+- **Downloads.** The app downloads models itself (`Services/HubDownloader.swift`) into the
+  Hugging Face cache, in the same layout huggingface_hub uses, so mflux and other tools share
+  them; an interrupted download resumes. No engine is needed to download.
 - The app reads the login shell's environment (PATH, `HF_HOME`, `HF_TOKEN`…).
 
 | What | Where |
@@ -97,11 +103,12 @@ SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo_worker.py serve ──�
 TurboMLX/
   App/        entry point, AppModel (queue, worker events, selection, persistence)
   Models/     catalog and families, settings, jobs, history items
-  Services/   child processes, engine, downloads, Hugging Face cache, history
+  Services/   child processes, engines, downloads, Hugging Face cache, history
   Views/      left column, output, history, settings, log
   Backend/    turbo_worker.py, setup_backend.sh (copied into the bundle)
+Engine/       the native engine (Swift package: turbo-engine, TurboEngineCore, fixtures)
 Vendor/uv/    the uv binary (update with scripts/update-uv.sh)
-scripts/      release.sh, ExportOptions.plist, update-uv.sh
+scripts/      release.sh, build-engine.sh, ExportOptions.plist, update-uv.sh
 ```
 
 The project uses Xcode's synchronized folders: files added under `TurboMLX/` join the target on

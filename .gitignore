@@ -1,6 +1,8 @@
 # Xcode / build output
 build/
 DerivedData/
+.build/
+.swiftpm/
 *.xcuserstate
 xcuserdata/
 
