@@ -88,7 +88,12 @@ class MingFamily:
         low_ram = bool(spec.get("low_ram"))
         model.low_ram = False
         try:
-            for text in [prompt, *upcoming]:
+            model.encode_prompt(prompt)
+            for text in upcoming:
+                # A cached prompt leaves a released encoder released: encode_prompt would load it
+                # back on top of the transformer's resident weights, which low-RAM mode keeps apart.
+                if model.text_encoder is None:
+                    break
                 model.encode_prompt(text)
         finally:
             model.low_ram = low_ram
