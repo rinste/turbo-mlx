@@ -53,8 +53,9 @@ final class ImageZoom {
     }
 }
 
-/// An image fitted to the available space that zooms: pinch or ⌘-scroll around the pointer,
-/// double-click to zoom in and back out, scroll or drag to move around.
+/// An image fitted to the available space that zooms around the pointer: pinch, the mouse wheel
+/// or ⌘-scroll; double-click to zoom in and back out; two-finger scroll (⌥-wheel with a mouse)
+/// or drag to move around.
 struct ZoomableImage: NSViewRepresentable {
     let url: URL
     let size: PixelSize
@@ -215,14 +216,38 @@ final class ZoomingScrollView: NSScrollView, NSDraggingSource {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        guard !event.modifierFlags.intersection([.command, .option]).isEmpty else {
-            super.scrollWheel(with: event)
-            return
+        let modifiers = event.modifierFlags.intersection([.command, .option])
+        if event.hasPreciseScrollingDeltas {
+            // Trackpad and Magic Mouse: scrolling pans; pinch, ⌘-scroll and ⌥-scroll zoom.
+            guard !modifiers.isEmpty else {
+                super.scrollWheel(with: event)
+                return
+            }
+            // Once the fingers have lifted, momentum must not keep zooming.
+            guard event.momentumPhase.isEmpty else { return }
+            zoom(by: exp(zoomDelta(of: event) * 0.01), around: event)
+        } else {
+            // A mouse cannot pinch, so its wheel zooms, one step per notch; ⌥-wheel scrolls.
+            guard !modifiers.contains(.option) else {
+                super.scrollWheel(with: event)
+                return
+            }
+            let notches = min(max(zoomDelta(of: event), -3), 3)
+            zoom(by: pow(1.12, notches), around: event)
         }
-        // Wheel away from you (or fingers up) zooms in, whatever the scroll direction setting.
-        let delta = event.isDirectionInvertedFromDevice ? -event.scrollingDeltaY : event.scrollingDeltaY
-        let factor = exp(delta * (event.hasPreciseScrollingDeltas ? 0.01 : 0.1))
-        setMagnification(magnification * factor, centeredAt: canvas.convert(event.locationInWindow, from: nil))
+    }
+
+    /// Wheel away from you (or fingers up) is positive, whatever the scroll direction setting.
+    private func zoomDelta(of event: NSEvent) -> CGFloat {
+        let delta = event.scrollingDeltaY != 0 ? event.scrollingDeltaY : event.deltaY
+        return event.isDirectionInvertedFromDevice ? -delta : delta
+    }
+
+    /// Multiplies the magnification within its limits, keeping the point under the pointer still.
+    private func zoom(by factor: CGFloat, around event: NSEvent) {
+        let target = min(max(magnification * factor, fitMagnification), maxMagnification)
+        guard abs(target - magnification) > 0.0005 else { return }
+        setMagnification(target, centeredAt: canvas.convert(event.locationInWindow, from: nil))
     }
 
     // MARK: Mouse

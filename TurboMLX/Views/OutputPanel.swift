@@ -4,6 +4,7 @@ import SwiftUI
 /// Right column: the current output on top, the history below.
 struct OutputPanel: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.colorScheme) private var colorScheme
     @State private var quickLookURL: URL?
     @FocusState private var isFocused: Bool
 
@@ -18,7 +19,7 @@ struct OutputPanel: View {
             Divider()
             HistoryStrip()
         }
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .background(stageBackground)
         .quickLookPreview($quickLookURL)
         .toolbar { toolbarContent }
         .focusable()
@@ -36,6 +37,12 @@ struct OutputPanel: View {
             quickLookURL = quickLookURL == nil ? app.url(for: item) : nil
             return .handled
         }
+    }
+
+    /// Darker than the window in both appearances, so the picture stands out and its colors are
+    /// judged against a neutral field.
+    private var stageBackground: Color {
+        colorScheme == .dark ? Color(white: 0.1) : Color(white: 0.82)
     }
 
     private var showsBackendSetup: Bool {

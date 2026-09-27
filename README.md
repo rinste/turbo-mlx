@@ -12,8 +12,9 @@ first launch the app sets up its own engine and downloads the models the user pi
   *Install Image Engine* → *Download and Generate* → *Generate*.
 - **Right column:** the image (on a checkerboard when transparent) with its metadata, the running
   generation with per-step progress and time left, and the history with the queue. Zoom: pinch,
-  double-click, ⌘-scroll, the − % + controls or the View menu (⌘+, ⌘-, ⌘0 actual size, ⌘9 fit);
-  scroll or drag to move around. Quick Look (space), drag and drop, copy, *Reuse Settings* (⌘R).
+  the mouse wheel, double-click, ⌘-scroll, the − % + controls or the View menu (⌘+, ⌘-, ⌘0 actual
+  size, ⌘9 fit); two-finger scroll (⌥-wheel with a mouse) or drag to move around. Quick Look
+  (space), drag and drop, copy, *Reuse Settings* (⌘R).
 
 ## Models
 
