@@ -4,15 +4,14 @@ import MLX
 /// The worker behind the JSON protocol: keeps one model loaded, generates images with phases,
 /// progress and timings, and answers `load`, `cancel` and `unload` like `turbo_worker.py`.
 public final class Engine {
-    public static let version = "0.1"
+    public static let version = "0.2"
     public static let mlxSwiftVersion = "0.31.6"
     /// Families this engine implements, as the app names them.
-    public static let families = ["flux2-klein"]
+    public static var families: [String] { FamilyLoader.families }
 
     private let emitter = Emitter.shared
-    private var loaded: (key: String, model: KleinModel)?
-    /// The loaded model has generated: its weights are resident rather than lazy.
-    private var modelUsed = false
+    private var loaded: (key: String, model: FamilyModel)?
+    private let defaultCacheLimit = Memory.cacheLimit
     private var marks: [String: Double] = [:]
     private let cancelLock = NSLock()
     private var cancelledIDs: Set<String> = []
@@ -41,7 +40,6 @@ public final class Engine {
 
     public func unload() {
         loaded = nil
-        modelUsed = false
         Memory.clearCache()
         emitter.emit("unloaded")
     }
@@ -56,22 +54,20 @@ public final class Engine {
         }
     }
 
-    private func ensureModel(_ spec: ModelSpec, jobID: String?) throws -> KleinModel {
+    private func ensureModel(_ spec: ModelSpec, jobID: String?) throws -> FamilyModel {
         if let loaded, loaded.key == spec.key { return loaded.model }
         guard Self.families.contains(spec.family) else {
             throw EngineError.unsupportedFamily(spec.family)
         }
         loaded = nil
-        modelUsed = false
         Memory.clearCache()
         emitter.emit("phase", ["id": jobID.map { $0 as Any } ?? NSNull(), "phase": "loading"])
         let started = Date()
-        let config = KleinConfig.forModel(name: spec.name, variant: spec.variant)
-        let model = try KleinModel(modelPath: URL(fileURLWithPath: spec.path), config: config)
+        let model = try FamilyLoader.load(spec)
         let seconds = Date().timeIntervalSince(started)
         marks["load", default: 0] += seconds
         loaded = (spec.key, model)
-        emitter.log("[turbo] model loaded in \(String(format: "%.1f", seconds))s: \(spec.path) (\(config.name), \(model.bits.map { "\($0)-bit" } ?? "bf16"))")
+        emitter.log("[turbo] model loaded in \(String(format: "%.1f", seconds))s: \(spec.path) (\(FamilyLoader.describe(model, spec: spec)))")
         emitter.emit("model_loaded", ["path": spec.path, "seconds": (seconds * 10).rounded() / 10])
         return model
     }
@@ -87,21 +83,29 @@ public final class Engine {
             Memory.peakMemory = 0
             if isCancelled(id) { throw GenerationError.cancelled }
             let model = try ensureModel(spec, jobID: id)
-            if spec.lowRam == true {
-                Memory.cacheLimit = 1 << 30
-            }
+            let lowRam = spec.lowRam == true
+            model.lowRam = lowRam
+            // What mflux's --low-ram does that suits a long-lived process: a small buffer cache
+            // (and, inside the families, tiled decoding and a released text encoder).
+            Memory.cacheLimit = lowRam ? 1 << 30 : defaultCacheLimit
             if isCancelled(id) { throw GenerationError.cancelled }
 
             emitter.emit("phase", ["id": id, "phase": "encoding"])
             mark("encode_start")
-            // The queued prompts encode now, while the encoder is resident.
+            // This prompt, then the queued ones, encode now while the text encoder is resident.
             let upcoming = (params.upcomingPrompts ?? []).filter { !$0.isEmpty && $0 != params.prompt }
-            for text in upcoming.prefix(8) where !model.isCached(text) {
+            for text in [params.prompt] + upcoming.prefix(8) where !model.isCached(text) {
                 try model.encode(text)
+                if isCancelled(id) { throw GenerationError.cancelled }
             }
+            model.promptsEncoded()
 
+            let request = FamilyRequest(
+                prompt: params.prompt, seed: params.seed, width: params.width, height: params.height,
+                steps: params.steps, guidance: params.guidance, flattenAlpha: params.flattenAlpha ?? false
+            )
             let image = try model.generate(
-                prompt: params.prompt, seed: params.seed, width: params.width, height: params.height, steps: params.steps,
+                request,
                 phase: { [self] phase in
                     switch phase {
                     case .denoising:
@@ -119,7 +123,6 @@ public final class Engine {
                 },
                 isCancelled: { [self] in isCancelled(id) }
             )
-            modelUsed = true
             mark("decode_end")
 
             emitter.emit("phase", ["id": id, "phase": "saving"])

@@ -85,9 +85,10 @@ public enum WeightLoading {
     /// Puts a component's tensors into a module. Layers the checkpoint stores quantized (a
     /// `scales` tensor next to the packed `weight`) are turned into quantized layers first, with the
     /// bits and group size read off the stored shapes exactly as mflux's loader does, so mixed
-    /// precision and any of the supported levels load without being told. `ignoring` drops keys
-    /// the module has no parameter for (buffers the reference implementation stores, or components
-    /// this port does not use).
+    /// precision and any of the supported levels load without being told (linears, embeddings and
+    /// the stacked experts of a mixture of experts alike). `ignoring` drops keys the module has no
+    /// parameter for (buffers the reference implementation stores, or components this port does
+    /// not use).
     public static func apply(
         _ tensors: [String: MLXArray],
         to module: Module,
@@ -103,6 +104,9 @@ public enum WeightLoading {
                 inputDims = linear.weight.shape[1]
             } else if let embedding = layer as? Embedding {
                 inputDims = embedding.weight.shape[1]
+            } else if let experts = layer as? SwitchLinear {
+                // Stacked experts [E, out, in]: the packed width and the scales are per expert row.
+                inputDims = experts.weight.shape[2]
             } else {
                 return nil
             }

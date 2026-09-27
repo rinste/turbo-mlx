@@ -62,17 +62,25 @@ open -n --env TURBO_MLX_HOME=/tmp/turbo-first-run "path/to/Turbo MLX.app"
 ## How it works
 
 ```
-SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo_worker.py serve ──▶ mflux / MLX (GPU)
-                                    └──▶ turbo-engine serve   ──▶ MLX Swift (GPU)   FLUX.2 Klein
+SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo-engine serve   ──▶ MLX Swift (GPU)   every built-in family
+                                    └──▶ turbo_worker.py serve ──▶ mflux / MLX (GPU)   fallback without the native binary
 ```
 
-- **Engine.** Inference runs in [mflux](https://github.com/mflux-community/mflux) (Python + MLX).
-  `Backend/setup_backend.sh` creates the environment with **uv, which ships inside the app**
-  (`Vendor/uv`, copied to `Contents/MacOS` and signed with the app). uv also downloads a
-  standalone Python, so the user's Mac needs nothing preinstalled. mflux is installed from the
-  GitHub source archive of the tested commit (`BackendController.mfluxCommit`), so git isn't needed
-  either: Ming-Image support landed after mflux 0.20.0, the latest release on PyPI. When a new
-  version of the app expects a different commit, the engine updates itself on first launch.
+- **Native engine.** `Engine/` is a Swift package that runs all four families (FLUX.2 Klein,
+  Z-Image Turbo, Qwen-Image 2512, Ming-Image) on MLX Swift from the same mflux checkpoints, and
+  speaks the same protocol as the Python worker. When its `turbo-engine` binary is present
+  (`scripts/build-engine.sh` installs it in the app's data folder) every model runs there and no
+  Python is installed or started. See `Engine/README.md` and
+  [docs/native-engine.md](docs/native-engine.md).
+- **Python engine.** The fallback when the native binary is missing (a development build), and
+  the reference the native ports are checked against: inference in
+  [mflux](https://github.com/mflux-community/mflux) (Python + MLX). `Backend/setup_backend.sh`
+  creates the environment with **uv, which ships inside the app** (`Vendor/uv`, copied to
+  `Contents/MacOS` and signed with the app). uv also downloads a standalone Python, so the user's
+  Mac needs nothing preinstalled. mflux is installed from the GitHub source archive of the tested
+  commit (`BackendController.mfluxCommit`), so git isn't needed either: Ming-Image support landed
+  after mflux 0.20.0, the latest release on PyPI. When a new version of the app expects a
+  different commit, the engine updates itself on first launch.
 - **Worker.** `Backend/turbo_worker.py serve` keeps the model in memory, reports phases,
   per-step progress and the seconds each phase took (shown when hovering the time of an image),
   and stops a generation at the next step. One adapter per model family (`FAMILIES`) hides the
@@ -81,13 +89,10 @@ SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo_worker.py serve ──�
   the model's buffers wired while it works, and writes each PNG once (mflux's own save encodes
   it three times).
 - **Save memory.** Frees the text encoder of Ming-Image and Qwen-Image once the prompt is read
-  (a new prompt reloads the model, so the text encoder and the transformer are never in memory
-  together), decodes the image in tiles where the VAE allows it (not FLUX.2, whose tiles would
-  show seams), and keeps MLX's buffer cache small.
-- **Native engine.** `Engine/` is a Swift package that runs FLUX.2 Klein on MLX Swift and speaks
-  the same protocol; when its `turbo-engine` binary is present (`scripts/build-engine.sh` installs
-  it in the app's data folder) Klein images run there and the Python engine serves the rest. See
-  `Engine/README.md` and [docs/native-engine.md](docs/native-engine.md).
+  (a new prompt reloads it, with the transformer released first, so the two are never in memory
+  together; the native engine reloads only the text side, the Python one the whole model),
+  decodes the image in tiles where the VAE allows it (not FLUX.2, whose tiles would show seams),
+  and keeps MLX's buffer cache small.
 - **Downloads.** The app downloads models itself (`Services/HubDownloader.swift`) into the
   Hugging Face cache, in the same layout huggingface_hub uses, so mflux and other tools share
   them; an interrupted download resumes. No engine is needed to download.
@@ -115,8 +120,10 @@ scripts/      release.sh, build-engine.sh, ExportOptions.plist, update-uv.sh
 The project uses Xcode's synchronized folders: files added under `TurboMLX/` join the target on
 their own.
 
-**Adding an mflux model family:** a case in `ModelFamily` (`Models/ModelCatalog.swift`: download
-patterns, components, steps, guidance) and an adapter in `FAMILIES` in `turbo_worker.py`.
+**Adding a model family:** a case in `ModelFamily` (`Models/ModelCatalog.swift`: download
+patterns, components, steps, guidance), a `FamilyModel` under `Engine/Sources/TurboEngineCore/Families/`
+with its fixture and `verify` stage (see `Engine/README.md`), and, for the Python fallback, an
+adapter in `FAMILIES` in `turbo_worker.py`.
 
 **Where this is going:** [docs/native-engine.md](docs/native-engine.md) weighs replacing the Python
 worker with an MLX Swift engine and prepares the app for video models (LTX).

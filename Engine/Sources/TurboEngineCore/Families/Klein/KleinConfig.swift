@@ -28,6 +28,15 @@ public struct KleinConfig: Equatable, Sendable {
         public var headDim = 128
         public var ropeTheta: Double = 1_000_000
         public var rmsNormEps: Float = 1e-6
+        /// The epsilon of the per-head query and key norms: Klein's encoder uses the layer norm's
+        /// (1e-6), Z-Image's the MLX default (1e-5).
+        public var qkNormEps: Float = 1e-6
+
+        public init(hiddenSize: Int, intermediateSize: Int, qkNormEps: Float = 1e-6) {
+            self.hiddenSize = hiddenSize
+            self.intermediateSize = intermediateSize
+            self.qkNormEps = qkNormEps
+        }
     }
 
     public var name: String
@@ -37,6 +46,8 @@ public struct KleinConfig: Equatable, Sendable {
     public var textEncoderOutLayers = [9, 18, 27]
     public var maxSequenceLength = 512
     public var defaultSteps = 4
+    /// A base (not distilled) checkpoint: many steps and real classifier-free guidance.
+    public var isBase = false
 
     public static let klein4B = KleinConfig(
         name: "flux2-klein-4b",
@@ -50,10 +61,14 @@ public struct KleinConfig: Equatable, Sendable {
         textEncoder: TextEncoder(hiddenSize: 4096, intermediateSize: 12288)
     )
 
-    /// The 4B geometry unless the model's registry key or name says 9B, as mflux infers it.
+    /// The 4B geometry unless the model's registry key or name says 9B, as mflux infers it; a
+    /// "base" in either marks the undistilled checkpoint.
     public static func forModel(name: String?, variant: String?) -> KleinConfig {
         let hints = [variant ?? "", name ?? ""].joined(separator: " ").lowercased()
-        return hints.contains("9b") ? klein9B : klein4B
+        var config = hints.contains("9b") ? klein9B : klein4B
+        config.isBase = hints.contains("base")
+        if config.isBase { config.defaultSteps = 50 }
+        return config
     }
 
     /// The geometry a fixture's `fixture.json` describes (see Fixtures/make_klein_fixture.py).

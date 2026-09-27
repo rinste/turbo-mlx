@@ -65,8 +65,8 @@ final class Qwen3Attention: Module {
         _kProj.wrappedValue = Linear(config.hiddenSize, kvHeads * headDim, bias: false)
         _vProj.wrappedValue = Linear(config.hiddenSize, kvHeads * headDim, bias: false)
         _oProj.wrappedValue = Linear(heads * headDim, config.hiddenSize, bias: false)
-        _qNorm.wrappedValue = Qwen3RMSNorm(dimensions: headDim, eps: config.rmsNormEps)
-        _kNorm.wrappedValue = Qwen3RMSNorm(dimensions: headDim, eps: config.rmsNormEps)
+        _qNorm.wrappedValue = Qwen3RMSNorm(dimensions: headDim, eps: config.qkNormEps)
+        _kNorm.wrappedValue = Qwen3RMSNorm(dimensions: headDim, eps: config.qkNormEps)
         super.init()
     }
 
@@ -153,8 +153,10 @@ public final class Qwen3TextEncoder: Module {
 
     /// The hidden states, embeddings first, then one per layer (before the final norm), as the
     /// reference returns them with `output_hidden_states`.
-    /// `computeType` overrides the activations' dtype (the parity check runs it in float32).
-    public func hiddenStates(inputIds: MLXArray, attentionMask: MLXArray, computeType: DType? = nil) -> [MLXArray] {
+    /// `computeType` overrides the activations' dtype (the parity check runs it in float32;
+    /// Z-Image's encoder runs that way by design). `through` stops after that many layers when a
+    /// caller reads an earlier state (Z-Image reads the second to last).
+    public func hiddenStates(inputIds: MLXArray, attentionMask: MLXArray, computeType: DType? = nil, through: Int? = nil) -> [MLXArray] {
         let (batch, length) = (inputIds.shape[0], inputIds.shape[1])
         var h = embedTokens(inputIds)
         if let computeType { h = h.asType(computeType) }
@@ -173,7 +175,7 @@ public final class Qwen3TextEncoder: Module {
 
         let (cos, sin) = rotary(length: length, dtype: dtype)
         var states = [h]
-        for layer in layers {
+        for layer in layers.prefix(through ?? layers.count) {
             h = layer(h, mask: mask, cos: cos, sin: sin)
             states.append(h)
         }

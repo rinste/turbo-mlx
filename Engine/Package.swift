@@ -1,8 +1,9 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
-// The native engine of Turbo MLX: FLUX.2 Klein on MLX Swift, speaking the app's JSON protocol.
-// Build it with Xcode or `xcodebuild` (the Metal shaders of mlx-swift need them), see README.md.
+// The native engine of Turbo MLX: the catalog's families (FLUX.2 Klein, Z-Image Turbo, Qwen-Image,
+// Ming-Image) on MLX Swift, speaking the app's JSON protocol. Build it with Xcode or `xcodebuild`
+// (the Metal shaders of mlx-swift need them), see README.md.
 let package = Package(
     name: "TurboEngine",
     platforms: [.macOS(.v15)],

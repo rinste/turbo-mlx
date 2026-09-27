@@ -56,9 +56,9 @@ final class BackendController {
     static let pythonInstallDirectory = supportDirectory.appending(path: "python", directoryHint: .isDirectory)
     static let uvCacheDirectory = URL.cachesDirectory.appending(path: "TurboMLX/uv", directoryHint: .isDirectory)
 
-    /// Families the native engine implements. It is preferred for them whenever the executable is
-    /// there; everything else runs on mflux.
-    static let nativeFamilies: Set<ModelFamily> = [.flux2Klein]
+    /// Families the native engine implements: every built-in one. It is preferred for them
+    /// whenever the executable is there; the Python engine only serves what it does not run.
+    static let nativeFamilies: Set<ModelFamily> = [.flux2Klein, .zImageTurbo, .qwenImage, .ming]
 
     /// The native engine: `TURBO_ENGINE` (a development build), the one in the app bundle, or one
     /// dropped into the app's data folder by `scripts/build-engine.sh`.
@@ -112,10 +112,11 @@ final class BackendController {
 
     var hasNativeEngine: Bool { Self.nativeEngineURL != nil }
 
-    /// The engine a model runs on in this build. The native engine has no classifier-free guidance
-    /// yet, so checkpoints that use it (Klein's base ones) stay on mflux.
+    /// The engine a model runs on in this build: the native one for every family it implements
+    /// (classifier-free guidance included: Qwen-Image, Ming-Image and Klein's base checkpoints),
+    /// mflux for the rest.
     func engineKind(for model: ModelDescriptor) -> EngineKind {
-        hasNativeEngine && Self.nativeFamilies.contains(model.family) && !model.supportsGuidance ? .native : .python
+        hasNativeEngine && Self.nativeFamilies.contains(model.family) ? .native : .python
     }
 
     /// Resolves the environment and brings the Python engine up to date when a new version of the

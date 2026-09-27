@@ -67,7 +67,7 @@ public struct EncodedPrompt {
 }
 
 public struct GeneratedImage {
-    /// Pixels as [H, W, 3] uint8.
+    /// Pixels as [H, W, 3] (or [H, W, 4]) uint8.
     public let pixels: MLXArray
     public var width: Int { pixels.shape[1] }
     public var height: Int { pixels.shape[0] }
@@ -91,14 +91,19 @@ public enum GenerationError: LocalizedError {
 }
 
 /// FLUX.2 Klein: the three modules, the prompt cache, and the sampling loop.
-public final class KleinModel {
+public final class KleinModel: FamilyModel {
+    /// The negative prompt mflux encodes for a base checkpoint's classifier-free guidance.
+    static let negativePrompt = " "
+
     public let config: KleinConfig
     public let modelPath: URL
     public let textEncoder: Qwen3TextEncoder
     public let transformer: Flux2Transformer
     public let vae: Flux2VAE
     public private(set) var bits: Int?
-    private var prompter: KleinPrompter?
+    /// FLUX.2's decoder would show seams in tiles, so Save memory changes nothing here.
+    public var lowRam = false
+    private var prompter: Qwen3Prompter?
     private var promptCache: [String: EncodedPrompt] = [:]
 
     /// Loads the checkpoint at `modelPath` (mflux format). Weights stay lazy until first use.
@@ -115,17 +120,23 @@ public final class KleinModel {
         try WeightLoading.apply(try checkpoint.loadComponent("vae"), to: vae, ignoring: Flux2VAE.ignoresKey)
         bits = checkpoint.bits
         if loadTokenizer {
-            prompter = try KleinPrompter(modelPath: modelPath, maxLength: config.maxSequenceLength)
+            prompter = try Qwen3Prompter(modelPath: modelPath, maxLength: config.maxSequenceLength, enableThinking: false)
         }
     }
 
     public func isCached(_ prompt: String) -> Bool { promptCache[prompt] != nil }
 
+    public func encode(_ prompt: String) throws {
+        _ = try encodePrompt(prompt)
+    }
+
+    public func promptsEncoded() {}
+
     /// Encodes a prompt (once; later calls read the cache).
     @discardableResult
-    public func encode(_ prompt: String) throws -> EncodedPrompt {
+    public func encodePrompt(_ prompt: String) throws -> EncodedPrompt {
         if let cached = promptCache[prompt] { return cached }
-        guard let prompter else { throw KleinPrompter.PromptError.noTokenizer(modelPath) }
+        guard let prompter else { throw Qwen3Prompter.PromptError.noTokenizer(modelPath) }
         let (inputIds, attentionMask) = try prompter.tokenize(prompt)
         let encoded = encode(inputIds: inputIds, attentionMask: attentionMask)
         promptCache[prompt] = encoded
@@ -180,10 +191,25 @@ public final class KleinModel {
         return latents + dt * noise.asType(latents.dtype)
     }
 
-    /// Runs the whole pipeline for a prompt. `progress` gets each finished step; `isCancelled`
-    /// is consulted between steps.
     public func generate(
-        prompt: String, seed: Int, width: Int, height: Int, steps: Int,
+        _ request: FamilyRequest,
+        phase: (GenerationPhase) -> Void,
+        progress: (Int, Int) -> Void,
+        isCancelled: () -> Bool
+    ) throws -> GeneratedImage {
+        // Distilled checkpoints only work at guidance 1; base checkpoints run real CFG.
+        let guidance = config.isBase ? request.guidance : 1
+        return try generate(
+            prompt: request.prompt, seed: request.seed, width: request.width, height: request.height,
+            steps: request.steps, guidance: guidance, phase: phase, progress: progress, isCancelled: isCancelled
+        )
+    }
+
+    /// Runs the whole pipeline for a prompt. `progress` gets each finished step; `isCancelled`
+    /// is consulted between steps. A `guidance` above 1 runs mflux's classifier-free guidance
+    /// against an encoded space, as its base checkpoints do.
+    public func generate(
+        prompt: String, seed: Int, width: Int, height: Int, steps: Int, guidance: Double = 1,
         phase: (GenerationPhase) -> Void,
         progress: (Int, Int) -> Void,
         isCancelled: () -> Bool
@@ -193,7 +219,8 @@ public final class KleinModel {
         guard width >= 16, height >= 16 else { throw GenerationError.sizeTooSmall }
 
         phase(.encoding)
-        let encoded = try encode(prompt)
+        let encoded = try encodePrompt(prompt)
+        let negative = guidance > 1 ? try encodePrompt(Self.negativePrompt) : nil
         if isCancelled() { throw GenerationError.cancelled }
 
         phase(.denoising)
@@ -201,7 +228,11 @@ public final class KleinModel {
         let schedule = FlowMatchSchedule(steps: steps, imageSeqLen: initial.latentHeight * initial.latentWidth)
         var latents = initial.latents
         for t in 0 ..< steps {
-            let noise = transformer(latents: latents, prompt: encoded.embeds, timestep: schedule.timesteps[t], imageIds: initial.ids, textIds: encoded.ids)
+            var noise = transformer(latents: latents, prompt: encoded.embeds, timestep: schedule.timesteps[t], imageIds: initial.ids, textIds: encoded.ids)
+            if let negative {
+                let negativeNoise = transformer(latents: latents, prompt: negative.embeds, timestep: schedule.timesteps[t], imageIds: initial.ids, textIds: negative.ids)
+                noise = negativeNoise + Float(guidance) * (noise - negativeNoise)
+            }
             latents = Self.step(latents: latents, noise: noise, schedule: schedule, index: t)
             eval(latents)
             progress(t + 1, steps)
@@ -218,13 +249,6 @@ public final class KleinModel {
     public func decode(latents: MLXArray, latentHeight: Int, latentWidth: Int) -> MLXArray {
         let grid = latents.reshaped([1, latentHeight, latentWidth, latents.shape[latents.ndim - 1]])
         let decoded = vae.decodePacked(grid)
-        return Self.toPixels(decoded)
-    }
-
-    /// [B, H, W, 3] in [-1, 1] → [H, W, 3] uint8. As mflux: halved, shifted and clipped in the
-    /// decoder's dtype, then scaled and rounded in float32.
-    public static func toPixels(_ decoded: MLXArray) -> MLXArray {
-        let unit = clip(decoded / 2 + 0.5, min: 0, max: 1).asType(.float32)
-        return (unit * 255).round().asType(.uint8)[0]
+        return Pixels.toPixels(decoded)
     }
 }

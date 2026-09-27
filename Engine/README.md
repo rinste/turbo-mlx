@@ -1,20 +1,44 @@
 # turbo-engine
 
-The native engine of Turbo MLX: FLUX.2 Klein on [MLX Swift](https://github.com/ml-explore/mlx-swift),
+The native engine of Turbo MLX: the catalog's four families on [MLX Swift](https://github.com/ml-explore/mlx-swift),
 speaking the same JSON-lines protocol as `turbo_worker.py`, so the app runs either without knowing
 the difference (see `docs/native-engine.md` for the why and the plan).
 
 ```
-Sources/turbo-engine/         the executable: `serve` (the worker) and `verify` (parity check)
+Sources/turbo-engine/         the executable: `serve` (the worker) and `verify` (parity checks)
 Sources/TurboEngineCore/      protocol, mflux checkpoint loading, PNG output, the families
-  Families/Klein/             Qwen3 text encoder, FLUX.2 transformer, VAE decoder, scheduler, prompt
-Fixtures/make_klein_fixture.py  builds the checkpoint + references `verify` compares against
+  Families/Family.swift       the FamilyModel protocol the engine drives, and the loader by family
+  Families/Shared/            what families share: the Qwen3 prompter, the S3-DiT, the schedules,
+                              tiled VAE decoding, mixture-of-experts layers, pixels
+  Families/Klein/             FLUX.2 Klein: Qwen3 text encoder, FLUX.2 transformer, VAE decoder
+  Families/ZImage/            Z-Image Turbo: the Qwen3 encoder read in float32, the S3-DiT,
+                              the 16-channel decoder
+  Families/QwenImage/         Qwen-Image 2512: Qwen2.5-VL text encoder, the dual-stream
+                              transformer, the causal 3D decoder, classifier-free guidance
+  Families/Ming/              Ming-Image: the Ling MoE encoder, the Qwen2 connector and heads,
+                              the S3-DiT in bf16, the RGBA decoder
+Fixtures/make_*_fixture.py    build the checkpoint + references `verify` compares against
 ```
 
 The modules mirror mflux's module tree name for name, so the checkpoints the app already
 downloads (`mflux-community/flux2-klein-4b-mflux-q4` and friends) load without conversion: the
-loader reads the shards, recognizes the layers stored quantized from their shapes, and puts every
-tensor where its key says.
+loader reads the shards, recognizes the layers stored quantized from their shapes (linears,
+embeddings and Ming's stacked experts, at any of mflux's levels, mixed ones included), and puts
+every tensor where its key says.
+
+## Families
+
+| Family | Text side | Transformer | Decoder | Guidance |
+|---|---|---|---|---|
+| FLUX.2 Klein | Qwen3 (hidden states of layers 9, 18, 27), padded to 512 | FLUX.2 double/single stream | FLUX.2, 32 channels | base checkpoints: negative space |
+| Z-Image Turbo | Qwen3 4B in float32, second-to-last state, real tokens only, thinking on | S3-DiT, tokens padded to 32 with learned pad tokens, float32 stream | FLUX.1-style, 16 channels, tiles with Save memory | off |
+| Qwen-Image 2512 | Qwen2.5-VL 7B (bf16, unquantized), the template's 34 tokens dropped | 60 dual-stream blocks, float32 stream, modulation producers at 8 bits | Wan-derived causal 3D, 16 channels, tiles | true CFG, rescaled to the conditional norm; the unconditional pass is skipped at 1 |
+| Ming-Image 0.1 Design | Ling-mini-2.0 MoE (256 experts, 8 routed with group-limited top-k, bf16 router as upstream), Qwen2 connector over 256 query tokens, direct-VLM head | S3-DiT in bf16, no padding, two caption streams | Qwen VAE for RGBA, one scaling factor, tiles | zeroed conditions |
+
+Every family keeps a prompt cache and encodes the queued prompts while its text encoder is
+resident. With *Save memory*, Qwen-Image and Ming-Image release the text side once the prompts are
+encoded and reload only it when a new prompt arrives (after releasing the transformer, so the two
+are never co-resident); the other two keep everything loaded.
 
 ## Building
 
@@ -28,37 +52,48 @@ scripts/build-engine.sh            # builds Release and installs the binary for 
 
 The script puts `turbo-engine` in `~/Library/Application Support/TurboMLX/bin/`, with the resource
 bundles it loads (mlx-swift's Metal library among them), where the app looks for it (after
-`TURBO_ENGINE` and the app bundle). Start the app: the engine status shows "turbo-engine 0.1" once
-a FLUX.2 Klein model is selected, and Klein images run natively. The Python engine keeps serving
-the other families, and Klein's base checkpoints, which need classifier-free guidance. Deleting
-the `bin` folder puts Klein back on Python.
+`TURBO_ENGINE` and the app bundle). Start the app: the engine status shows "turbo-engine 0.2" and
+every built-in model runs natively; the Python engine is neither installed nor started. Deleting
+the `bin` folder puts everything back on Python.
 
 To work on the engine in Xcode, open `Engine/Package.swift` and run the `turbo-engine` scheme
 with the arguments below.
 
-## Checking the port against mflux
+## Checking a port against mflux
 
-Before trusting it with a real checkpoint, compare it with mflux on a small one:
+Before trusting it with a real checkpoint, compare each family with mflux on a small one:
 
 ```bash
-# 1. A tiny Klein checkpoint with random weights, and what mflux computes from it
-~/Library/Application\ Support/TurboMLX/venv/bin/python Engine/Fixtures/make_klein_fixture.py /tmp/klein-fixture
+# 1. A tiny checkpoint with random weights, and what mflux computes from it
+PY=~/Library/Application\ Support/TurboMLX/venv/bin/python
+$PY Engine/Fixtures/make_klein_fixture.py      /tmp/fixtures/klein
+$PY Engine/Fixtures/make_zimage_fixture.py     /tmp/fixtures/zimage
+$PY Engine/Fixtures/make_qwen_image_fixture.py /tmp/fixtures/qwen-image
+$PY Engine/Fixtures/make_ming_fixture.py       /tmp/fixtures/ming
 
-# 2. The same computation in Swift
-turbo-engine verify /tmp/klein-fixture
+# 2. The same computations in Swift (the fixture names its family)
+turbo-engine verify /tmp/fixtures/klein
+turbo-engine verify /tmp/fixtures/zimage
+turbo-engine verify /tmp/fixtures/qwen-image
+turbo-engine verify /tmp/fixtures/ming
 ```
 
 `verify` reports, stage by stage, the largest difference relative to the reference's scale (and
-the RMS one): the text encoder's prompt embeddings, the initial noise and ids for the fixture's
-seed, one transformer pass, the scheduler's sigmas (shifted for the image's token count, as Klein
-runs them), the whole denoising loop, and the VAE decode. Anything above 3% fails. Identical math
-lands well below that; a wrong reshape, a swapped rotary pair or a missing cast shows up as a
-large error at the first stage it touches.
+the RMS one): the text side, the initial noise for the fixture's seed, one transformer pass (for
+Ming also the unconditional one), the schedule, the whole denoising loop (guided where the family
+uses guidance), and the decode. Anything above 3% fails. Identical math lands well below that; a
+wrong reshape, a swapped rotary pair or a missing cast shows up as a large error at the first
+stage it touches.
 
-The text encoder is also run with float32 activations, and that check decides for it: in bf16 its
-28 layers carry the rounding of MLX's kernels, which differ between mlx-swift's MLX (0.31) and the
-Python one, and the fixture's random weights amplify it to a few percent (shown, marked "·"). In
-float32 the two agree to about 1e-6.
+Two things to know when reading the numbers. Klein's text encoder is also run with float32
+activations, and that check decides for it: in bf16 its layers carry the rounding of MLX's
+kernels, which differ between mlx-swift's MLX (0.31) and the Python one, and the fixture's random
+weights amplify it (shown, marked "·"). Ming's router picks experts from bf16 scores, so a rounding
+difference between the two MLX versions can flip a choice; the fixture's random weights make that
+unlikely, and it would show as a large error on the caption features alone.
+
+The fixture generators are ordinary mflux code and run wherever mflux imports (they were exercised
+on a Linux CPU build of MLX while the ports were written); `verify` needs the Mac.
 
 Then the real thing: generate the same prompt and seed with the app on the Python engine and on
 the native one (rename the engine binary to switch), and compare the two PNGs.
