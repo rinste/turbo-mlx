@@ -4,13 +4,16 @@ A macOS app (SwiftUI) that generates images on the Mac's GPU with MLX. It is bui
 distributed: the people who install it never open Terminal and need neither Python nor Xcode. On
 first launch the app sets up its own engine and downloads the models the user picks.
 
+![Turbo MLX: settings on the left, the image with its zoom controls and metadata on the right, the history below](docs/screenshot.webp)
+
 - **Left column:** model (with download and status), prompt with examples, format (aspect ratio and
   resolution, or a custom size), steps, guidance, seed, number of images, transparent or white
   background, memory saving. The main button does what the current state needs:
   *Install Image Engine* → *Download and Generate* → *Generate*.
 - **Right column:** the image (on a checkerboard when transparent) with its metadata, the running
-  generation with per-step progress and time left, and the history with the queue. Quick Look
-  (space), drag and drop, copy, *Reuse Settings* (⌘R).
+  generation with per-step progress and time left, and the history with the queue. Zoom: pinch,
+  double-click, ⌘-scroll, the − % + controls or the View menu (⌘+, ⌘-, ⌘0 actual size, ⌘9 fit);
+  scroll or drag to move around. Quick Look (space), drag and drop, copy, *Reuse Settings* (⌘R).
 
 ## Models
 

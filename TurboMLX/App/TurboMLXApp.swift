@@ -48,7 +48,10 @@ struct TurboMLXApp: App {
                 .task { await delegate.model.start() }
         }
         .defaultSize(width: 1320, height: 860)
-        .commands { GenerationCommands(model: delegate.model) }
+        .commands {
+            GenerationCommands(model: delegate.model)
+            ZoomCommands()
+        }
 
         Window("Engine Log", id: WindowID.log) {
             LogView()
@@ -109,6 +112,28 @@ private struct GenerationCommands: Commands {
             Button("Older Image") { model.moveSelection(by: 1) }
                 .keyboardShortcut("]", modifiers: .command)
                 .disabled(model.history.items.isEmpty)
+        }
+    }
+}
+
+/// View menu, with Preview's shortcuts.
+private struct ZoomCommands: Commands {
+    @FocusedValue(\.imageZoom) private var zoom
+
+    var body: some Commands {
+        CommandGroup(after: .toolbar) {
+            Button("Actual Size") { zoom?.zoom(to: 1) }
+                .keyboardShortcut("0")
+                .disabled(zoom == nil)
+            Button("Zoom to Fit") { zoom?.zoomToFit() }
+                .keyboardShortcut("9")
+                .disabled(zoom?.isZoomedIn != true)
+            Button("Zoom In") { zoom?.zoomIn() }
+                .keyboardShortcut("+")
+                .disabled(zoom?.canZoomIn != true)
+            Button("Zoom Out") { zoom?.zoomOut() }
+                .keyboardShortcut("-")
+                .disabled(zoom?.isZoomedIn != true)
         }
     }
 }

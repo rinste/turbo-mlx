@@ -40,7 +40,9 @@ struct HistoryStrip: View {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
                     LazyHStack(spacing: 8) {
-                        ForEach(app.pendingJobs) { job in
+                        // Newest on the left here too: the last queued job first, the running one
+                        // next to the images it will join.
+                        ForEach(app.pendingJobs.reversed()) { job in
                             JobThumbnail(job: job, height: thumbnailHeight)
                         }
                         ForEach(app.history.items) { item in

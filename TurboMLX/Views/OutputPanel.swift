@@ -5,6 +5,7 @@ import SwiftUI
 struct OutputPanel: View {
     @Environment(AppModel.self) private var app
     @State private var quickLookURL: URL?
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,6 +22,7 @@ struct OutputPanel: View {
         .quickLookPreview($quickLookURL)
         .toolbar { toolbarContent }
         .focusable()
+        .focused($isFocused)
         .focusEffectDisabled()
         .onMoveCommand { direction in
             switch direction {
@@ -51,7 +53,9 @@ struct OutputPanel: View {
         } else if app.showsLiveJob, let job = app.activeJob {
             LiveJobView(job: job)
         } else if let item = app.displayedItem {
-            ImageStage(item: item) { quickLookURL = app.url(for: item) }
+            // A new stage for each image, so it starts fitted.
+            ImageStage(item: item) { isFocused = true }
+                .id(item.id)
         } else if let model = app.selectedModel, !app.isInstalled(model) {
             ModelDownloadCard(model: model)
         } else {
@@ -117,26 +121,31 @@ struct OutputPanel: View {
 private struct ImageStage: View {
     @Environment(AppModel.self) private var app
     let item: HistoryItem
-    let onOpen: () -> Void
+    /// A click on the image gives the panel the keyboard (arrows, space).
+    let onClick: () -> Void
+
+    @State private var zoom = ImageZoom()
+    @State private var isHovering = false
 
     var body: some View {
-        let url = app.url(for: item)
-        let size = item.size
-        FileImage(url: url)
-            .aspectRatio(CGSize(width: size.width, height: size.height), contentMode: .fit)
-            .background {
-                if item.request.transparentBackground { Checkerboard() }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
-            .frame(maxWidth: CGFloat(size.width), maxHeight: CGFloat(size.height))
-            .padding(28)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .onTapGesture(count: 2, perform: onOpen)
-            .onDrag { NSItemProvider(contentsOf: url) ?? NSItemProvider() }
-            .contextMenu { HistoryItemMenu(item: item) }
-            .id(item.id)
+        ZoomableImage(
+            url: app.url(for: item),
+            size: item.size,
+            showsCheckerboard: item.request.transparentBackground,
+            zoom: zoom,
+            onMouseDown: onClick
+        )
+        .contextMenu { HistoryItemMenu(item: item) }
+        .overlay(alignment: .bottomTrailing) {
+            let showsControls = isHovering || zoom.isZoomedIn
+            ZoomControls(zoom: zoom)
+                .padding(12)
+                .opacity(showsControls ? 1 : 0)
+                .allowsHitTesting(showsControls)
+                .animation(.easeOut(duration: 0.15), value: showsControls)
+        }
+        .onHover { isHovering = $0 }
+        .focusedSceneValue(\.imageZoom, zoom)
     }
 }
 

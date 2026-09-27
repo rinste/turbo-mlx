@@ -502,10 +502,12 @@ private struct GenerateBar: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.extraLarge)
 
-            Text(caption)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+            if let caption {
+                Text(caption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
         }
         .padding(14)
         .background(.bar)
@@ -538,10 +540,10 @@ private struct GenerateBar: View {
             wideButton("Downloading\(percent)", systemImage: "arrow.down.circle") {}
                 .disabled(true)
         case .noModel, .emptyPrompt:
-            wideButton(generateTitle, systemImage: generateSymbol) {}
+            wideButton(generateTitle, systemImage: generateSymbol, shortcut: "⌘↩") {}
                 .disabled(true)
         case nil:
-            wideButton(generateTitle, systemImage: generateSymbol) { app.generate() }
+            wideButton(generateTitle, systemImage: generateSymbol, shortcut: "⌘↩") { app.generate() }
                 .help(app.isBusy
                       ? "Queue these settings: they start when the images ahead are done (⌘↩)"
                       : "Generate (⌘↩)")
@@ -559,25 +561,40 @@ private struct GenerateBar: View {
         app.isBusy ? "text.badge.plus" : "sparkles"
     }
 
-    private var caption: String {
+    private var caption: String? {
         switch app.blocker {
         case .backendNotInstalled: "One time only: about 1 GB, a few minutes."
         case .modelNotDownloaded: "Models download once and stay on this Mac."
         case .some(let blocker): blocker.hint
         case nil:
             switch app.pendingJobs.count {
-            case 0: "⌘↩ to generate"
+            case 0: nil
             case 1: "Starts when the current image is done"
             case let ahead: "Starts after the \(ahead) images ahead of it"
             }
         }
     }
 
-    private func wideButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+    /// `shortcut` follows the title, lighter, e.g. "Generate (⌘↩)".
+    private func wideButton(
+        _ title: String,
+        systemImage: String,
+        shortcut: String? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .font(.headline)
-                .frame(maxWidth: .infinity)
+            Label {
+                if let shortcut {
+                    Text("\(title) \(Text(verbatim: "(\(shortcut))").fontWeight(.regular).foregroundStyle(.secondary))")
+                        .accessibilityLabel(title)
+                } else {
+                    Text(title)
+                }
+            } icon: {
+                Image(systemName: systemImage)
+            }
+            .font(.headline)
+            .frame(maxWidth: .infinity)
         }
     }
 }
