@@ -249,6 +249,7 @@ final class AppModel {
         for seed in settings.nextSeeds() {
             let request = GenerationRequest(
                 prompt: settings.trimmedPrompt,
+                blocks: settings.blocks.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
                 seed: seed,
                 size: settings.size,
                 steps: min(max(settings.steps, model.stepRange.lowerBound), model.stepRange.upperBound),
@@ -437,7 +438,11 @@ final class AppModel {
         // The model first: switching family resets steps and guidance to its defaults.
         if models.contains(where: { $0.id == item.modelID }) { selectedModelID = item.modelID }
         var updated = settings
-        updated.prompt = item.prompt
+        if let blocks = item.request.blocks, !blocks.isEmpty {
+            updated.blocks = blocks
+        } else {
+            updated.blocks = [PromptBlock(name: "Prompt 1", text: item.prompt)]
+        }
         updated.apply(size: item.size)
         updated.steps = item.request.steps
         updated.guidance = item.request.guidance

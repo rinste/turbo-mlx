@@ -3,14 +3,14 @@ import SwiftUI
 /// Left column: model, prompt and generation settings.
 struct ControlPanel: View {
     @Environment(AppModel.self) private var app
-    @FocusState private var promptFocused: Bool
+    @FocusState private var focusedBlock: PromptBlock.ID?
 
     var body: some View {
         @Bindable var app = app
         Form {
             ModelSection()
             if let model = app.selectedModel {
-                PromptSection(prompt: $app.settings.prompt, family: model.family, isFocused: $promptFocused)
+                PromptSection(settings: $app.settings, family: model.family, focus: $focusedBlock)
                 FormatSection(settings: $app.settings)
                 ParametersSection(settings: $app.settings, model: model)
                 MemorySection(settings: $app.settings, family: model.family)
@@ -22,7 +22,7 @@ struct ControlPanel: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             GenerateBar()
         }
-        .onAppear { promptFocused = true }
+        .onAppear { focusedBlock = app.settings.blocks.first?.id }
     }
 }
 
@@ -229,44 +229,163 @@ private struct ModelMenu: View {
 
 // MARK: - Prompt
 
+/// The prompt as blocks: each one a piece of the final text, renamable, movable, removable.
 private struct PromptSection: View {
-    @Binding var prompt: String
+    @Binding var settings: GenerationSettings
     let family: ModelFamily
-    var isFocused: FocusState<Bool>.Binding
+    var focus: FocusState<PromptBlock.ID?>.Binding
 
     var body: some View {
         Section {
-            TextEditor(text: $prompt)
-                .font(.body)
-                .scrollContentBackground(.hidden)
-                .frame(minHeight: 110, idealHeight: 140, maxHeight: 280)
-                .focused(isFocused)
-                .overlay(alignment: .topLeading) {
-                    if prompt.isEmpty {
-                        Text("Describe the image: subject, style, light, colors. Put any text to render in quotes.")
-                            .foregroundStyle(.tertiary)
-                            .padding(.leading, 5)
-                            .allowsHitTesting(false)
-                    }
-                }
+            ForEach($settings.blocks) { $block in
+                PromptBlockEditor(
+                    block: $block,
+                    position: position(of: block.id),
+                    count: settings.blocks.count,
+                    focus: focus,
+                    onMove: { move(block.id, by: $0) },
+                    onRemove: { remove(block.id) }
+                )
+            }
         } header: {
-            HStack {
+            HStack(spacing: 10) {
                 Text("Prompt")
                 Spacer()
                 Menu("Examples") {
                     ForEach(PromptExamples.for(family), id: \.title) { example in
-                        Button(example.title) { prompt = example.prompt }
+                        Button(example.title) { fillFirstBlock(with: example.prompt) }
                     }
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
                 .textCase(nil)
+                Button {
+                    addBlock()
+                } label: {
+                    Image(systemName: "plus.circle")
+                }
+                .buttonStyle(.borderless)
+                .help("Add a block: the blocks are joined, in order, into one prompt")
             }
         } footer: {
-            Text(family.promptTip)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                if settings.blocks.count > 1 {
+                    Text("The blocks are joined, in order, into one prompt.")
+                }
+                Text(family.promptTip)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
+    }
+
+    private func position(of id: PromptBlock.ID) -> Int {
+        settings.blocks.firstIndex { $0.id == id } ?? 0
+    }
+
+    private func addBlock() {
+        let block = PromptBlock(name: PromptBlock.defaultName(among: settings.blocks))
+        withAnimation(.snappy) { settings.blocks.append(block) }
+        focus.wrappedValue = block.id
+    }
+
+    /// `offset` -1 moves the block up, +1 down.
+    private func move(_ id: PromptBlock.ID, by offset: Int) {
+        guard let index = settings.blocks.firstIndex(where: { $0.id == id }) else { return }
+        let target = index + offset
+        guard settings.blocks.indices.contains(target) else { return }
+        withAnimation(.snappy) { settings.blocks.swapAt(index, target) }
+    }
+
+    private func remove(_ id: PromptBlock.ID) {
+        guard settings.blocks.count > 1, let index = settings.blocks.firstIndex(where: { $0.id == id }) else { return }
+        withAnimation(.snappy) { settings.blocks.remove(at: index) }
+        if focus.wrappedValue == id {
+            focus.wrappedValue = settings.blocks[min(index, settings.blocks.count - 1)].id
+        }
+    }
+
+    /// Examples go into the first block; the others (a style, say) stay as they are.
+    private func fillFirstBlock(with text: String) {
+        if settings.blocks.isEmpty {
+            settings.blocks = [PromptBlock(name: "Prompt 1", text: text)]
+        } else {
+            settings.blocks[0].text = text
+        }
+        focus.wrappedValue = settings.blocks.first?.id
+    }
+}
+
+private struct PromptBlockEditor: View {
+    @Binding var block: PromptBlock
+    /// Index in the list, and how many blocks there are: the arrows stop at the ends.
+    let position: Int
+    let count: Int
+    var focus: FocusState<PromptBlock.ID?>.Binding
+    let onMove: (Int) -> Void
+    let onRemove: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 2) {
+                TextField("Name", text: $block.name)
+                    .textFieldStyle(.plain)
+                    .font(.subheadline.weight(.medium))
+                    .help("Click to rename the block")
+                Button {
+                    onMove(-1)
+                } label: {
+                    Image(systemName: "chevron.up")
+                }
+                .disabled(position == 0)
+                .help("Move up")
+                Button {
+                    onMove(1)
+                } label: {
+                    Image(systemName: "chevron.down")
+                }
+                .disabled(position >= count - 1)
+                .help("Move down")
+                Button {
+                    onRemove()
+                } label: {
+                    Image(systemName: "xmark.circle")
+                }
+                .disabled(count <= 1)
+                .help("Remove this block")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+
+            TextEditor(text: $block.text)
+                .font(.body)
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: 64, idealHeight: 96, maxHeight: 240)
+                .focused(focus, equals: block.id)
+                .overlay(alignment: .topLeading) {
+                    if block.text.isEmpty {
+                        Text(placeholder)
+                            .foregroundStyle(.tertiary)
+                            .padding(.leading, 5)
+                            .allowsHitTesting(false)
+                    }
+                }
+        }
+        .contextMenu {
+            Button("Move Up") { onMove(-1) }
+                .disabled(position == 0)
+            Button("Move Down") { onMove(1) }
+                .disabled(position >= count - 1)
+            Divider()
+            Button("Remove Block", role: .destructive) { onRemove() }
+                .disabled(count <= 1)
+        }
+    }
+
+    private var placeholder: String {
+        position == 0
+            ? "Describe the image: subject, style, light, colors. Put any text to render in quotes."
+            : "A piece of the prompt: the style, the lighting, a detail. It follows the block above."
     }
 }
 

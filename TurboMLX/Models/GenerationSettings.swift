@@ -52,12 +52,45 @@ nonisolated enum AspectRatio: String, CaseIterable, Codable, Identifiable, Senda
     }
 }
 
+/// One piece of the prompt. The blocks are joined, in order, into the text sent to the model, so
+/// the subject, the style or the lighting can each live in a block of their own and be moved around.
+nonisolated struct PromptBlock: Codable, Hashable, Identifiable, Sendable {
+    var id = UUID()
+    var name: String
+    var text = ""
+
+    /// The blocks as one prompt: a comma between pieces, or just a space after punctuation.
+    static func joined(_ blocks: [PromptBlock]) -> String {
+        var result = ""
+        for block in blocks {
+            let piece = block.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !piece.isEmpty else { continue }
+            if result.isEmpty {
+                result = piece
+            } else if let last = result.last, ".,;:!?".contains(last) {
+                result += " " + piece
+            } else {
+                result += ", " + piece
+            }
+        }
+        return result
+    }
+
+    /// "Prompt N" with the first N not already used.
+    static func defaultName(among blocks: [PromptBlock]) -> String {
+        let taken = Set(blocks.map(\.name))
+        var number = blocks.count + 1
+        while taken.contains("Prompt \(number)") { number += 1 }
+        return "Prompt \(number)"
+    }
+}
+
 nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     static let resolutions = [512, 768, 1024, 1536, 2048]
     static let guidanceRange = 1.0...7.0
     static let maxBatch = 8
 
-    var prompt = ""
+    var blocks = [PromptBlock(name: "Prompt 1")]
     var aspect = AspectRatio.square
     var resolution = 1024
     var usesCustomSize = false
@@ -77,7 +110,43 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
             : aspect.size(base: resolution)
     }
 
-    var trimmedPrompt: String { prompt.trimmingCharacters(in: .whitespacesAndNewlines) }
+    /// The prompt sent to the model: the blocks joined in order, already trimmed.
+    var prompt: String { PromptBlock.joined(blocks) }
+    var trimmedPrompt: String { prompt }
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case blocks, aspect, resolution, usesCustomSize, customWidth, customHeight, steps, guidance,
+             randomSeed, seed, batchCount, transparentBackground, lowMemory
+    }
+
+    /// Settings saved before the prompt had blocks kept a single string.
+    private enum LegacyKeys: String, CodingKey {
+        case prompt
+    }
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        if let saved = try values.decodeIfPresent([PromptBlock].self, forKey: .blocks), !saved.isEmpty {
+            blocks = saved
+        } else {
+            let legacy = try decoder.container(keyedBy: LegacyKeys.self)
+            blocks = [PromptBlock(name: "Prompt 1", text: try legacy.decodeIfPresent(String.self, forKey: .prompt) ?? "")]
+        }
+        aspect = try values.decodeIfPresent(AspectRatio.self, forKey: .aspect) ?? aspect
+        resolution = try values.decodeIfPresent(Int.self, forKey: .resolution) ?? resolution
+        usesCustomSize = try values.decodeIfPresent(Bool.self, forKey: .usesCustomSize) ?? usesCustomSize
+        customWidth = try values.decodeIfPresent(Int.self, forKey: .customWidth) ?? customWidth
+        customHeight = try values.decodeIfPresent(Int.self, forKey: .customHeight) ?? customHeight
+        steps = try values.decodeIfPresent(Int.self, forKey: .steps) ?? steps
+        guidance = try values.decodeIfPresent(Double.self, forKey: .guidance) ?? guidance
+        randomSeed = try values.decodeIfPresent(Bool.self, forKey: .randomSeed) ?? randomSeed
+        seed = try values.decodeIfPresent(Int.self, forKey: .seed) ?? seed
+        batchCount = try values.decodeIfPresent(Int.self, forKey: .batchCount) ?? batchCount
+        transparentBackground = try values.decodeIfPresent(Bool.self, forKey: .transparentBackground) ?? transparentBackground
+        lowMemory = try values.decodeIfPresent(Bool.self, forKey: .lowMemory) ?? lowMemory
+    }
 
     /// Seeds for the next batch: consecutive from the fixed seed, or fresh random ones.
     func nextSeeds() -> [Int] {
@@ -107,6 +176,9 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
 /// Everything the backend needs for one image.
 nonisolated struct GenerationRequest: Codable, Hashable, Sendable {
     var prompt: String
+    /// The blocks the prompt was assembled from, so Reuse Settings brings them back (older
+    /// history items have none).
+    var blocks: [PromptBlock]?
     var seed: Int
     var size: PixelSize
     var steps: Int
