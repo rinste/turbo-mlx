@@ -1,0 +1,133 @@
+import AppKit
+import SwiftUI
+
+/// The classic transparency pattern, drawn behind RGBA images.
+struct Checkerboard: View {
+    var squareSize: CGFloat = 10
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Canvas { context, size in
+            let light = colorScheme == .dark ? Color(white: 0.24) : Color(white: 1)
+            let dark = colorScheme == .dark ? Color(white: 0.18) : Color(white: 0.88)
+            context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(light))
+            var squares = Path()
+            let columns = Int((size.width / squareSize).rounded(.up))
+            let rows = Int((size.height / squareSize).rounded(.up))
+            for row in 0..<rows {
+                for column in 0..<columns where (row + column).isMultiple(of: 2) {
+                    squares.addRect(CGRect(
+                        x: CGFloat(column) * squareSize,
+                        y: CGFloat(row) * squareSize,
+                        width: squareSize,
+                        height: squareSize
+                    ))
+                }
+            }
+            context.fill(squares, with: .color(dark))
+        }
+    }
+}
+
+/// An image file decoded off the main thread; `maxPixelSize` nil shows it at full resolution.
+struct FileImage: View {
+    let url: URL
+    var maxPixelSize: Int?
+
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+            } else {
+                Color.clear
+            }
+        }
+        .task(id: url) {
+            if let cached = ImageLoader.cached(url, maxPixelSize: maxPixelSize) {
+                image = cached
+            } else {
+                image = await ImageLoader.load(url, maxPixelSize: maxPixelSize)
+            }
+        }
+    }
+}
+
+/// A small label + value pill used for image metadata.
+struct MetadataChip: View {
+    let systemImage: String
+    let text: String
+    var help: String?
+
+    var body: some View {
+        Label(text, systemImage: systemImage)
+            .labelStyle(.titleAndIcon)
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(.quaternary.opacity(0.6), in: Capsule())
+            .help(help ?? text)
+    }
+}
+
+/// A rectangle drawn in a given aspect ratio, used by the format picker.
+struct AspectGlyph: View {
+    let ratio: Double
+    var isSelected = false
+
+    var body: some View {
+        let side: CGFloat = 22
+        let width = ratio >= 1 ? side : side * ratio
+        let height = ratio >= 1 ? side / ratio : side
+        RoundedRectangle(cornerRadius: 3)
+            .strokeBorder(isSelected ? Color.accentColor : Color.secondary, lineWidth: 1.5)
+            .background(
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(isSelected ? Color.accentColor.opacity(0.18) : .clear)
+            )
+            .frame(width: width, height: height)
+            .frame(width: side, height: side)
+    }
+}
+
+enum Format {
+    static func bytes(_ value: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
+    }
+
+    static func memory(_ value: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: value, countStyle: .memory)
+    }
+
+    /// "42 s", "3 min 05 s", "1 h 02 min".
+    static func duration(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        if total < 60 { return "\(total) s" }
+        if total < 3600 { return String(format: "%d min %02d s", total / 60, total % 60) }
+        return String(format: "%d h %02d min", total / 3600, (total % 3600) / 60)
+    }
+
+    static func remaining(_ seconds: Double) -> String {
+        seconds < 5 ? "almost done" : "about \(duration(seconds)) left"
+    }
+
+    static func guidance(_ value: Double) -> String {
+        value <= 1 ? "Off" : value.formatted(.number.precision(.fractionLength(1)))
+    }
+}
+
+extension NSPasteboard {
+    /// Copies a PNG so that transparency survives, plus the file itself for Finder.
+    func copyImage(at url: URL) {
+        guard let data = try? Data(contentsOf: url) else { return }
+        clearContents()
+        declareTypes([.png, .tiff, .fileURL], owner: nil)
+        setData(data, forType: .png)
+        if let tiff = NSImage(data: data)?.tiffRepresentation { setData(tiff, forType: .tiff) }
+        setString(url.absoluteString, forType: .fileURL)
+    }
+}

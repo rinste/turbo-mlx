@@ -1,0 +1,14 @@
+# Xcode / build output
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Python
+__pycache__/
+*.pyc
+
+.DS_Store
+
+# Local Claude Code settings
+.claude/settings.local.json
