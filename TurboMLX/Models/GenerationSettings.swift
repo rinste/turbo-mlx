@@ -55,9 +55,19 @@ nonisolated enum AspectRatio: String, CaseIterable, Codable, Identifiable, Senda
 /// One piece of the prompt. The blocks are joined, in order, into the text sent to the model, so
 /// the subject, the style or the lighting can each live in a block of their own and be moved around.
 nonisolated struct PromptBlock: Codable, Hashable, Identifiable, Sendable {
+    static let subjectName = "Subject"
+    static let styleName = "Style"
+
     var id = UUID()
     var name: String
     var text = ""
+    /// How tall the text is on screen, once the user has resized the block.
+    var height: Double?
+
+    /// A new prompt: the subject, then the style, each in a block of its own.
+    static func defaults(subject: String = "") -> [PromptBlock] {
+        [PromptBlock(name: subjectName, text: subject), PromptBlock(name: styleName)]
+    }
 
     /// The blocks as one prompt: a comma between pieces, or just a space after punctuation.
     static func joined(_ blocks: [PromptBlock]) -> String {
@@ -90,7 +100,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     static let guidanceRange = 1.0...7.0
     static let maxBatch = 8
 
-    var blocks = [PromptBlock(name: "Prompt 1")]
+    var blocks = PromptBlock.defaults()
     var aspect = AspectRatio.square
     var resolution = 1024
     var usesCustomSize = false
@@ -132,7 +142,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
             blocks = saved
         } else {
             let legacy = try decoder.container(keyedBy: LegacyKeys.self)
-            blocks = [PromptBlock(name: "Prompt 1", text: try legacy.decodeIfPresent(String.self, forKey: .prompt) ?? "")]
+            blocks = PromptBlock.defaults(subject: try legacy.decodeIfPresent(String.self, forKey: .prompt) ?? "")
         }
         aspect = try values.decodeIfPresent(AspectRatio.self, forKey: .aspect) ?? aspect
         resolution = try values.decodeIfPresent(Int.self, forKey: .resolution) ?? resolution

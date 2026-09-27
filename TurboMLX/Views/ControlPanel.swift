@@ -4,6 +4,8 @@ import SwiftUI
 struct ControlPanel: View {
     @Environment(AppModel.self) private var app
     @FocusState private var focusedBlock: PromptBlock.ID?
+    /// Size, seed, outputs and memory: most images don't need them.
+    @AppStorage("showsAdvancedSettings") private var showsAdvanced = false
 
     var body: some View {
         @Bindable var app = app
@@ -13,7 +15,12 @@ struct ControlPanel: View {
                 PromptSection(settings: $app.settings, focus: $focusedBlock)
                 FormatSection(settings: $app.settings)
                 ParametersSection(settings: $app.settings, model: model)
-                MemorySection(settings: $app.settings, family: model.family)
+                AdvancedToggle(isExpanded: $showsAdvanced)
+                if showsAdvanced {
+                    SizeSection(settings: $app.settings)
+                    OutputSection(settings: $app.settings, family: model.family)
+                    MemorySection(settings: $app.settings, family: model.family)
+                }
             }
         }
         .formStyle(.grouped)
@@ -394,20 +401,13 @@ private struct PromptBlockEditor<Reorder: Gesture>: View {
             .buttonStyle(.borderless)
             .foregroundStyle(.secondary)
 
-            TextEditor(text: $block.text)
-                .scrollContentBackground(.hidden)
-                .frame(minHeight: 72, idealHeight: 110, maxHeight: 260)
-                .focused(focus, equals: block.id)
-                .overlay(alignment: .topLeading) {
-                    if block.text.isEmpty {
-                        Text(placeholder)
-                            .foregroundStyle(.tertiary)
-                            .padding(.leading, 5)
-                            .allowsHitTesting(false)
-                    }
-                }
-                // Larger than the controls around it: the prompt is what gets read and written here.
-                .font(.system(size: 15))
+            BlockTextEditor(
+                text: $block.text,
+                height: $block.height,
+                placeholder: placeholder,
+                focus: focus,
+                id: block.id
+            )
         }
         .contextMenu {
             Button("Move Up") { onMove(-1) }
@@ -418,7 +418,8 @@ private struct PromptBlockEditor<Reorder: Gesture>: View {
             Button("Remove Block", role: .destructive) { onRemove() }
                 .disabled(count <= 1)
         }
-        .padding(.vertical, 6)
+        // No bottom padding: the resize handle under the text is the block's lower margin.
+        .padding(.top, 6)
         .background {
             if isDragged {
                 RoundedRectangle(cornerRadius: 8)
@@ -433,9 +434,76 @@ private struct PromptBlockEditor<Reorder: Gesture>: View {
     }
 
     private var placeholder: String {
-        position == 0
-            ? "Describe the image: subject, style, light, colors. Put any text to render in quotes."
-            : "A piece of the prompt: the style, the lighting, a detail. It follows the block above."
+        switch block.name {
+        case PromptBlock.subjectName:
+            "What the image shows: who or what, where, doing what. Put any text to render in quotes."
+        case PromptBlock.styleName:
+            "How it looks: the medium or style, the light, the colors, the lens."
+        default:
+            position == 0
+                ? "Describe the image: subject, style, light, colors. Put any text to render in quotes."
+                : "A piece of the prompt: the style, the lighting, a detail. It follows the block above."
+        }
+    }
+}
+
+/// A block's text, as tall as the user makes it with the handle along its bottom edge.
+private struct BlockTextEditor: View {
+    @Binding var text: String
+    /// Nil until the block is resized.
+    @Binding var height: Double?
+    let placeholder: String
+    var focus: FocusState<PromptBlock.ID?>.Binding
+    let id: PromptBlock.ID
+
+    /// How far the handle has been dragged; the new height is kept when it's let go.
+    @GestureState private var stretch: CGFloat = 0
+
+    private static let defaultHeight: CGFloat = 110
+    /// From two lines to about thirty.
+    private static let heights: ClosedRange<CGFloat> = 44...600
+
+    var body: some View {
+        VStack(spacing: 0) {
+            TextEditor(text: $text)
+                .scrollContentBackground(.hidden)
+                .frame(height: textHeight(stretchedBy: stretch))
+                .focused(focus, equals: id)
+                .overlay(alignment: .topLeading) {
+                    if text.isEmpty {
+                        Text(placeholder)
+                            .foregroundStyle(.tertiary)
+                            .padding(.leading, 5)
+                            .allowsHitTesting(false)
+                    }
+                }
+                // Larger than the controls around it: the prompt is what gets read and written here.
+                .font(.system(size: 15))
+
+            Capsule()
+                .fill(.tertiary)
+                .frame(width: 32, height: 4)
+                .frame(maxWidth: .infinity, minHeight: 14)
+                .contentShape(Rectangle())
+                .pointerStyle(.frameResize(position: .bottom))
+                .gesture(
+                    // In global coordinates: the handle itself moves down as the text grows.
+                    DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                        .updating($stretch) { value, state, _ in
+                            state = value.translation.height
+                        }
+                        .onEnded { value in
+                            height = Double(textHeight(stretchedBy: value.translation.height))
+                        }
+                )
+                .help("Drag to make the block taller or shorter")
+                .accessibilityHidden(true)
+        }
+    }
+
+    private func textHeight(stretchedBy amount: CGFloat) -> CGFloat {
+        let start = height.map { CGFloat($0) } ?? Self.defaultHeight
+        return min(max(start + amount, Self.heights.lowerBound), Self.heights.upperBound)
     }
 }
 
@@ -525,37 +593,6 @@ private struct FormatSection: View {
                     .help("\(aspect.rawValue) · \(aspect.usage)")
                 }
             }
-
-            Picker("Resolution", selection: $settings.resolution) {
-                ForEach(GenerationSettings.resolutions, id: \.self) { resolution in
-                    Text(verbatim: "\(resolution)").tag(resolution)
-                }
-            }
-            .pickerStyle(.segmented)
-            .disabled(settings.usesCustomSize)
-
-            Toggle("Custom size", isOn: $settings.usesCustomSize)
-
-            if settings.usesCustomSize {
-                HStack {
-                    TextField("Width", value: $settings.customWidth, format: .number.grouping(.never))
-                    Text(verbatim: "×").foregroundStyle(.secondary)
-                    TextField("Height", value: $settings.customHeight, format: .number.grouping(.never))
-                }
-                .multilineTextAlignment(.center)
-                .labelsHidden()
-            }
-
-            let size = settings.size
-            LabeledContent("Image") {
-                Text(verbatim: "\(size.width) × \(size.height) px · \(size.megapixels.formatted(.number.precision(.fractionLength(1)))) MP")
-                    .monospacedDigit()
-            }
-            if size.megapixels > 2.5 {
-                Label("High resolutions take much more time and memory.", systemImage: "tortoise")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
         }
     }
 }
@@ -609,7 +646,121 @@ private struct ParametersSection: View {
                               : "How strictly to follow the prompt. 1 = off; higher values double the time of each step.")
                 }
             }
+        }
+    }
+}
 
+/// A symbol at one end of a slider, the same width for every slider so they line up.
+private struct SliderIcon: View {
+    let systemImage: String
+    let help: String
+    let label: String
+
+    init(_ systemImage: String, help: String, label: String) {
+        self.systemImage = systemImage
+        self.help = help
+        self.label = label
+    }
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .foregroundStyle(.secondary)
+            .frame(width: 24)
+            .help(help)
+            .accessibilityLabel(label)
+    }
+}
+
+// MARK: - Advanced
+
+/// Shows or hides the sections below it. Folded, it still gives the image size and a fixed seed,
+/// which change the image without being in sight.
+private struct AdvancedToggle: View {
+    @Environment(AppModel.self) private var app
+    @Binding var isExpanded: Bool
+
+    var body: some View {
+        Section {
+            Button {
+                withAnimation(.snappy) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    Text("Advanced")
+                    Spacer()
+                    if !isExpanded {
+                        Text(summary)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Image(systemName: "chevron.right")
+                        .imageScale(.small)
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .accessibilityHidden(true)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+        }
+    }
+
+    private var summary: String {
+        let settings = app.settings
+        let size = settings.size
+        let dimensions = "\(size.width) × \(size.height) px"
+        return settings.randomSeed ? dimensions : "\(dimensions) · seed \(settings.seed)"
+    }
+}
+
+/// The image's size: a resolution for the aspect ratio above, or a width and height of its own.
+private struct SizeSection: View {
+    @Binding var settings: GenerationSettings
+
+    var body: some View {
+        Section("Size") {
+            Picker("Resolution", selection: $settings.resolution) {
+                ForEach(GenerationSettings.resolutions, id: \.self) { resolution in
+                    Text(verbatim: "\(resolution)").tag(resolution)
+                }
+            }
+            .pickerStyle(.segmented)
+            .disabled(settings.usesCustomSize)
+
+            Toggle("Custom size", isOn: $settings.usesCustomSize)
+
+            if settings.usesCustomSize {
+                HStack {
+                    TextField("Width", value: $settings.customWidth, format: .number.grouping(.never))
+                    Text(verbatim: "×").foregroundStyle(.secondary)
+                    TextField("Height", value: $settings.customHeight, format: .number.grouping(.never))
+                }
+                .multilineTextAlignment(.center)
+                .labelsHidden()
+            }
+
+            let size = settings.size
+            LabeledContent("Image") {
+                Text(verbatim: "\(size.width) × \(size.height) px · \(size.megapixels.formatted(.number.precision(.fractionLength(1)))) MP")
+                    .monospacedDigit()
+            }
+            if size.megapixels > 2.5 {
+                Label("High resolutions take much more time and memory.", systemImage: "tortoise")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+}
+
+/// Which images one click makes: their seeds, how many, and the background.
+private struct OutputSection: View {
+    @Binding var settings: GenerationSettings
+    let family: ModelFamily
+
+    var body: some View {
+        Section("Output") {
             LabeledContent("Seed") {
                 HStack(spacing: 8) {
                     TextField("Seed", value: $settings.seed, format: .number.grouping(.never))
@@ -634,7 +785,7 @@ private struct ParametersSection: View {
                     .help("How many images one click generates, each with its own seed: consecutive from a fixed seed, or random.")
             }
 
-            if model.family.producesAlpha {
+            if family.producesAlpha {
                 Picker("Background", selection: $settings.transparentBackground) {
                     Text("Transparent").tag(true)
                     Text("White").tag(false)
@@ -642,27 +793,6 @@ private struct ParametersSection: View {
                 .pickerStyle(.segmented)
             }
         }
-    }
-}
-
-/// A symbol at one end of a slider, the same width for every slider so they line up.
-private struct SliderIcon: View {
-    let systemImage: String
-    let help: String
-    let label: String
-
-    init(_ systemImage: String, help: String, label: String) {
-        self.systemImage = systemImage
-        self.help = help
-        self.label = label
-    }
-
-    var body: some View {
-        Image(systemName: systemImage)
-            .foregroundStyle(.secondary)
-            .frame(width: 24)
-            .help(help)
-            .accessibilityLabel(label)
     }
 }
 
