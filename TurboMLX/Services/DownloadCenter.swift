@@ -39,7 +39,8 @@ final class DownloadCenter {
             do {
                 let listing = try await downloader.list(matching: patterns)
                 self?.update(model, total: listing.totalBytes)
-                _ = try await downloader.download(listing) { bytes in
+                // Its own weak capture: the Sendable closure may not read the task's `self` var.
+                _ = try await downloader.download(listing) { [weak self] bytes in
                     Task { @MainActor [weak self] in self?.update(model, bytes: bytes) }
                 }
             } catch {

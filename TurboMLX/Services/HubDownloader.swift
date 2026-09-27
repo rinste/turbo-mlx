@@ -357,12 +357,12 @@ nonisolated private final class ChunkedDownload: NSObject, URLSessionDataDelegat
 nonisolated private final class ByteCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var bytes: Int64
-    private let report: @Sendable (Int64) -> Void
+    private let deliver: @Sendable (Int64) -> Void
     private var lastReport = Date.distantPast
 
     init(initial: Int64, report: @escaping @Sendable (Int64) -> Void) {
         bytes = initial
-        self.report = report
+        deliver = report
     }
 
     func add(_ count: Int64) {
@@ -373,7 +373,7 @@ nonisolated private final class ByteCounter: @unchecked Sendable {
         if due { lastReport = now }
         let value = bytes
         lock.unlock()
-        if due { report(value) }
+        if due { deliver(value) }
     }
 
     func report() {
@@ -381,6 +381,6 @@ nonisolated private final class ByteCounter: @unchecked Sendable {
         let value = bytes
         lastReport = Date()
         lock.unlock()
-        report(value)
+        deliver(value)
     }
 }
