@@ -17,8 +17,10 @@ struct ControlPanel: View {
             }
         }
         .formStyle(.grouped)
-        // Room between the sections and the scroll bar, which otherwise sits right on their edge.
-        .contentMargins(.trailing, 8, for: .scrollContent)
+        // Air around the sections: the grouped style alone leaves them close to the edge and,
+        // with a mouse, right under the scroll bar.
+        .contentMargins(.leading, 6, for: .scrollContent)
+        .contentMargins(.trailing, 14, for: .scrollContent)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             GenerateBar()
         }
@@ -468,10 +470,7 @@ private struct ParametersSection: View {
             LabeledContent {
                 HStack(spacing: 6) {
                     // Steps trade speed for refinement: hare for fewer, tortoise for more.
-                    Image(systemName: "hare")
-                        .foregroundStyle(.secondary)
-                        .help("Fewer steps: faster")
-                        .accessibilityLabel("Faster")
+                    SliderIcon("hare", help: "Fewer steps: faster", label: "Faster")
                     Slider(
                         value: Binding(
                             get: { Double(min(max(settings.steps, range.lowerBound), range.upperBound)) },
@@ -480,10 +479,7 @@ private struct ParametersSection: View {
                         in: Double(range.lowerBound)...Double(range.upperBound),
                         step: 1
                     )
-                    Image(systemName: "tortoise")
-                        .foregroundStyle(.secondary)
-                        .help("More steps: slower, sometimes more refined")
-                        .accessibilityLabel("Slower")
+                    SliderIcon("tortoise", help: "More steps: slower, sometimes more refined", label: "Slower")
                     Text(verbatim: "\(settings.steps)")
                         .monospacedDigit()
                         .frame(width: 30, alignment: .trailing)
@@ -496,10 +492,10 @@ private struct ParametersSection: View {
             if model.supportsGuidance {
                 LabeledContent {
                     HStack(spacing: 6) {
-                        // Invisible stand-ins for the steps slider's icons keep both sliders aligned.
-                        Image(systemName: "hare").hidden()
+                        // Low guidance lets the model interpret; high guidance sticks to the words.
+                        SliderIcon("wand.and.stars", help: "Lower: a freer interpretation of the prompt", label: "Freer")
                         Slider(value: $settings.guidance, in: GenerationSettings.guidanceRange, step: 0.5)
-                        Image(systemName: "tortoise").hidden()
+                        SliderIcon("text.quote", help: "Higher: follows the prompt more literally", label: "Stricter")
                         Text(Format.guidance(settings.guidance))
                             .monospacedDigit()
                             .frame(width: 30, alignment: .trailing)
@@ -544,6 +540,27 @@ private struct ParametersSection: View {
                 .pickerStyle(.segmented)
             }
         }
+    }
+}
+
+/// A symbol at one end of a slider, the same width for every slider so they line up.
+private struct SliderIcon: View {
+    let systemImage: String
+    let help: String
+    let label: String
+
+    init(_ systemImage: String, help: String, label: String) {
+        self.systemImage = systemImage
+        self.help = help
+        self.label = label
+    }
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .foregroundStyle(.secondary)
+            .frame(width: 24)
+            .help(help)
+            .accessibilityLabel(label)
     }
 }
 

@@ -7,7 +7,7 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             ControlPanel()
-                .navigationSplitViewColumnWidth(min: 330, ideal: 370, max: 480)
+                .navigationSplitViewColumnWidth(min: 360, ideal: 430, max: 600)
         } detail: {
             OutputPanel()
         }
