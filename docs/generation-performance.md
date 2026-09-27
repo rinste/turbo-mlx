@@ -4,6 +4,16 @@
 it. Facts about the engine come from reading mflux `main` (v0.20.0, commit 80bae91) on 27
 September 2026; figures from other projects are linked.*
 
+## Status
+
+Phase A landed on 27 September 2026 (worker and app, no image changed): one PNG encode per
+image at zlib level 2 with the same metadata; the wired memory limit around each generation;
+seconds per phase in the `done` event, the history and the time chip's tooltip; the `load`
+command and the app's preload while a prompt is being written; the prompts of queued images
+encoded ahead while the text encoder is resident. Still open from Phase A, because they live in
+mflux: the prompt cache for Klein and Z-Image and skipping Qwen-Image's unconditional pass at
+guidance 1.
+
 ## Summary
 
 Generation time is set by three things, in this order: how many times the transformer runs

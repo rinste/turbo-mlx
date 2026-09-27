@@ -237,7 +237,7 @@ struct BackendDetails: View {
                 if backend.isInstalled {
                     Button("Restart") { backend.restartWorker() }
                         .disabled(app.isBusy)
-                    Button("Free Memory") { backend.unloadModel() }
+                    Button("Free Memory") { app.freeMemory() }
                         .disabled(backend.loadedModelPath == nil || app.isBusy)
                 }
                 Spacer()

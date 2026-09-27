@@ -111,6 +111,11 @@ enum Format {
         return String(format: "%d h %02d min", total / 3600, (total % 3600) / 60)
     }
 
+    /// Like `duration`, with a decimal under ten seconds: "0.4 s", "7.5 s", "42 s".
+    static func seconds(_ value: Double) -> String {
+        value < 10 ? "\(value.formatted(.number.precision(.fractionLength(1)))) s" : duration(value)
+    }
+
     static func remaining(_ seconds: Double) -> String {
         seconds < 5 ? "almost done" : "about \(duration(seconds)) left"
     }

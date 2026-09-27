@@ -50,6 +50,10 @@ final class AppModel {
     var selectedModelID: String {
         didSet {
             UserDefaults.standard.set(selectedModelID, forKey: Keys.selectedModel)
+            if selectedModelID != oldValue {
+                preloadDeclined = false
+                preloadIfUseful()
+            }
             guard selectedModelID != oldValue, let model = selectedModel,
                   let previous = models.first(where: { $0.id == oldValue }),
                   previous.family != model.family || previous.defaultSteps != model.defaultSteps
@@ -62,10 +66,18 @@ final class AppModel {
 
     var settings: GenerationSettings {
         didSet {
-            guard settings != oldValue, let data = try? JSONEncoder().encode(settings) else { return }
-            UserDefaults.standard.set(data, forKey: Keys.settings)
+            guard settings != oldValue else { return }
+            if let data = try? JSONEncoder().encode(settings) {
+                UserDefaults.standard.set(data, forKey: Keys.settings)
+            }
+            preloadIfUseful()
         }
     }
+
+    /// Model path the worker was asked to load ahead of time, so the request is not repeated.
+    @ObservationIgnored private var preloadRequested: String?
+    /// Set when the user frees the memory: no preloading until the model changes or an image runs.
+    @ObservationIgnored private var preloadDeclined = false
 
     private(set) var queue: [GenerationJob] = []
     private(set) var activeJob: GenerationJob?
@@ -105,7 +117,11 @@ final class AppModel {
             settings = initial
         }
 
-        backend.onReady = { [weak self] in self?.pump() }
+        backend.onReady = { [weak self] in
+            self?.preloadRequested = nil
+            self?.pump()
+            self?.preloadIfUseful()
+        }
         backend.onEvent = { [weak self] in self?.handle($0) }
         backend.onCrash = { [weak self] in self?.backendCrashed($0) }
         downloads.onFinish = { [weak self] in self?.downloadFinished($0) }
@@ -186,8 +202,31 @@ final class AppModel {
             alert = AppAlert(title: "Couldn’t download \(model.name)", message: failure, offersLog: true)
         } else if generateNow, selectedModelID == model.id {
             generate()
+        } else {
+            preloadIfUseful()
         }
         if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
+    }
+
+    /// Frees the loaded model and stops loading it ahead of time until the model changes or an
+    /// image is generated.
+    func freeMemory() {
+        preloadDeclined = true
+        preloadRequested = nil
+        backend.unloadModel()
+    }
+
+    /// Loads the selected model as soon as a prompt is being written, so that the first image
+    /// starts at the prompt instead of at a 5–40 s load. Nothing happens while the worker is
+    /// busy, when the model is already in memory, or after "Free Memory".
+    private func preloadIfUseful() {
+        guard !preloadDeclined, backend.status == .ready, activeJob == nil, queue.isEmpty,
+              !settings.trimmedPrompt.isEmpty, let model = selectedModel,
+              let location = installed[model.id],
+              backend.loadedModelPath != location.path, preloadRequested != location.path
+        else { return }
+        preloadRequested = location.path
+        try? backend.send(.load(model: model, modelPath: location.path, lowMemory: settings.lowMemory))
     }
 
     /// Free space on the volume that holds the Hugging Face cache (which may not exist yet).
@@ -246,6 +285,7 @@ final class AppModel {
 
     func generate() {
         guard blocker == nil, let model = selectedModel else { return }
+        preloadDeclined = false
         for seed in settings.nextSeeds() {
             let request = GenerationRequest(
                 prompt: settings.trimmedPrompt,
@@ -309,13 +349,21 @@ final class AppModel {
         activeJob = job
         job.phase = .starting
         job.startedAt = Date()
+        // Prompts of the images queued behind this one, for the same model and memory mode, so
+        // the worker can encode them while the text encoder is in memory.
+        var upcoming: [String] = []
+        for queued in queue where queued.model.id == job.model.id && queued.request.lowMemory == job.request.lowMemory {
+            let prompt = queued.request.prompt
+            if prompt != job.request.prompt, !upcoming.contains(prompt) { upcoming.append(prompt) }
+        }
         do {
             try backend.send(.generate(
                 jobID: job.id,
                 model: job.model,
                 modelPath: location.path,
                 request: job.request,
-                output: job.outputURL
+                output: job.outputURL,
+                upcomingPrompts: Array(upcoming.prefix(8))
             ))
         } catch {
             activeJob = nil
@@ -371,7 +419,8 @@ final class AppModel {
             modelName: job.model.name,
             request: request,
             seconds: event.seconds ?? job.startedAt.map { Date().timeIntervalSince($0) } ?? 0,
-            peakMemory: event.peakMemory
+            peakMemory: event.peakMemory,
+            timings: event.timings
         ))
         activeJob = nil
         if queue.isEmpty, !NSApp.isActive {

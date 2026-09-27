@@ -175,7 +175,7 @@ private struct ItemInfoBar: View {
                     MetadataChip(systemImage: "stairs", text: "\(item.request.steps) steps")
                     MetadataChip(systemImage: "dial.medium", text: "CFG \(Format.guidance(item.request.guidance))")
                     MetadataChip(systemImage: "dice", text: "\(item.request.seed)", help: "Seed \(item.request.seed)")
-                    MetadataChip(systemImage: "timer", text: Format.duration(item.seconds), help: "Generation time")
+                    MetadataChip(systemImage: "timer", text: Format.duration(item.seconds), help: timingHelp)
                     if let peak = item.peakMemory {
                         MetadataChip(systemImage: "memorychip", text: Format.memory(peak), help: "Peak memory")
                     }
@@ -189,6 +189,16 @@ private struct ItemInfoBar: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(.background)
+    }
+
+    /// "Generation time" plus, when the engine reported them, the seconds of each phase.
+    private var timingHelp: String {
+        let phases: [(key: String, label: String)] = [
+            ("load", "Model load"), ("encode", "Prompt"), ("denoise", "Steps"), ("decode", "Decode"), ("save", "Save"),
+        ]
+        guard let timings = item.timings else { return "Generation time" }
+        let lines = phases.compactMap { phase in timings[phase.key].map { "\(phase.label): \(Format.seconds($0))" } }
+        return (["Generation time"] + lines).joined(separator: "\n")
     }
 
     /// The family ("Z-Image Turbo") reads better than a catalog name that ends in its memory needs.

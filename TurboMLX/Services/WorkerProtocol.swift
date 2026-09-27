@@ -15,6 +15,8 @@ nonisolated struct WorkerEvent: Decodable, Sendable {
     var height: Int?
     var seconds: Double?
     var peakMemory: Int64?
+    /// Seconds per phase of a finished image: load, encode, denoise, decode, save.
+    var timings: [String: Double]?
     var message: String?
     // "ready"
     var mflux: String?
@@ -46,25 +48,33 @@ nonisolated struct BackendInfo: Equatable, Sendable {
 
 /// Commands understood by `turbo_worker.py serve`.
 nonisolated enum WorkerCommand: Sendable {
-    case generate(jobID: UUID, model: ModelDescriptor, modelPath: String, request: GenerationRequest, output: URL)
+    /// `upcomingPrompts` are the distinct prompts of the images queued behind this one: the
+    /// worker encodes them while the text encoder is resident, so they will not reload the model.
+    case generate(jobID: UUID, model: ModelDescriptor, modelPath: String, request: GenerationRequest, output: URL, upcomingPrompts: [String])
+    /// Loads the model ahead of its first image.
+    case load(model: ModelDescriptor, modelPath: String, lowMemory: Bool)
     case cancel(jobID: UUID)
     case unload
     case shutdown
 
+    private static func modelObject(_ model: ModelDescriptor, path: String, lowMemory: Bool) -> [String: Any] {
+        [
+            "family": model.family.rawValue,
+            "path": path,
+            // mflux infers some variants (FLUX.2 Klein 4B/9B) from the model's name.
+            "name": model.id,
+            "variant": model.variant ?? "",
+            "low_ram": lowMemory,
+        ]
+    }
+
     var jsonLine: String {
         let object: [String: Any] = switch self {
-        case let .generate(jobID, model, modelPath, request, output):
+        case let .generate(jobID, model, modelPath, request, output, upcomingPrompts):
             [
                 "cmd": "generate",
                 "id": jobID.uuidString,
-                "model": [
-                    "family": model.family.rawValue,
-                    "path": modelPath,
-                    // mflux infers some variants (FLUX.2 Klein 4B/9B) from the model's name.
-                    "name": model.id,
-                    "variant": model.variant ?? "",
-                    "low_ram": request.lowMemory,
-                ] as [String: Any],
+                "model": Self.modelObject(model, path: modelPath, lowMemory: request.lowMemory),
                 "params": [
                     "prompt": request.prompt,
                     "seed": request.seed,
@@ -74,8 +84,11 @@ nonisolated enum WorkerCommand: Sendable {
                     "guidance": request.guidance,
                     "flatten_alpha": !request.transparentBackground,
                     "output": output.path,
+                    "upcoming_prompts": upcomingPrompts,
                 ] as [String: Any],
             ]
+        case let .load(model, modelPath, lowMemory):
+            ["cmd": "load", "model": Self.modelObject(model, path: modelPath, lowMemory: lowMemory)]
         case let .cancel(jobID):
             ["cmd": "cancel", "id": jobID.uuidString]
         case .unload:

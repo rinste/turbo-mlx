@@ -574,7 +574,7 @@ private struct MemorySection: View {
             }
             if app.backend.loadedModelPath != nil {
                 LabeledContent {
-                    Button("Free Memory") { app.backend.unloadModel() }
+                    Button("Free Memory") { app.freeMemory() }
                         .disabled(app.activeJob != nil)
                 } label: {
                     Text("Model loaded")

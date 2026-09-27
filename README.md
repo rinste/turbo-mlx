@@ -71,9 +71,13 @@ SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo_worker.py serve ──�
   GitHub source archive of the tested commit (`BackendController.mfluxCommit`), so git isn't needed
   either: Ming-Image support landed after mflux 0.20.0, the latest release on PyPI. When a new
   version of the app expects a different commit, the engine updates itself on first launch.
-- **Worker.** `Backend/turbo_worker.py serve` keeps the model in memory, reports phases and
-  per-step progress, and stops a generation at the next step. One adapter per model family
-  (`FAMILIES`) hides the differences between mflux's classes.
+- **Worker.** `Backend/turbo_worker.py serve` keeps the model in memory, reports phases,
+  per-step progress and the seconds each phase took (shown when hovering the time of an image),
+  and stops a generation at the next step. One adapter per model family (`FAMILIES`) hides the
+  differences between mflux's classes. It loads the selected model as soon as a prompt is being
+  written, encodes the prompts of the queued images while the text encoder is in memory, keeps
+  the model's buffers wired while it works, and writes each PNG once (mflux's own save encodes
+  it three times).
 - **Save memory.** Frees the text encoder of Ming-Image and Qwen-Image once the prompt is read
   (a new prompt reloads the model, so the text encoder and the transformer are never in memory
   together), decodes the image in tiles where the VAE allows it (not FLUX.2, whose tiles would

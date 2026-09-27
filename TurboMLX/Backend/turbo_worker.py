@@ -8,6 +8,7 @@ shows as the backend log.
   turbo_worker.py serve
       Long-lived worker that keeps the last model loaded. Commands arrive on stdin:
         {"cmd": "generate", "id": "<job>", "model": {...}, "params": {...}}
+        {"cmd": "load", "model": {...}}    loads a model ahead of its first image
         {"cmd": "cancel", "id": "<job>"}   stops that job at the next denoising step
         {"cmd": "unload"}                  frees the loaded model
         {"cmd": "shutdown"}
@@ -25,6 +26,7 @@ import sys
 import threading
 import time
 import traceback
+from contextlib import contextmanager
 
 
 def _reserve_stdout():
@@ -79,14 +81,19 @@ class MingFamily:
         return MingImage(model_config=config, model_path=spec["path"], low_ram=bool(spec.get("low_ram")))
 
     @staticmethod
-    def encode(model, prompt: str, spec: dict) -> None:
-        # With low_ram, encode_prompt frees the ~16B text encoder after encoding a new prompt;
-        # releasing again covers prompts served from the cache while the encoder is resident.
+    def encode(model, prompt: str, spec: dict, upcoming: list[str] = ()) -> None:
+        # The queued prompts are encoded now, while the ~16B text encoder is resident: in low-RAM
+        # mode each of them would otherwise reload the whole model. The encoder is released once,
+        # at the end (encode_prompt would release it after every prompt with low_ram set).
         low_ram = bool(spec.get("low_ram"))
-        model.low_ram = low_ram
-        model.encode_prompt(prompt)
-        if low_ram:
-            model.release_text_encoder()
+        model.low_ram = False
+        try:
+            for text in [prompt, *upcoming]:
+                model.encode_prompt(text)
+        finally:
+            model.low_ram = low_ram
+            if low_ram:
+                model.release_text_encoder()
 
     @staticmethod
     def generate(model, p: dict):
@@ -117,7 +124,7 @@ class ZImageTurboFamily:
         return ZImage(model_config=config, model_path=spec["path"])
 
     @staticmethod
-    def encode(model, prompt: str, spec: dict) -> None:
+    def encode(model, prompt: str, spec: dict, upcoming: list[str] = ()) -> None:
         pass  # the prompt is encoded inside generate_image
 
     @staticmethod
@@ -153,7 +160,7 @@ class Flux2KleinFamily:
         return Flux2Klein(model_config=config, model_path=spec["path"])
 
     @staticmethod
-    def encode(model, prompt: str, spec: dict) -> None:
+    def encode(model, prompt: str, spec: dict, upcoming: list[str] = ()) -> None:
         pass  # the prompt is encoded inside generate_image
 
     @staticmethod
@@ -191,17 +198,20 @@ class QwenImageFamily:
         return f"{prompt}|NEG|{QwenImageFamily.NEGATIVE_PROMPT}" in model.prompt_cache
 
     @staticmethod
-    def encode(model, prompt: str, spec: dict) -> None:
+    def encode(model, prompt: str, spec: dict, upcoming: list[str] = ()) -> None:
         # Encoding ahead of generate_image fills the prompt cache, which generate_image then reads
-        # without touching the text encoder, so low-RAM mode can free it before denoising.
+        # without touching the text encoder, so low-RAM mode can free it before denoising. The
+        # queued prompts go in as well, so they will not need the encoder (and a model reload).
         import gc
 
         import mlx.core as mx
         from mflux.models.qwen.model.qwen_text_encoder.qwen_prompt_encoder import QwenPromptEncoder
 
-        if not QwenImageFamily.is_cached(model, prompt):
+        for text in [prompt, *upcoming]:
+            if QwenImageFamily.is_cached(model, text) or model.text_encoder is None:
+                continue
             mx.eval(QwenPromptEncoder.encode_prompt(
-                prompt=prompt,
+                prompt=text,
                 negative_prompt=QwenImageFamily.NEGATIVE_PROMPT,
                 prompt_cache=model.prompt_cache,
                 qwen_tokenizer=model.tokenizers["qwen"],
@@ -240,6 +250,7 @@ class ProgressReporter:
         self.worker = worker
 
     def call_before_loop(self, seed, prompt, latents, config, **_):
+        self.worker.mark("denoise_start")
         emit("phase", id=self.worker.job_id, phase="denoising", total=config.num_inference_steps)
 
     def call_in_loop(self, t, seed, prompt, latents, config, time_steps):
@@ -252,7 +263,56 @@ class ProgressReporter:
         self.worker.raise_if_cancelled()
 
     def call_after_loop(self, seed, prompt, latents, config):
+        self.worker.mark("denoise_end")
         emit("phase", id=self.worker.job_id, phase="decoding")
+
+
+def save_png(image, output: str) -> None:
+    """Writes the PNG once, with mflux's metadata (EXIF comment, XMP, IPTC) in the same pass.
+
+    mflux's own save() encodes the file three times, once per metadata format, at zlib level 6;
+    a single encode at level 2 takes a fraction of the time for a slightly larger file.
+    """
+    os.makedirs(os.path.dirname(output), exist_ok=True)
+    options: dict = {"compress_level": 2}
+    try:
+        import piexif
+        from PIL import PngImagePlugin
+        from mflux.utils.metadata_builder import MetadataBuilder
+
+        metadata = image._get_metadata()
+        info = PngImagePlugin.PngInfo()
+        info.add_text("XML:com.adobe.xmp", MetadataBuilder.build_xmp_packet(metadata))
+        iptc = MetadataBuilder.build_iptc_binary(metadata)
+        if iptc:
+            info.add_text("IPTC", iptc.hex())
+        comment = b"ASCII\x00\x00\x00" + json.dumps(metadata).encode("utf-8")
+        options.update(pnginfo=info, exif=piexif.dump({"Exif": {0x9286: comment}}))
+    except Exception as exc:  # noqa: BLE001 - the image matters more than its metadata
+        log(f"[turbo] saving without metadata: {type(exc).__name__}: {exc}")
+    image.image.save(output, format="PNG", **options)
+
+
+@contextmanager
+def wired_memory():
+    """Lets Metal keep the model resident while it works, as mlx-lm does around generation, and
+    hands the allowance back afterwards so an idle worker does not pin memory."""
+    import mlx.core as mx
+
+    set_limit = getattr(mx, "set_wired_limit", None)
+    try:
+        limit = int(mx.device_info().get("max_recommended_working_set_size", 0)) if set_limit else 0
+    except Exception:  # noqa: BLE001
+        limit = 0
+    if not limit:
+        yield
+        return
+    previous = set_limit(limit)
+    try:
+        yield
+    finally:
+        mx.synchronize()
+        set_limit(previous)
 
 
 class Worker:
@@ -263,6 +323,8 @@ class Worker:
         # Whether the loaded model has generated: its weights are then resident, not lazy.
         self.model_used = False
         self.job_id = None
+        # Timestamps of the current job's phases (and the seconds its model loads took).
+        self.marks: dict[str, float] = {}
         self._default_cache_limit = None
         self._cancelled_ids: set[str] = set()
         self._cancel_lock = threading.Lock()
@@ -290,6 +352,9 @@ class Worker:
             if self.job_id in self._cancelled_ids:
                 raise Cancelled()
 
+    def mark(self, name: str) -> None:
+        self.marks[name] = time.time()
+
     def run(self) -> None:
         threading.Thread(target=self._read_stdin, daemon=True).start()
         emit("ready", **_environment_info())
@@ -300,6 +365,8 @@ class Worker:
                 break
             if cmd == "generate":
                 self._generate(msg)
+            elif cmd == "load":
+                self._load(msg)
             elif cmd == "unload":
                 self._unload()
                 emit("unloaded")
@@ -318,9 +385,33 @@ class Worker:
             model = family.load(spec)
             model.callbacks.register(ProgressReporter(self))
             self.model, self.model_key, self.model_used = model, key, False
+            self.marks["load"] = self.marks.get("load", 0.0) + time.time() - started
             log(f"[turbo] model loaded in {time.time() - started:.1f}s: {spec['path']}")
             emit("model_loaded", path=spec["path"], seconds=round(time.time() - started, 1))
         return family, self.model
+
+    def _load(self, msg: dict) -> None:
+        """Loads a model ahead of its first image; the app asks while the prompt is being written."""
+        self.marks = {}
+        try:
+            self._ensure_model(msg.get("model", {}))
+        except Exception as exc:  # noqa: BLE001 - a failed preload just means a slower first image
+            traceback.print_exc()
+            log(f"[turbo] could not load the model in advance: {type(exc).__name__}: {exc}")
+
+    def _timings(self) -> dict:
+        """Seconds per phase of the job that just finished, from the marks."""
+        marks = self.marks
+        spans = {"load": marks.get("load", 0.0)}
+        for name, begin, end in (
+            ("encode", "encode_start", "denoise_start"),
+            ("denoise", "denoise_start", "denoise_end"),
+            ("decode", "denoise_end", "decode_end"),
+            ("save", "decode_end", "save_end"),
+        ):
+            if begin in marks and end in marks:
+                spans[name] = marks[end] - marks[begin]
+        return {name: round(value, 2) for name, value in spans.items() if round(value, 2) > 0}
 
     def _unload(self) -> None:
         if self.model is None:
@@ -355,36 +446,45 @@ class Worker:
         self.job_id = str(msg.get("id"))
         params = msg.get("params", {})
         started = time.time()
+        self.marks = {}
         try:
             self.raise_if_cancelled()
             mx.reset_peak_memory()
             spec = msg.get("model", {})
             low_ram = bool(spec.get("low_ram"))
-            family, model = self._ensure_model(spec)
-            if (low_ram and getattr(family, "releases_text_encoder", False) and self.model_used
-                    and not family.is_cached(model, params["prompt"])):
-                # A new prompt needs the text encoder, but the previous image left the other
-                # weights resident: loading it now would stack both. Start from a fresh, lazily
-                # loaded model, as the mflux CLI does on every run, so they never overlap.
-                self._unload()
+            with wired_memory():
                 family, model = self._ensure_model(spec)
-            self._apply_memory_mode(model, low_ram)
-            self.raise_if_cancelled()
+                if (low_ram and getattr(family, "releases_text_encoder", False) and self.model_used
+                        and not family.is_cached(model, params["prompt"])):
+                    # A new prompt needs the text encoder, but the previous image left the other
+                    # weights resident: loading it now would stack both. Start from a fresh, lazily
+                    # loaded model, as the mflux CLI does on every run, so they never overlap.
+                    self._unload()
+                    family, model = self._ensure_model(spec)
+                self._apply_memory_mode(model, low_ram)
+                self.raise_if_cancelled()
 
-            emit("phase", id=self.job_id, phase="encoding")
-            family.encode(model, params["prompt"], spec)
-            self.raise_if_cancelled()
+                emit("phase", id=self.job_id, phase="encoding")
+                self.mark("encode_start")
+                # Distinct prompts of the images queued behind this one, sent by the app.
+                upcoming = [text for text in params.get("upcoming_prompts") or []
+                            if isinstance(text, str) and text and text != params["prompt"]]
+                family.encode(model, params["prompt"], spec, upcoming[:8])
+                self.raise_if_cancelled()
 
-            self.model_used = True
-            image = family.generate(model, params)
+                self.model_used = True
+                image = family.generate(model, params)
+                self.mark("decode_end")
 
-            emit("phase", id=self.job_id, phase="saving")
-            output = params["output"]
-            os.makedirs(os.path.dirname(output), exist_ok=True)
-            image.save(path=output, overwrite=True)
-            if not os.path.exists(output):
-                raise RuntimeError(f"The image was not saved to {output}")
+                emit("phase", id=self.job_id, phase="saving")
+                output = params["output"]
+                save_png(image, output)
+                self.mark("save_end")
+                if not os.path.exists(output):
+                    raise RuntimeError(f"The image was not saved to {output}")
 
+            timings = self._timings()
+            log("[turbo] " + " · ".join(f"{name} {value:.1f}s" for name, value in timings.items()))
             emit(
                 "done",
                 id=self.job_id,
@@ -394,6 +494,7 @@ class Worker:
                 height=image.image.height,
                 seconds=round(time.time() - started, 2),
                 peak_memory=mx.get_peak_memory(),
+                timings=timings,
             )
         except Cancelled:
             emit("cancelled", id=self.job_id)

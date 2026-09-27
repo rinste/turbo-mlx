@@ -11,6 +11,8 @@ nonisolated struct HistoryItem: Identifiable, Hashable, Codable, Sendable {
     var request: GenerationRequest
     var seconds: Double
     var peakMemory: Int64?
+    /// Seconds per phase (load, encode, denoise, decode, save); older items have none.
+    var timings: [String: Double]?
 
     var prompt: String { request.prompt }
     var size: PixelSize { request.size }
