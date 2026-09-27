@@ -140,7 +140,7 @@ final class AppModel {
 
     /// The engine the selected model runs on.
     var selectedEngine: EngineKind {
-        selectedModel.map { backend.engineKind(for: $0.family) } ?? .python
+        selectedModel.map { backend.engineKind(for: $0) } ?? .python
     }
 
     /// Brings up the engine of the selected model, unless an installation is running.
@@ -229,7 +229,7 @@ final class AppModel {
         guard !preloadDeclined, activeJob == nil, queue.isEmpty, !settings.trimmedPrompt.isEmpty,
               let model = selectedModel, let location = installed[model.id]
         else { return }
-        let kind = backend.engineKind(for: model.family)
+        let kind = backend.engineKind(for: model)
         if backend.activeKind != kind {
             switch backend.status {
             case .ready, .stopped, .failed: backend.ensureWorker(for: kind) // onReady comes back here
@@ -282,7 +282,7 @@ final class AppModel {
 
     var blocker: Blocker? {
         guard let model = selectedModel else { return .noModel }
-        if backend.engineKind(for: model.family) == .python {
+        if backend.engineKind(for: model) == .python {
             if backend.status == .installing { return .backendInstalling }
             if !backend.isInstalled { return .backendNotInstalled }
         }
@@ -347,7 +347,7 @@ final class AppModel {
     private func pump() {
         defer { updateDockBadge() }
         guard activeJob == nil, let job = queue.first else { return }
-        let kind = backend.engineKind(for: job.model.family)
+        let kind = backend.engineKind(for: job.model)
         switch backend.status {
         case .ready where backend.activeKind == kind:
             break

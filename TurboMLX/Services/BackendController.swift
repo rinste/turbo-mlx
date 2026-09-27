@@ -112,9 +112,10 @@ final class BackendController {
 
     var hasNativeEngine: Bool { Self.nativeEngineURL != nil }
 
-    /// The engine a family runs on in this build.
-    func engineKind(for family: ModelFamily) -> EngineKind {
-        hasNativeEngine && Self.nativeFamilies.contains(family) ? .native : .python
+    /// The engine a model runs on in this build. The native engine has no classifier-free guidance
+    /// yet, so checkpoints that use it (Klein's base ones) stay on mflux.
+    func engineKind(for model: ModelDescriptor) -> EngineKind {
+        hasNativeEngine && Self.nativeFamilies.contains(model.family) && !model.supportsGuidance ? .native : .python
     }
 
     /// Resolves the environment and brings the Python engine up to date when a new version of the
