@@ -10,7 +10,6 @@ struct ControlPanel: View {
     var body: some View {
         @Bindable var app = app
         Form {
-            ModelSection()
             if let model = app.selectedModel {
                 PromptSection(settings: $app.settings, focus: $focusedBlock)
                 FormatSection(settings: $app.settings)
@@ -32,45 +31,42 @@ struct ControlPanel: View {
 
 // MARK: - Model
 
-private struct ModelSection: View {
+/// The model the main button generates with, right above it: the picker, what the model is for,
+/// and whether it's downloaded and in memory.
+private struct ModelSelection: View {
     @Environment(AppModel.self) private var app
     @State private var showsAddModel = false
 
     var body: some View {
         @Bindable var app = app
-        Section {
-            Picker("Model", selection: $app.selectedModelID) {
-                ForEach(ModelFamily.allCases, id: \.self) { family in
-                    let members = app.models.filter { $0.family == family }
-                    if !members.isEmpty {
-                        Section(family.displayName) {
-                            ForEach(members) { model in
-                                Label(model.name, systemImage: app.isInstalled(model) ? "checkmark.circle.fill" : "arrow.down.circle")
-                                    .tag(model.id)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Picker("Model", selection: $app.selectedModelID) {
+                    ForEach(ModelFamily.allCases, id: \.self) { family in
+                        let members = app.models.filter { $0.family == family }
+                        if !members.isEmpty {
+                            Section(family.displayName) {
+                                ForEach(members) { model in
+                                    Label(model.name, systemImage: app.isInstalled(model) ? "checkmark.circle.fill" : "arrow.down.circle")
+                                        .tag(model.id)
+                                }
                             }
                         }
                     }
                 }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                ModelMenu(showsAddModel: $showsAddModel)
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
 
             if let model = app.selectedModel {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(model.detail)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    ModelStatusRow(model: model)
-                    MemoryWarning(model: model)
-                }
-                .padding(.vertical, 2)
-            }
-        } header: {
-            HStack {
-                Text("Model")
-                Spacer()
-                ModelMenu(showsAddModel: $showsAddModel)
+                Text(model.detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                ModelStatusRow(model: model)
+                MemoryWarning(model: model)
             }
         }
         .sheet(isPresented: $showsAddModel) {
@@ -101,17 +97,20 @@ private struct ModelStatusRow: View {
             .font(.callout)
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                Button {
-                    app.download(model)
-                } label: {
-                    Label(
-                        model.sizeBytes.map { "Download · \(Format.bytes($0))" } ?? "Download",
-                        systemImage: "arrow.down.circle"
-                    )
-                    .frame(maxWidth: .infinity)
+                // The main button downloads the model, unless the engine comes first: then this
+                // one lets the download run while the engine installs.
+                if app.blocker == .backendNotInstalled || app.blocker == .backendInstalling {
+                    Button {
+                        app.download(model)
+                    } label: {
+                        Label(
+                            model.sizeBytes.map { "Download · \(Format.bytes($0))" } ?? "Download",
+                            systemImage: "arrow.down.circle"
+                        )
+                        .frame(maxWidth: .infinity)
+                    }
+                    .disabled(model.repo == nil)
                 }
-                .controlSize(.large)
-                .disabled(model.repo == nil)
                 if let failure = app.downloads.failures[model.id] {
                     Text(failure)
                         .font(.caption)
@@ -243,6 +242,8 @@ private struct PromptSection: View {
     @GestureState(resetTransaction: Transaction(animation: .snappy)) private var drag: BlockDrag? = nil
     /// Each block's height, to know where a dragged block would land.
     @State private var heights: [PromptBlock.ID: CGFloat] = [:]
+    /// The block let go last: it stays above the others while it springs into place.
+    @State private var settling: PromptBlock.ID?
 
     private static let space = NamedCoordinateSpace.named("promptBlocks")
 
@@ -252,7 +253,10 @@ private struct PromptSection: View {
             // All the blocks in one row, so the dragged one can be drawn over the others.
             VStack(spacing: 0) {
                 ForEach($settings.blocks) { $block in
-                    let index = position(of: block.id)
+                    // Read once: `block` goes through the binding, which may no longer point
+                    // at this block when a closure runs, after a removal say.
+                    let id = block.id
+                    let index = position(of: id)
                     let isDragged = reordering?.source == index
                     let offset = reordering?.offset(at: index) ?? 0
                     let place = reordering?.place(of: index) ?? index
@@ -263,15 +267,15 @@ private struct PromptSection: View {
                         isDragged: isDragged,
                         showsSeparator: !isDragged && place > 0,
                         focus: focus,
-                        reorder: reorderGesture(for: block.id),
-                        onMove: { move(block.id, by: $0) },
-                        onRemove: { remove(block.id) }
+                        reorder: reorderGesture(for: id),
+                        onMove: { move(id, by: $0) },
+                        onRemove: { remove(id) }
                     )
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { heights[block.id] = $0 }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { heights[id] = $0 }
                     .offset(y: offset)
                     // The dragged block sticks to the pointer; the others slide out of its way.
                     .animation(isDragged ? nil : .snappy, value: offset)
-                    .zIndex(isDragged ? 1 : 0)
+                    .zIndex(isDragged ? 2 : id == settling ? 1 : 0)
                 }
             }
             .coordinateSpace(Self.space)
@@ -324,6 +328,7 @@ private struct PromptSection: View {
                 state = BlockDrag(id: id, translation: value.translation.height)
             }
             .onEnded { value in
+                settling = id
                 let drop = BlockDrag(id: id, translation: value.translation.height)
                 guard let reordering = Reordering(of: settings.blocks, heights: heights, drag: drop),
                       reordering.destination != reordering.source
@@ -831,12 +836,16 @@ private struct MemoryRows: View {
 
 // MARK: - Generate
 
-/// The main action adapts to what is missing: engine, model, then generation.
+/// The model and the main action, under the settings. The action adapts to what is missing:
+/// engine, model, then generation.
 private struct GenerateBar: View {
     @Environment(AppModel.self) private var app
 
     var body: some View {
         VStack(spacing: 10) {
+            ModelSelection()
+                .padding(.bottom, 4)
+
             if let job = app.activeJob {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 4) {
