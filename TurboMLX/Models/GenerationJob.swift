@@ -11,6 +11,7 @@ final class GenerationJob: Identifiable {
         case encodingPrompt
         case denoising
         case decoding
+        case encodingVideo
         case saving
 
         var label: String {
@@ -21,6 +22,7 @@ final class GenerationJob: Identifiable {
             case .encodingPrompt: "Reading the prompt…"
             case .denoising: "Generating"
             case .decoding: "Decoding the image…"
+            case .encodingVideo: "Encoding the video…"
             case .saving: "Saving…"
             }
         }
@@ -56,7 +58,7 @@ final class GenerationJob: Identifiable {
     var fraction: Double? {
         switch phase {
         case .denoising: Double(step) / Double(max(totalSteps, 1))
-        case .decoding, .saving: 1
+        case .decoding, .encodingVideo, .saving: 1
         default: nil
         }
     }

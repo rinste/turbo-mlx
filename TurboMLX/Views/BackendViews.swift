@@ -212,9 +212,9 @@ struct BackendDetails: View {
             if let info = backend.info {
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
                     GridRow { Text("Mac").foregroundStyle(.secondary); Text("\(info.device) · \(Format.memory(info.memory))") }
-                    GridRow { Text("mflux").foregroundStyle(.secondary); Text(info.mflux) }
+                    GridRow { Text("Engine").foregroundStyle(.secondary); Text(info.engine) }
                     GridRow { Text("MLX").foregroundStyle(.secondary); Text(info.mlx) }
-                    GridRow { Text("Python").foregroundStyle(.secondary); Text(info.python) }
+                    GridRow { Text("Runtime").foregroundStyle(.secondary); Text(info.runtime) }
                     GridRow {
                         Text("In memory").foregroundStyle(.secondary)
                         Text(loadedModelName ?? "no model")

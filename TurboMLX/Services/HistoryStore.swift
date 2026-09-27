@@ -56,6 +56,11 @@ final class HistoryStore {
         Self.directory.appending(path: item.fileName)
     }
 
+    /// The still to show for an item: the image itself, or a video's poster frame.
+    func posterURL(for item: HistoryItem) -> URL {
+        Self.directory.appending(path: item.posterFileName ?? item.fileName)
+    }
+
     /// A fresh file name; queued jobs have not written theirs yet, so names handed out are remembered.
     func newImageURL(seed: Int) -> URL {
         let stamp = Self.fileStamp.string(from: Date())
@@ -76,7 +81,8 @@ final class HistoryStore {
     func remove(_ ids: Set<HistoryItem.ID>) {
         for item in items where ids.contains(item.id) {
             try? FileManager.default.trashItem(at: url(for: item), resultingItemURL: nil)
-            ImageLoader.evict(url(for: item))
+            if item.posterFileName != nil { try? FileManager.default.trashItem(at: posterURL(for: item), resultingItemURL: nil) }
+            ImageLoader.evict(posterURL(for: item))
         }
         items.removeAll { ids.contains($0.id) }
         save()

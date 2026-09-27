@@ -135,6 +135,18 @@ final class AppModel {
         await backend.prepare()
         locator = ModelLocator(environment: backend.environment)
         refreshInstalled()
+        startEngineForSelection()
+    }
+
+    /// The engine the selected model runs on.
+    var selectedEngine: EngineKind {
+        selectedModel.map { backend.engineKind(for: $0.family) } ?? .python
+    }
+
+    /// Brings up the engine of the selected model, unless an installation is running.
+    private func startEngineForSelection() {
+        guard backend.status != .installing else { return }
+        backend.ensureWorker(for: selectedEngine)
     }
 
     func shutdown() {
@@ -164,13 +176,6 @@ final class AppModel {
     }
 
     func download(_ model: ModelDescriptor) {
-        guard backend.isInstalled else {
-            alert = AppAlert(
-                title: "The image engine is not installed",
-                message: "Downloads run through Turbo MLX's engine. Install it first."
-            )
-            return
-        }
         if let size = model.sizeBytes, let free = freeDiskSpace(), free < size + (2 << 30) {
             alert = AppAlert(
                 title: "Not enough disk space",
@@ -178,7 +183,7 @@ final class AppModel {
             )
             return
         }
-        downloads.start(model, backend: backend)
+        downloads.start(model, hubCache: locator.hubCache, environment: backend.environment)
     }
 
     /// Downloads the selected model, then generates with the current prompt.
@@ -218,12 +223,21 @@ final class AppModel {
 
     /// Loads the selected model as soon as a prompt is being written, so that the first image
     /// starts at the prompt instead of at a 5–40 s load. Nothing happens while the worker is
-    /// busy, when the model is already in memory, or after "Free Memory".
+    /// busy, when the model is already in memory, or after "Free Memory". A prompt for a model
+    /// of the other engine brings that engine up first.
     private func preloadIfUseful() {
-        guard !preloadDeclined, backend.status == .ready, activeJob == nil, queue.isEmpty,
-              !settings.trimmedPrompt.isEmpty, let model = selectedModel,
-              let location = installed[model.id],
-              backend.loadedModelPath != location.path, preloadRequested != location.path
+        guard !preloadDeclined, activeJob == nil, queue.isEmpty, !settings.trimmedPrompt.isEmpty,
+              let model = selectedModel, let location = installed[model.id]
+        else { return }
+        let kind = backend.engineKind(for: model.family)
+        if backend.activeKind != kind {
+            switch backend.status {
+            case .ready, .stopped, .failed: backend.ensureWorker(for: kind) // onReady comes back here
+            default: break
+            }
+            return
+        }
+        guard backend.status == .ready, backend.loadedModelPath != location.path, preloadRequested != location.path
         else { return }
         preloadRequested = location.path
         try? backend.send(.load(model: model, modelPath: location.path, lowMemory: settings.lowMemory))
@@ -268,8 +282,10 @@ final class AppModel {
 
     var blocker: Blocker? {
         guard let model = selectedModel else { return .noModel }
-        if backend.status == .installing { return .backendInstalling }
-        if !backend.isInstalled { return .backendNotInstalled }
+        if backend.engineKind(for: model.family) == .python {
+            if backend.status == .installing { return .backendInstalling }
+            if !backend.isInstalled { return .backendNotInstalled }
+        }
         if downloads.isDownloading(model) { return .modelDownloading }
         if !isInstalled(model) { return .modelNotDownloaded }
         if settings.trimmedPrompt.isEmpty { return .emptyPrompt }
@@ -331,13 +347,15 @@ final class AppModel {
     private func pump() {
         defer { updateDockBadge() }
         guard activeJob == nil, let job = queue.first else { return }
+        let kind = backend.engineKind(for: job.model.family)
         switch backend.status {
-        case .ready:
+        case .ready where backend.activeKind == kind:
             break
-        case .stopped, .failed:
-            backend.startWorker() // onReady pumps again
-            return
+        case .starting, .installing, .checking:
+            return // onReady pumps again
         default:
+            // Not running, crashed, or the other engine: bring up the right one; onReady pumps.
+            backend.ensureWorker(for: kind)
             return
         }
         queue.removeFirst()
@@ -380,6 +398,7 @@ final class AppModel {
             case "encoding": job.phase = .encodingPrompt
             case "denoising": job.beginDenoising()
             case "decoding": job.phase = .decoding
+            case "encoding_video": job.phase = .encodingVideo
             case "saving": job.phase = .saving
             default: break
             }
@@ -415,6 +434,8 @@ final class AppModel {
             id: UUID(),
             createdAt: Date(),
             fileName: job.outputURL.lastPathComponent,
+            media: job.model.family.media,
+            posterFileName: event.poster.map { URL(fileURLWithPath: $0).lastPathComponent },
             modelID: job.model.id,
             modelName: job.model.name,
             request: request,
@@ -502,4 +523,5 @@ final class AppModel {
     }
 
     func url(for item: HistoryItem) -> URL { history.url(for: item) }
+    func posterURL(for item: HistoryItem) -> URL { history.posterURL(for: item) }
 }

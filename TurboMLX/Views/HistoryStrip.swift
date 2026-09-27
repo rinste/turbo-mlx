@@ -94,11 +94,21 @@ private struct HistoryThumbnail: View {
 
     var body: some View {
         let url = app.url(for: item)
-        FileImage(url: url, maxPixelSize: 320)
+        FileImage(url: app.posterURL(for: item), maxPixelSize: 320)
             .aspectRatio(contentMode: .fill)
             .frame(width: thumbnailWidth(for: item.size, height: height), height: height)
             .background {
                 if item.request.transparentBackground { Checkerboard(squareSize: 6) }
+            }
+            .overlay(alignment: .bottomLeading) {
+                if item.kind == .video {
+                    Image(systemName: "play.fill")
+                        .font(.caption2)
+                        .padding(4)
+                        .background(.black.opacity(0.5), in: Circle())
+                        .foregroundStyle(.white)
+                        .padding(5)
+                }
             }
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .overlay {

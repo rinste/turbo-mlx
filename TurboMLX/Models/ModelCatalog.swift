@@ -19,6 +19,10 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     /// Whether the model outputs RGBA, so a transparent background can be kept.
     var producesAlpha: Bool { self == .ming }
 
+    /// Images for every family so far; a video family will say `.video` and the viewer, the
+    /// history and the request already know the difference.
+    var media: MediaKind { .image }
+
     /// Checkpoint sub-folders that must hold complete safetensors shards.
     var components: [String] {
         switch self {

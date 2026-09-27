@@ -109,7 +109,7 @@ private struct ModelStatusRow: View {
                     .frame(maxWidth: .infinity)
                 }
                 .controlSize(.large)
-                .disabled(model.repo == nil || !app.backend.isInstalled)
+                .disabled(model.repo == nil)
                 if let failure = app.downloads.failures[model.id] {
                     Text(failure)
                         .font(.caption)

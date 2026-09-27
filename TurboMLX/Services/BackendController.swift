@@ -1,8 +1,23 @@
 import Foundation
 import Observation
 
-/// Owns the Python side: the virtual environment with mflux, and the long-lived worker process
-/// that keeps a model loaded between generations.
+/// Which process generates the images: `turbo_worker.py` on mflux, or the native `turbo-engine`
+/// (MLX Swift). Both speak the same JSON lines; one runs at a time.
+nonisolated enum EngineKind: String, Sendable {
+    case python
+    case native
+
+    var displayName: String {
+        switch self {
+        case .python: "Python engine (mflux)"
+        case .native: "Native engine (MLX Swift)"
+        }
+    }
+}
+
+/// Owns the engines: the Python virtual environment with mflux and its worker, the native
+/// `turbo-engine` when the build has one, and whichever of the two is running now, keeping a
+/// model loaded between generations.
 @Observable
 final class BackendController {
     enum Status: Equatable {
@@ -41,7 +56,25 @@ final class BackendController {
     static let pythonInstallDirectory = supportDirectory.appending(path: "python", directoryHint: .isDirectory)
     static let uvCacheDirectory = URL.cachesDirectory.appending(path: "TurboMLX/uv", directoryHint: .isDirectory)
 
+    /// Families the native engine implements. It is preferred for them whenever the executable is
+    /// there; everything else runs on mflux.
+    static let nativeFamilies: Set<ModelFamily> = [.flux2Klein]
+
+    /// The native engine: `TURBO_ENGINE` (a development build), the one in the app bundle, or one
+    /// dropped into the app's data folder by `scripts/build-engine.sh`.
+    static var nativeEngineURL: URL? {
+        var candidates: [URL] = []
+        if let custom = ProcessInfo.processInfo.environment["TURBO_ENGINE"], !custom.isEmpty {
+            candidates.append(URL(fileURLWithPath: (custom as NSString).expandingTildeInPath))
+        }
+        if let bundled = Bundle.main.url(forAuxiliaryExecutable: "turbo-engine") { candidates.append(bundled) }
+        candidates.append(supportDirectory.appending(path: "bin/turbo-engine"))
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }
+    }
+
     private(set) var status = Status.checking
+    /// The engine the running (or starting) worker is, nil when none runs.
+    private(set) var activeKind: EngineKind?
     private(set) var info: BackendInfo?
     /// Model path currently held in memory by the worker.
     private(set) var loadedModelPath: String?
@@ -77,18 +110,36 @@ final class BackendController {
     /// uv ships in Contents/MacOS; it also downloads Python, so the Mac needs no developer tools.
     private var bundledUV: URL? { Bundle.main.url(forAuxiliaryExecutable: "uv") }
 
+    var hasNativeEngine: Bool { Self.nativeEngineURL != nil }
+
+    /// The engine a family runs on in this build.
+    func engineKind(for family: ModelFamily) -> EngineKind {
+        hasNativeEngine && Self.nativeFamilies.contains(family) ? .native : .python
+    }
+
+    /// Resolves the environment and brings the Python engine up to date when a new version of the
+    /// app expects a different mflux. Starting a worker is left to `ensureWorker(for:)`, which
+    /// knows which engine the selected model needs.
     func prepare() async {
         environment = await ShellEnvironment.resolve()
         if !isInstalled {
             status = .notInstalled
         } else if installedRequirement != Self.mfluxRequirement {
-            // A new version of the app expects a different mflux: update in place (the other
-            // packages are already there, so this is quick).
+            // Update in place (the other packages are already there, so this is quick).
             isUpdating = true
             install()
         } else {
-            startWorker()
+            status = .stopped
         }
+    }
+
+    /// Makes `kind` the running engine: starts it, or replaces the other one (the loaded model goes
+    /// with it). For the Python engine when it is not installed, reports that instead.
+    func ensureWorker(for kind: EngineKind) {
+        if worker != nil, activeKind == kind { return }
+        guard installer == nil else { return }
+        if worker != nil { stopWorker() }
+        startWorker(kind: kind)
     }
 
     // MARK: Installation
@@ -134,12 +185,12 @@ final class BackendController {
         let wasUpdate = isUpdating
         isUpdating = false
         if code == 0, isInstalled {
-            startWorker()
+            startWorker(kind: .python)
         } else if wasUpdate, isInstalled {
             // Offline, say: keep using the engine that is there; the update is retried next launch.
             log.append("[turbo] engine update failed (exit code \(code)); keeping the installed version")
             installOutput = []
-            startWorker()
+            startWorker(kind: .python)
         } else {
             status = .failed("The installation failed (exit code \(code)). The log has the details.")
         }
@@ -147,20 +198,31 @@ final class BackendController {
 
     // MARK: Worker
 
-    func startWorker() {
+    func startWorker(kind: EngineKind = .python) {
         guard worker == nil, installer == nil else { return }
-        guard isInstalled, let workerScript else {
-            status = .notInstalled
-            return
+        let process: LineProcess
+        switch kind {
+        case .python:
+            guard isInstalled, let workerScript else {
+                status = .notInstalled
+                return
+            }
+            process = LineProcess(
+                executable: Self.python,
+                arguments: ["-u", workerScript.path, "serve"],
+                environment: environment
+            )
+        case .native:
+            guard let engine = Self.nativeEngineURL else {
+                status = .failed("The native engine is not available in this build.")
+                return
+            }
+            process = LineProcess(executable: engine, arguments: ["serve"], environment: environment)
         }
+        activeKind = kind
         status = .starting
         info = nil
         loadedModelPath = nil
-        let process = LineProcess(
-            executable: Self.python,
-            arguments: ["-u", workerScript.path, "serve"],
-            environment: environment
-        )
         do {
             try process.start(
                 onStdout: { [weak self, weak process] line in
@@ -181,14 +243,16 @@ final class BackendController {
     func stopWorker() {
         guard let worker else { return }
         self.worker = nil
+        activeKind = nil
         loadedModelPath = nil
         worker.stop(grace: .seconds(2))
         if status == .ready || status == .starting { status = .stopped }
     }
 
     func restartWorker() {
+        let kind = activeKind ?? .python
         stopWorker()
-        startWorker()
+        startWorker(kind: kind)
     }
 
     func send(_ command: WorkerCommand) throws {
@@ -208,9 +272,9 @@ final class BackendController {
         switch event.event {
         case "ready":
             info = BackendInfo(
-                mflux: event.mflux ?? "?",
+                engine: event.engine ?? event.mflux.map { "mflux \($0)" } ?? "?",
+                runtime: event.python.map { "Python \($0)" } ?? "Swift",
                 mlx: event.mlx ?? "?",
-                python: event.python ?? "?",
                 device: event.device ?? "Apple Silicon",
                 memory: event.memory ?? 0
             )
@@ -232,6 +296,7 @@ final class BackendController {
         // Exits of workers we stopped on purpose are not news.
         guard worker === process else { return }
         worker = nil
+        activeKind = nil
         loadedModelPath = nil
         let lastLines = log.tail(3)
         let message = "The image engine quit unexpectedly (exit code \(code))."

@@ -10,6 +10,8 @@ nonisolated struct WorkerEvent: Decodable, Sendable {
     var bytes: Int64?
     var cached: Int64?
     var path: String?
+    /// "done" for a video: the PNG frame written next to it.
+    var poster: String?
     var seed: Int?
     var width: Int?
     var height: Int?
@@ -18,8 +20,9 @@ nonisolated struct WorkerEvent: Decodable, Sendable {
     /// Seconds per phase of a finished image: load, encode, denoise, decode, save.
     var timings: [String: Double]?
     var message: String?
-    // "ready"
+    // "ready": mflux and python from the Python worker, engine from the native one
     var mflux: String?
+    var engine: String?
     var mlx: String?
     var python: String?
     var device: String?
@@ -39,9 +42,11 @@ nonisolated struct WorkerEvent: Decodable, Sendable {
 
 /// Versions and hardware reported by a worker that started successfully.
 nonisolated struct BackendInfo: Equatable, Sendable {
-    var mflux: String
+    /// "mflux 0.20.0" or "turbo-engine 0.1".
+    var engine: String
+    /// "Python 3.12.3" or "Swift".
+    var runtime: String
     var mlx: String
-    var python: String
     var device: String
     var memory: Int64
 }

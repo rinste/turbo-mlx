@@ -185,6 +185,9 @@ nonisolated struct GenerationRequest: Codable, Hashable, Sendable {
     var guidance: Double
     var transparentBackground: Bool
     var lowMemory: Bool
+    /// Video only: how many frames and at what rate; nil for an image.
+    var frames: Int?
+    var fps: Int?
 }
 
 enum PromptExamples {

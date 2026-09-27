@@ -22,9 +22,9 @@ private struct EngineSettings: View {
             Section {
                 if let info = backend.info {
                     LabeledContent("Mac", value: "\(info.device) · \(Format.memory(info.memory))")
-                    LabeledContent("mflux", value: info.mflux)
+                    LabeledContent("Engine", value: info.engine)
                     LabeledContent("MLX", value: info.mlx)
-                    LabeledContent("Python", value: info.python)
+                    LabeledContent("Runtime", value: info.runtime)
                 } else {
                     LabeledContent("Status", value: statusText)
                 }
@@ -41,6 +41,17 @@ private struct EngineSettings: View {
                     Text(verbatim: "commit " + BackendController.mfluxCommit.prefix(7))
                         .monospaced()
                         .foregroundStyle(.secondary)
+                }
+                LabeledContent("Native engine") {
+                    if let url = BackendController.nativeEngineURL {
+                        Text(url.path(percentEncoded: false))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Not in this build")
+                            .foregroundStyle(.secondary)
+                    }
                 }
             } footer: {
                 Text("Repair rebuilds the app’s Python environment from scratch, reusing the packages already downloaded. Use it if the engine no longer starts.")
