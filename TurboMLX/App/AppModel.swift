@@ -511,7 +511,7 @@ final class AppModel {
         if let blocks = item.request.blocks, !blocks.isEmpty {
             updated.blocks = blocks
         } else {
-            updated.blocks = [PromptBlock(name: "Prompt 1", text: item.prompt)]
+            updated.blocks = PromptBlock.defaults(subject: item.prompt)
         }
         updated.apply(size: item.size)
         updated.steps = item.request.steps

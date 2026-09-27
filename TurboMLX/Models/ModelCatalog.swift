@@ -47,15 +47,6 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .flux2Klein, .qwenImage: return weights + ["tokenizer/**", "added_tokens.json", "chat_template.jinja"]
         }
     }
-
-    var promptTip: String {
-        switch self {
-        case .ming: "Ming-Image is made for graphic design: posters, cards, interfaces, logos and typography."
-        case .zImageTurbo: "Z-Image Turbo excels at photorealism and at text inside the image (English and Chinese)."
-        case .flux2Klein: "FLUX.2 Klein takes seconds per image: great for exploring many variations."
-        case .qwenImage: "Qwen-Image handles complex scenes and long text inside the image, in English and Chinese."
-        }
-    }
 }
 
 nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {

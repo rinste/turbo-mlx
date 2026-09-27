@@ -55,9 +55,19 @@ nonisolated enum AspectRatio: String, CaseIterable, Codable, Identifiable, Senda
 /// One piece of the prompt. The blocks are joined, in order, into the text sent to the model, so
 /// the subject, the style or the lighting can each live in a block of their own and be moved around.
 nonisolated struct PromptBlock: Codable, Hashable, Identifiable, Sendable {
+    static let subjectName = "Subject"
+    static let styleName = "Style"
+
     var id = UUID()
     var name: String
     var text = ""
+    /// How tall the text is on screen, once the user has resized the block.
+    var height: Double?
+
+    /// A new prompt: the subject, then the style, each in a block of its own.
+    static func defaults(subject: String = "") -> [PromptBlock] {
+        [PromptBlock(name: subjectName, text: subject), PromptBlock(name: styleName)]
+    }
 
     /// The blocks as one prompt: a comma between pieces, or just a space after punctuation.
     static func joined(_ blocks: [PromptBlock]) -> String {
@@ -90,7 +100,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     static let guidanceRange = 1.0...7.0
     static let maxBatch = 8
 
-    var blocks = [PromptBlock(name: "Prompt 1")]
+    var blocks = PromptBlock.defaults()
     var aspect = AspectRatio.square
     var resolution = 1024
     var usesCustomSize = false
@@ -132,7 +142,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
             blocks = saved
         } else {
             let legacy = try decoder.container(keyedBy: LegacyKeys.self)
-            blocks = [PromptBlock(name: "Prompt 1", text: try legacy.decodeIfPresent(String.self, forKey: .prompt) ?? "")]
+            blocks = PromptBlock.defaults(subject: try legacy.decodeIfPresent(String.self, forKey: .prompt) ?? "")
         }
         aspect = try values.decodeIfPresent(AspectRatio.self, forKey: .aspect) ?? aspect
         resolution = try values.decodeIfPresent(Int.self, forKey: .resolution) ?? resolution
@@ -188,68 +198,4 @@ nonisolated struct GenerationRequest: Codable, Hashable, Sendable {
     /// Video only: how many frames and at what rate; nil for an image.
     var frames: Int?
     var fps: Int?
-}
-
-enum PromptExamples {
-    typealias Example = (title: String, prompt: String)
-
-    static func `for`(_ family: ModelFamily) -> [Example] {
-        family == .ming ? design : photo
-    }
-
-    static let design: [Example] = [
-        (
-            "Festival poster",
-            "A bold Swiss-style poster for a jazz festival titled 'BLUE NOTES 2026', large condensed headline, "
-                + "abstract saxophone shapes, deep blue and warm orange palette, dates 'JULY 12–14' at the bottom"
-        ),
-        (
-            "App icon, transparent background",
-            "A glossy 3D app icon of a paper plane on a rounded square, soft gradients from teal to violet, "
-                + "subtle inner glow, isolated on a transparent background"
-        ),
-        (
-            "Business card",
-            "A minimalist business card for a design studio named 'NORTH & FORM', off-white paper, "
-                + "black serif logotype, thin geometric line accent, generous whitespace"
-        ),
-        (
-            "App screen",
-            "A clean mobile app screen for a meditation app, headline 'Breathe in', circular progress ring, "
-                + "pastel lavender palette, rounded cards, modern sans-serif typography"
-        ),
-        (
-            "Sticker",
-            "A cute die-cut sticker of a smiling coffee cup with the text 'BUT FIRST, COFFEE', thick white border, "
-                + "flat vector illustration, transparent background"
-        ),
-    ]
-
-    static let photo: [Example] = [
-        (
-            "Natural-light portrait",
-            "Close-up portrait of an elderly fisherman with a weathered face and a knitted cap, soft window light, "
-                + "shallow depth of field, 85mm lens, natural skin texture, muted film colors"
-        ),
-        (
-            "Neon sign",
-            "A rainy night street in Tokyo, a small ramen shop with a glowing neon sign that reads 'OPEN LATE', "
-                + "reflections on wet asphalt, cinematic lighting, 35mm photo"
-        ),
-        (
-            "Product still life",
-            "Studio product photo of a minimalist ceramic coffee cup on a travertine block, "
-                + "warm morning light, long soft shadows, beige and terracotta palette, high detail"
-        ),
-        (
-            "Landscape",
-            "Aerial view of the Dolomites at sunrise, low clouds between jagged peaks, golden light on the rock faces, "
-                + "ultra-detailed landscape photography"
-        ),
-        (
-            "Illustration",
-            "A cozy isometric illustration of a tiny bookshop with a cat sleeping in the window, "
-                + "warm pastel colors, soft shading, detailed and charming"
-        ),
-    ]
 }

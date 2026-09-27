@@ -4,16 +4,23 @@ import SwiftUI
 struct ControlPanel: View {
     @Environment(AppModel.self) private var app
     @FocusState private var focusedBlock: PromptBlock.ID?
+    /// Size, seed, outputs and memory: most images don't need them.
+    @AppStorage("showsAdvancedSettings") private var showsAdvanced = false
 
     var body: some View {
         @Bindable var app = app
         Form {
             ModelSection()
             if let model = app.selectedModel {
-                PromptSection(settings: $app.settings, family: model.family, focus: $focusedBlock)
+                PromptSection(settings: $app.settings, focus: $focusedBlock)
                 FormatSection(settings: $app.settings)
                 ParametersSection(settings: $app.settings, model: model)
-                MemorySection(settings: $app.settings, family: model.family)
+                AdvancedToggle(isExpanded: $showsAdvanced)
+                if showsAdvanced {
+                    SizeSection(settings: $app.settings)
+                    OutputSection(settings: $app.settings, family: model.family)
+                    MemorySection(settings: $app.settings, family: model.family)
+                }
             }
         }
         .formStyle(.grouped)
@@ -231,53 +238,61 @@ private struct ModelMenu: View {
 
 // MARK: - Prompt
 
-/// The prompt as blocks: each one a piece of the final text, renamable, movable, removable.
+/// The prompt as blocks: each one a piece of the final text, renamable, removable, and put in
+/// order by dragging its handle (or with its arrows).
 private struct PromptSection: View {
     @Binding var settings: GenerationSettings
-    let family: ModelFamily
     var focus: FocusState<PromptBlock.ID?>.Binding
 
+    /// The block being dragged; back to nil when it's let go, or when the drag is cancelled.
+    @GestureState(resetTransaction: Transaction(animation: .snappy)) private var drag: BlockDrag? = nil
+    /// Each block's height, to know where a dragged block would land.
+    @State private var heights: [PromptBlock.ID: CGFloat] = [:]
+
+    private static let space = NamedCoordinateSpace.named("promptBlocks")
+
     var body: some View {
+        let reordering = drag.flatMap { Reordering(of: settings.blocks, heights: heights, drag: $0) }
         Section {
-            ForEach($settings.blocks) { $block in
-                PromptBlockEditor(
-                    block: $block,
-                    position: position(of: block.id),
-                    count: settings.blocks.count,
-                    focus: focus,
-                    onMove: { move(block.id, by: $0) },
-                    onRemove: { remove(block.id) }
-                )
+            // All the blocks in one row, so the dragged one can be drawn over the others.
+            VStack(spacing: 0) {
+                ForEach($settings.blocks) { $block in
+                    let index = position(of: block.id)
+                    let isDragged = reordering?.source == index
+                    let offset = reordering?.offset(at: index) ?? 0
+                    let place = reordering?.place(of: index) ?? index
+                    PromptBlockEditor(
+                        block: $block,
+                        position: index,
+                        count: settings.blocks.count,
+                        isDragged: isDragged,
+                        showsSeparator: !isDragged && place > 0,
+                        focus: focus,
+                        reorder: reorderGesture(for: block.id),
+                        onMove: { move(block.id, by: $0) },
+                        onRemove: { remove(block.id) }
+                    )
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { heights[block.id] = $0 }
+                    .offset(y: offset)
+                    // The dragged block sticks to the pointer; the others slide out of its way.
+                    .animation(isDragged ? nil : .snappy, value: offset)
+                    .zIndex(isDragged ? 1 : 0)
+                }
             }
+            .coordinateSpace(Self.space)
         } header: {
-            HStack(spacing: 10) {
-                Text("Prompt")
-                Spacer()
-                Menu("Examples") {
-                    ForEach(PromptExamples.for(family), id: \.title) { example in
-                        Button(example.title) { fillFirstBlock(with: example.prompt) }
-                    }
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .textCase(nil)
-                Button {
-                    addBlock()
-                } label: {
-                    Image(systemName: "plus.circle")
-                }
-                .buttonStyle(.borderless)
-                .help("Add a block: the blocks are joined, in order, into one prompt")
-            }
+            Text("Prompt")
         } footer: {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 8) {
+                Button("Add Prompt Block", systemImage: "plus") { addBlock() }
+                    .labelStyle(.titleAndIcon)
+                    .help("Add a block at the end: the blocks are joined, in order, into one prompt")
                 if settings.blocks.count > 1 {
                     Text("The blocks are joined, in order, into one prompt.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                Text(family.promptTip)
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
         }
     }
 
@@ -307,32 +322,59 @@ private struct PromptSection: View {
         }
     }
 
-    /// Examples go into the first block; the others (a style, say) stay as they are.
-    private func fillFirstBlock(with text: String) {
-        if settings.blocks.isEmpty {
-            settings.blocks = [PromptBlock(name: "Prompt 1", text: text)]
-        } else {
-            settings.blocks[0].text = text
-        }
-        focus.wrappedValue = settings.blocks.first?.id
+    /// The blocks make room while one is dragged; the list itself changes when it's let go.
+    private func reorderGesture(for id: PromptBlock.ID) -> some Gesture {
+        DragGesture(minimumDistance: 2, coordinateSpace: Self.space)
+            .updating($drag) { value, state, _ in
+                state = BlockDrag(id: id, translation: value.translation.height)
+            }
+            .onEnded { value in
+                let drop = BlockDrag(id: id, translation: value.translation.height)
+                guard let reordering = Reordering(of: settings.blocks, heights: heights, drag: drop),
+                      reordering.destination != reordering.source
+                else { return }
+                var blocks = settings.blocks
+                blocks.insert(blocks.remove(at: reordering.source), at: reordering.destination)
+                withAnimation(.snappy) { settings.blocks = blocks }
+            }
     }
 }
 
-private struct PromptBlockEditor: View {
+private struct PromptBlockEditor<Reorder: Gesture>: View {
     @Binding var block: PromptBlock
     /// Index in the list, and how many blocks there are: the arrows stop at the ends.
     let position: Int
     let count: Int
+    /// Lifted above the others while its handle is dragged.
+    let isDragged: Bool
+    let showsSeparator: Bool
     var focus: FocusState<PromptBlock.ID?>.Binding
+    /// The drag that starts on the handle.
+    let reorder: Reorder
     let onMove: (Int) -> Void
     let onRemove: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 2) {
+                if count > 1 {
+                    Image(systemName: "line.3.horizontal")
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                        .pointerStyle(isDragged ? .grabActive : .grabIdle)
+                        .gesture(reorder)
+                        .padding(.trailing, 4)
+                        .help("Drag to move the block")
+                        .accessibilityHidden(true)
+                }
+                // The name is the block's title, renamed in place; Return goes on to the text.
                 TextField("Name", text: $block.name)
+                    .labelsHidden()
                     .textFieldStyle(.plain)
-                    .font(.subheadline.weight(.medium))
+                    .multilineTextAlignment(.leading)
+                    .font(.headline)
+                    .onSubmit { focus.wrappedValue = block.id }
                     .help("Click to rename the block")
                 Button {
                     onMove(-1)
@@ -359,19 +401,13 @@ private struct PromptBlockEditor: View {
             .buttonStyle(.borderless)
             .foregroundStyle(.secondary)
 
-            TextEditor(text: $block.text)
-                .font(.body)
-                .scrollContentBackground(.hidden)
-                .frame(minHeight: 64, idealHeight: 96, maxHeight: 240)
-                .focused(focus, equals: block.id)
-                .overlay(alignment: .topLeading) {
-                    if block.text.isEmpty {
-                        Text(placeholder)
-                            .foregroundStyle(.tertiary)
-                            .padding(.leading, 5)
-                            .allowsHitTesting(false)
-                    }
-                }
+            BlockTextEditor(
+                text: $block.text,
+                height: $block.height,
+                placeholder: placeholder,
+                focus: focus,
+                id: block.id
+            )
         }
         .contextMenu {
             Button("Move Up") { onMove(-1) }
@@ -382,12 +418,146 @@ private struct PromptBlockEditor: View {
             Button("Remove Block", role: .destructive) { onRemove() }
                 .disabled(count <= 1)
         }
+        // No bottom padding: the resize handle under the text is the block's lower margin.
+        .padding(.top, 6)
+        .background {
+            if isDragged {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.regularMaterial)
+                    .shadow(color: .black.opacity(0.2), radius: 6, y: 2)
+                    .padding(.horizontal, -6)
+            }
+        }
+        .overlay(alignment: .top) {
+            if showsSeparator { Divider() }
+        }
     }
 
     private var placeholder: String {
-        position == 0
-            ? "Describe the image: subject, style, light, colors. Put any text to render in quotes."
-            : "A piece of the prompt: the style, the lighting, a detail. It follows the block above."
+        switch block.name {
+        case PromptBlock.subjectName:
+            "What the image shows: who or what, where, doing what. Put any text to render in quotes."
+        case PromptBlock.styleName:
+            "How it looks: the medium or style, the light, the colors, the lens."
+        default:
+            position == 0
+                ? "Describe the image: subject, style, light, colors. Put any text to render in quotes."
+                : "A piece of the prompt: the style, the lighting, a detail. It follows the block above."
+        }
+    }
+}
+
+/// A block's text, as tall as the user makes it with the handle along its bottom edge.
+private struct BlockTextEditor: View {
+    @Binding var text: String
+    /// Nil until the block is resized.
+    @Binding var height: Double?
+    let placeholder: String
+    var focus: FocusState<PromptBlock.ID?>.Binding
+    let id: PromptBlock.ID
+
+    /// How far the handle has been dragged; the new height is kept when it's let go.
+    @GestureState private var stretch: CGFloat = 0
+
+    private static let defaultHeight: CGFloat = 110
+    /// From two lines to about thirty.
+    private static let heights: ClosedRange<CGFloat> = 44...600
+
+    var body: some View {
+        VStack(spacing: 0) {
+            TextEditor(text: $text)
+                .scrollContentBackground(.hidden)
+                .frame(height: textHeight(stretchedBy: stretch))
+                .focused(focus, equals: id)
+                .overlay(alignment: .topLeading) {
+                    if text.isEmpty {
+                        Text(placeholder)
+                            .foregroundStyle(.tertiary)
+                            .padding(.leading, 5)
+                            .allowsHitTesting(false)
+                    }
+                }
+                // Larger than the controls around it: the prompt is what gets read and written here.
+                .font(.system(size: 15))
+
+            Capsule()
+                .fill(.tertiary)
+                .frame(width: 32, height: 4)
+                .frame(maxWidth: .infinity, minHeight: 14)
+                .contentShape(Rectangle())
+                .pointerStyle(.frameResize(position: .bottom))
+                .gesture(
+                    // In global coordinates: the handle itself moves down as the text grows.
+                    DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                        .updating($stretch) { value, state, _ in
+                            state = value.translation.height
+                        }
+                        .onEnded { value in
+                            height = Double(textHeight(stretchedBy: value.translation.height))
+                        }
+                )
+                .help("Drag to make the block taller or shorter")
+                .accessibilityHidden(true)
+        }
+    }
+
+    private func textHeight(stretchedBy amount: CGFloat) -> CGFloat {
+        let start = height.map { CGFloat($0) } ?? Self.defaultHeight
+        return min(max(start + amount, Self.heights.lowerBound), Self.heights.upperBound)
+    }
+}
+
+/// A block dragged by its handle, and how far the pointer has moved since.
+private struct BlockDrag {
+    let id: PromptBlock.ID
+    let translation: CGFloat
+}
+
+/// Where the blocks are drawn while one of them is dragged: that one follows the pointer, kept
+/// within the list, and the others slide out of the way of the place it would land in.
+private struct Reordering {
+    /// The dragged block's index, and the index it would land at.
+    let source: Int
+    let destination: Int
+    private let translation: CGFloat
+    private let draggedHeight: CGFloat
+
+    init?(of blocks: [PromptBlock], heights: [PromptBlock.ID: CGFloat], drag: BlockDrag) {
+        guard let source = blocks.firstIndex(where: { $0.id == drag.id }) else { return nil }
+        let height: (PromptBlock) -> CGFloat = { heights[$0.id] ?? 0 }
+        let others = blocks.filter { $0.id != drag.id }
+        let top: CGFloat = blocks[..<source].reduce(0) { $0 + height($1) }
+        let othersHeight: CGFloat = others.reduce(0) { $0 + height($1) }
+        let translation = min(max(drag.translation, -top), othersHeight - top)
+        // It lands in the place whose top is nearest its own: past the middle of a neighbor, it
+        // takes the neighbor's place.
+        var destination = 0
+        var placeTop: CGFloat = 0
+        for other in others {
+            guard top + translation > placeTop + height(other) / 2 else { break }
+            destination += 1
+            placeTop += height(other)
+        }
+        self.source = source
+        self.destination = destination
+        self.translation = translation
+        draggedHeight = height(blocks[source])
+    }
+
+    /// How far the block at `index` is drawn from its place in the list.
+    func offset(at index: Int) -> CGFloat {
+        if index == source { return translation }
+        if index < source, index >= destination { return draggedHeight }
+        if index > source, index <= destination { return -draggedHeight }
+        return 0
+    }
+
+    /// Where the block at `index` is drawn, counting from the top.
+    func place(of index: Int) -> Int {
+        if index == source { return destination }
+        if index < source, index >= destination { return index + 1 }
+        if index > source, index <= destination { return index - 1 }
+        return index
     }
 }
 
@@ -422,37 +592,6 @@ private struct FormatSection: View {
                     .buttonStyle(.plain)
                     .help("\(aspect.rawValue) · \(aspect.usage)")
                 }
-            }
-
-            Picker("Resolution", selection: $settings.resolution) {
-                ForEach(GenerationSettings.resolutions, id: \.self) { resolution in
-                    Text(verbatim: "\(resolution)").tag(resolution)
-                }
-            }
-            .pickerStyle(.segmented)
-            .disabled(settings.usesCustomSize)
-
-            Toggle("Custom size", isOn: $settings.usesCustomSize)
-
-            if settings.usesCustomSize {
-                HStack {
-                    TextField("Width", value: $settings.customWidth, format: .number.grouping(.never))
-                    Text(verbatim: "×").foregroundStyle(.secondary)
-                    TextField("Height", value: $settings.customHeight, format: .number.grouping(.never))
-                }
-                .multilineTextAlignment(.center)
-                .labelsHidden()
-            }
-
-            let size = settings.size
-            LabeledContent("Image") {
-                Text(verbatim: "\(size.width) × \(size.height) px · \(size.megapixels.formatted(.number.precision(.fractionLength(1)))) MP")
-                    .monospacedDigit()
-            }
-            if size.megapixels > 2.5 {
-                Label("High resolutions take much more time and memory.", systemImage: "tortoise")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
             }
         }
     }
@@ -507,7 +646,121 @@ private struct ParametersSection: View {
                               : "How strictly to follow the prompt. 1 = off; higher values double the time of each step.")
                 }
             }
+        }
+    }
+}
 
+/// A symbol at one end of a slider, the same width for every slider so they line up.
+private struct SliderIcon: View {
+    let systemImage: String
+    let help: String
+    let label: String
+
+    init(_ systemImage: String, help: String, label: String) {
+        self.systemImage = systemImage
+        self.help = help
+        self.label = label
+    }
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .foregroundStyle(.secondary)
+            .frame(width: 24)
+            .help(help)
+            .accessibilityLabel(label)
+    }
+}
+
+// MARK: - Advanced
+
+/// Shows or hides the sections below it. Folded, it still gives the image size and a fixed seed,
+/// which change the image without being in sight.
+private struct AdvancedToggle: View {
+    @Environment(AppModel.self) private var app
+    @Binding var isExpanded: Bool
+
+    var body: some View {
+        Section {
+            Button {
+                withAnimation(.snappy) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    Text("Advanced")
+                    Spacer()
+                    if !isExpanded {
+                        Text(summary)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Image(systemName: "chevron.right")
+                        .imageScale(.small)
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .accessibilityHidden(true)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+        }
+    }
+
+    private var summary: String {
+        let settings = app.settings
+        let size = settings.size
+        let dimensions = "\(size.width) × \(size.height) px"
+        return settings.randomSeed ? dimensions : "\(dimensions) · seed \(settings.seed)"
+    }
+}
+
+/// The image's size: a resolution for the aspect ratio above, or a width and height of its own.
+private struct SizeSection: View {
+    @Binding var settings: GenerationSettings
+
+    var body: some View {
+        Section("Size") {
+            Picker("Resolution", selection: $settings.resolution) {
+                ForEach(GenerationSettings.resolutions, id: \.self) { resolution in
+                    Text(verbatim: "\(resolution)").tag(resolution)
+                }
+            }
+            .pickerStyle(.segmented)
+            .disabled(settings.usesCustomSize)
+
+            Toggle("Custom size", isOn: $settings.usesCustomSize)
+
+            if settings.usesCustomSize {
+                HStack {
+                    TextField("Width", value: $settings.customWidth, format: .number.grouping(.never))
+                    Text(verbatim: "×").foregroundStyle(.secondary)
+                    TextField("Height", value: $settings.customHeight, format: .number.grouping(.never))
+                }
+                .multilineTextAlignment(.center)
+                .labelsHidden()
+            }
+
+            let size = settings.size
+            LabeledContent("Image") {
+                Text(verbatim: "\(size.width) × \(size.height) px · \(size.megapixels.formatted(.number.precision(.fractionLength(1)))) MP")
+                    .monospacedDigit()
+            }
+            if size.megapixels > 2.5 {
+                Label("High resolutions take much more time and memory.", systemImage: "tortoise")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+}
+
+/// Which images one click makes: their seeds, how many, and the background.
+private struct OutputSection: View {
+    @Binding var settings: GenerationSettings
+    let family: ModelFamily
+
+    var body: some View {
+        Section("Output") {
             LabeledContent("Seed") {
                 HStack(spacing: 8) {
                     TextField("Seed", value: $settings.seed, format: .number.grouping(.never))
@@ -532,7 +785,7 @@ private struct ParametersSection: View {
                     .help("How many images one click generates, each with its own seed: consecutive from a fixed seed, or random.")
             }
 
-            if model.family.producesAlpha {
+            if family.producesAlpha {
                 Picker("Background", selection: $settings.transparentBackground) {
                     Text("Transparent").tag(true)
                     Text("White").tag(false)
@@ -540,27 +793,6 @@ private struct ParametersSection: View {
                 .pickerStyle(.segmented)
             }
         }
-    }
-}
-
-/// A symbol at one end of a slider, the same width for every slider so they line up.
-private struct SliderIcon: View {
-    let systemImage: String
-    let help: String
-    let label: String
-
-    init(_ systemImage: String, help: String, label: String) {
-        self.systemImage = systemImage
-        self.help = help
-        self.label = label
-    }
-
-    var body: some View {
-        Image(systemName: systemImage)
-            .foregroundStyle(.secondary)
-            .frame(width: 24)
-            .help(help)
-            .accessibilityLabel(label)
     }
 }
 
