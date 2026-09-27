@@ -61,10 +61,13 @@ private struct ModelSelection: View {
             }
 
             if let model = app.selectedModel {
+                // A line limit, not fixedSize: this bar does not scroll, and a text sized for any
+                // width asks for one character per line when the window measures its minimum
+                // height, which then pushes the whole window's content past its edges.
                 Text(model.detail)
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(3)
                 ModelStatusRow(model: model)
                 MemoryWarning(model: model)
             }
@@ -148,7 +151,7 @@ private struct MemoryWarning: View {
             )
             .font(.caption)
             .foregroundStyle(.orange)
-            .fixedSize(horizontal: false, vertical: true)
+            .lineLimit(3) // in the bar too: see ModelSelection
         }
     }
 }
@@ -315,7 +318,7 @@ private struct PromptSection: View {
 
     private func remove(_ id: PromptBlock.ID) {
         guard settings.blocks.count > 1, let index = settings.blocks.firstIndex(where: { $0.id == id }) else { return }
-        withAnimation(.snappy) { settings.blocks.remove(at: index) }
+        withAnimation(.snappy) { _ = settings.blocks.remove(at: index) }
         if focus.wrappedValue == id {
             focus.wrappedValue = settings.blocks[min(index, settings.blocks.count - 1)].id
         }
