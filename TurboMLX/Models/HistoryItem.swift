@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 /// What a model produces, and what a history item holds.
 nonisolated enum MediaKind: String, Codable, Hashable, Sendable {
@@ -27,4 +28,26 @@ nonisolated struct HistoryItem: Identifiable, Hashable, Codable, Sendable {
     var prompt: String { request.prompt }
     var size: PixelSize { request.size }
     var kind: MediaKind { media ?? .image }
+}
+
+/// How the strip arranges the history, left to right: by date, oldest first, or in the order the
+/// user dragged the items into (the newer ones after it).
+nonisolated enum HistoryOrder: String, CaseIterable, Identifiable, Sendable {
+    case date
+    case custom
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .date: "By Date"
+        case .custom: "Custom Order"
+        }
+    }
+}
+
+extension UTType {
+    /// A history item dragged inside the strip, to move it (declared in TurboMLX-Info.plist). The
+    /// image or clip goes along as a file for other apps and the reference image.
+    static let historyItem = UTType(exportedAs: "io.github.rinste.TurboMLX.history-item")
 }

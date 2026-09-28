@@ -113,11 +113,12 @@ private struct GenerationCommands: Commands {
 
             Divider()
 
-            // As in the strip: older to the left, newer to the right, the queue last. Each loads its settings.
-            Button("Older Image") { model.moveSelection(by: 1) }
+            // As in the strip, by date or in the custom order: left, right, the queue last. Each loads
+            // its settings.
+            Button("Previous Image") { model.moveSelection(by: 1) }
                 .keyboardShortcut("[", modifiers: .command)
                 .disabled(model.history.items.isEmpty && !model.isBusy)
-            Button("Newer Image") { model.moveSelection(by: -1) }
+            Button("Next Image") { model.moveSelection(by: -1) }
                 .keyboardShortcut("]", modifiers: .command)
                 .disabled(model.history.items.isEmpty && !model.isBusy)
         }

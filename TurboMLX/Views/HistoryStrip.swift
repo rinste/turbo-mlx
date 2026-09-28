@@ -1,8 +1,9 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// Film strip of past images and clips in the order they were made, the newest on the right, then
-/// the running and queued jobs and a "+" that sets up the next one. A click shows an item or a job
-/// and puts its settings on the left.
+/// Film strip of past images and clips, by date (the newest on the right) or in the order the user
+/// dragged them into, then the running and queued jobs and a "+" that sets up the next one. A click
+/// shows an item or a job and puts its settings on the left.
 struct HistoryStrip: View {
     @Environment(AppModel.self) private var app
     @State private var confirmsClear = false
@@ -12,22 +13,36 @@ struct HistoryStrip: View {
     private let thumbnailHeight: CGFloat = 92
 
     var body: some View {
+        @Bindable var app = app
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
                 Text("History").font(.headline)
                 Text("\(app.history.items.count)")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
-                Spacer()
-                if app.pendingJobs.count > 1 {
-                    Button("Cancel All") { app.cancelAll() }
-                        .buttonStyle(.link)
+                Menu {
+                    Picker("Order", selection: $app.historyOrder) {
+                        ForEach(HistoryOrder.allCases) { order in
+                            Text(order.title).tag(order)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                } label: {
+                    Label(app.historyOrder.title, systemImage: "arrow.up.arrow.down")
                         .font(.caption)
                 }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .padding(.leading, 6)
+                .help("By date, the newest on the right, or in your own order: drag the images and clips where you want them")
+                Spacer()
                 Menu {
                     Button("Show Folder in Finder") {
                         NSWorkspace.shared.open(HistoryStore.directory)
                     }
+                    Button("Clear Queue") { app.cancelAll() }
+                        .disabled(!app.isBusy)
                     Divider()
                     Button("Clear History…", role: .destructive) { confirmsClear = true }
                         .disabled(app.history.items.isEmpty)
@@ -44,8 +59,7 @@ struct HistoryStrip: View {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
                     LazyHStack(spacing: 8) {
-                        // The history is stored newest first.
-                        ForEach(app.history.items.reversed()) { item in
+                        ForEach(app.arrangedHistory) { item in
                             HistoryThumbnail(item: item, height: thumbnailHeight, isSelected: app.isSelected(item))
                                 .id(item.id)
                         }
@@ -168,9 +182,45 @@ private struct HistoryThumbnail: View {
             }
             .contentShape(Rectangle())
             .onTapGesture { app.select(item, undoManager: undoManager) }
-            .onDrag { NSItemProvider(contentsOf: url) ?? NSItemProvider() }
+            // The file, for Finder, other apps and the reference image; and the item itself, which
+            // only this strip reads, to move it.
+            .onDrag {
+                app.draggedHistoryItem = item.id
+                let provider = NSItemProvider(contentsOf: url) ?? NSItemProvider()
+                provider.registerDataRepresentation(for: .historyItem, visibility: .all) { completion in
+                    completion(Data(item.id.uuidString.utf8), nil)
+                    return nil
+                }
+                return provider
+            }
+            .onDrop(of: [.historyItem], delegate: HistoryMoveDelegate(target: item.id, app: app))
             .contextMenu { HistoryItemMenu(item: item) }
             .help(item.prompt)
+    }
+}
+
+/// Moves the dragged item into place as it passes over the others, so the strip shows where it
+/// will land; the drop only ends the drag.
+private struct HistoryMoveDelegate: DropDelegate {
+    let target: HistoryItem.ID
+    let app: AppModel
+
+    func validateDrop(info: DropInfo) -> Bool {
+        app.draggedHistoryItem != nil
+    }
+
+    func dropEntered(info: DropInfo) {
+        guard let dragged = app.draggedHistoryItem, dragged != target else { return }
+        withAnimation(.snappy) { app.moveHistoryItem(dragged, to: target) }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        app.draggedHistoryItem = nil
+        return true
     }
 }
 

@@ -64,6 +64,7 @@ private struct ModelSelection: View {
         @Bindable var app = app
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
+                Text("Model:")
                 // Images, then videos; within each, the names say the family and the memory.
                 Picker("Model", selection: $app.selectedModelID) {
                     section("Image", media: .image)
@@ -72,6 +73,7 @@ private struct ModelSelection: View {
                 .labelsHidden()
                 .pickerStyle(.menu)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .help("A picture: the model also takes a reference image. Lines: it works from the prompt alone. A small arrow: not downloaded yet.")
                 ResetButton()
                 ModelMenu(showsAddModel: $showsAddModel)
             }
@@ -99,11 +101,86 @@ private struct ModelSelection: View {
         if !models.isEmpty {
             Section(title) {
                 ForEach(models) { model in
-                    Label(model.name, systemImage: app.isInstalled(model) ? "checkmark.circle.fill" : "arrow.down.circle")
-                        .tag(model.id)
+                    Label {
+                        // The memory as a small dark badge after the name, where a name has it.
+                        if model.shortName != model.name, let memory = model.memoryLabel {
+                            Text("\(model.shortName)  \(Image(nsImage: MemoryBadge.image(memory)))")
+                        } else {
+                            Text(model.name)
+                        }
+                    } icon: {
+                        Image(nsImage: ModelIcon.image(takesPicture: model.family.takesReferenceImage, installed: app.isInstalled(model)))
+                    }
+                    .tag(model.id)
                 }
             }
         }
+    }
+}
+
+/// A model's icon in the picker: what it reads, a picture as well as the prompt or the prompt
+/// alone, with a small arrow while it is not downloaded. One template image of a fixed width, so the
+/// names line up and the menu tints it like its own symbols.
+private enum ModelIcon {
+    private static var cache: [String: NSImage] = [:]
+
+    static func image(takesPicture: Bool, installed: Bool) -> NSImage {
+        let key = "\(takesPicture)-\(installed)"
+        if let cached = cache[key] { return cached }
+        func symbol(_ name: String, size: CGFloat, weight: NSFont.Weight = .regular) -> NSImage {
+            let configuration = NSImage.SymbolConfiguration(pointSize: size, weight: weight)
+            return NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(configuration) ?? NSImage()
+        }
+        let base = symbol(takesPicture ? "photo" : "text.alignleft", size: 13)
+        let slot = max(symbol("photo", size: 13).size.width, symbol("text.alignleft", size: 13).size.width)
+        let badge = symbol("arrow.down.circle.fill", size: 8, weight: .bold)
+        let size = NSSize(width: slot + 4, height: max(base.size.height, 16))
+        let image = NSImage(size: size, flipped: false) { rect in
+            base.draw(in: NSRect(x: (slot - base.size.width) / 2, y: (rect.height - base.size.height) / 2,
+                                 width: base.size.width, height: base.size.height))
+            if !installed {
+                // The arrow in the lower right corner, cut out of the symbol under it.
+                let corner = NSRect(x: rect.maxX - badge.size.width, y: 0, width: badge.size.width, height: badge.size.height)
+                NSGraphicsContext.current?.compositingOperation = .clear
+                NSBezierPath(ovalIn: corner.insetBy(dx: -1.5, dy: -1.5)).fill()
+                NSGraphicsContext.current?.compositingOperation = .sourceOver
+                badge.draw(in: corner)
+            }
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = (takesPicture ? "Takes a reference image" : "Prompt only") + (installed ? "" : ", not downloaded")
+        cache[key] = image
+        return image
+    }
+}
+
+/// "24 GB RAM" in small white letters on a dark pill, drawn once as an image so a menu item can
+/// carry it after the name.
+private enum MemoryBadge {
+    private static var cache: [String: NSImage] = [:]
+
+    static func image(_ text: String) -> NSImage {
+        if let cached = cache[text] { return cached }
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 9.5, weight: .semibold),
+            .foregroundColor: NSColor.white,
+        ]
+        let textSize = (text as NSString).size(withAttributes: attributes)
+        let size = NSSize(width: ceil(textSize.width) + 12, height: 15)
+        let image = NSImage(size: size, flipped: false) { rect in
+            let pill = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 7, yRadius: 7)
+            NSColor(white: 0.08, alpha: 0.9).setFill()
+            pill.fill()
+            NSColor(white: 1, alpha: 0.18).setStroke()
+            pill.lineWidth = 1
+            pill.stroke()
+            (text as NSString).draw(at: NSPoint(x: 6, y: (rect.height - textSize.height) / 2), withAttributes: attributes)
+            return true
+        }
+        image.accessibilityDescription = text
+        cache[text] = image
+        return image
     }
 }
 

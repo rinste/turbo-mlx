@@ -140,6 +140,18 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         repo.flatMap { URL(string: "https://huggingface.co/\($0)") }
     }
 
+    /// The name without the memory the catalog's names end with ("FLUX.2 Klein 4B · 24 GB RAM" →
+    /// "FLUX.2 Klein 4B"), for the picker, which shows the memory as a badge of its own.
+    var shortName: String {
+        guard let suffix = memoryLabel.map({ " · \($0)" }), name.hasSuffix(suffix) else { return name }
+        return String(name.dropLast(suffix.count))
+    }
+
+    /// "24 GB RAM": the smallest Mac memory the model runs well in.
+    var memoryLabel: String? {
+        recommendedMemoryGB.map { "\($0) GB RAM" }
+    }
+
     /// FLUX.2 Klein "base" checkpoints are not distilled: many steps and real CFG.
     private var isKleinBase: Bool {
         family == .flux2Klein && (variant ?? id).lowercased().contains("base")

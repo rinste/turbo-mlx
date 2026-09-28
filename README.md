@@ -13,11 +13,15 @@ app downloads it, and that is all the setup there is.
 - **Left column:** the prompt as blocks (Subject and Style to start with, each one a piece of the
   final text; renamable, resizable, and put in order by dragging), aspect ratio, steps and guidance;
   under *Advanced*, the resolution or a custom size, seed, number of images, transparent or white
-  background, memory saving. For LTX-2.3 and FLUX.2 Klein, a *Reference Image* above the prompt
-  (dropped from Finder or from the history, chosen from a file or among the generated images): the
-  clip's first frame, or the picture Klein changes as the prompt says ("make it winter"), in its own
-  proportions. For a clip, its duration and frame rate. At the bottom, on a darker tray, the model
-  (image and video models in two groups, with download and status) above the main button, which does
+  background, memory saving. For LTX-2.3, FLUX.2 Klein and Qwen-Image Edit, a *Reference Image*
+  above the prompt (dropped from Finder or from the history, chosen from a file or among the
+  generated images): the clip's first frame, or the picture Klein and Qwen-Image Edit change as the
+  prompt says ("make it winter"), in its own proportions (Qwen-Image Edit needs one). For a clip,
+  its duration and frame rate. At the bottom, on a darker tray, *Model:* and its picker (image and
+  video models in two groups, each with the memory it wants on a small dark badge; an icon tells the
+  models that also take a reference image, a picture, from those that work from the prompt alone,
+  lines, with a small arrow while one is not downloaded; then its status) above the main button,
+  which does
   what the current state needs: *Download and Generate* → *Generate*, with how long it should take
   (judged from this Mac's earlier generations with the model, e.g. *Generate (~4 min · ⌘↩)*).
   *Reset*, next to the model, goes back to the default model and settings with an empty prompt (⌘Z
@@ -26,8 +30,9 @@ app downloads it, and that is all the setup there is.
   while the app is in front, with the sound as last set; a click on it or space pauses or plays it,
   the controls under the picture), with its prompt (a long one scrolls) and metadata, the running
   generation with its model, progress and time left (for a clip too, counted by its steps' expected
-  time), and the history: the oldest on the left and the newest on the right, then the queue and a
-  *+*, the draft of the next generation: its settings on the left (the last generation's, the first
+  time), and the history: by date, the oldest on the left and the newest on the right, or in your
+  own order (drag an image or clip where you want it; the menu next to *History* switches between
+  the two, and new ones join the end), then the queue and a *+*, the draft of the next generation: its settings on the left (the last generation's, the first
   time), its frame on the right, for Generate to start. What is changed there stays, even across
   launches, while you look through the history. A click on an image or clip, or on a generation
   running or waiting in the queue (or ← →, ⌘[ ⌘]), shows it and puts its prompt, in its blocks, its

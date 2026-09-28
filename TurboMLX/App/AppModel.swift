@@ -122,6 +122,27 @@ final class AppModel {
         static let customModels = "customModels"
         static let draftSettings = "draftSettings"
         static let draftModel = "draftModelID"
+        static let historyOrder = "historyOrder"
+    }
+
+    /// How the strip arranges the history: by date, or as the user dragged it.
+    var historyOrder: HistoryOrder = HistoryOrder(rawValue: UserDefaults.standard.string(forKey: Keys.historyOrder) ?? "") ?? .date {
+        didSet { UserDefaults.standard.set(historyOrder.rawValue, forKey: Keys.historyOrder) }
+    }
+
+    /// The history item being dragged in the strip, to move it where it is dropped.
+    @ObservationIgnored var draggedHistoryItem: HistoryItem.ID?
+
+    /// The history left to right, as the strip shows it and ⌘[ ⌘] walk it.
+    var arrangedHistory: [HistoryItem] {
+        history.arranged(historyOrder)
+    }
+
+    /// A drag in the strip: `id` goes where `target` is, and the strip keeps the custom order from
+    /// then on (a first drag starts it from the order by date).
+    func moveHistoryItem(_ id: HistoryItem.ID, to target: HistoryItem.ID) {
+        history.move(id, to: target, in: arrangedHistory)
+        historyOrder = .custom
     }
 
     init() {
@@ -640,10 +661,10 @@ final class AppModel {
     }
 
     /// Moves through the strip, loading each item's or job's settings as a click would; `offset` -1
-    /// is newer (to the right), +1 is older.
+    /// is to the right (newer, by date), +1 to the left.
     func moveSelection(by offset: Int, undoManager: UndoManager? = nil) {
-        // Left to right, as in the strip: the history from the oldest, then the running and queued jobs.
-        let entries: [ViewerSelection] = history.items.reversed().map { .item($0.id) } + pendingJobs.map { .job($0.id) }
+        // Left to right, as in the strip: the history as arranged, then the running and queued jobs.
+        let entries: [ViewerSelection] = arrangedHistory.map { .item($0.id) } + pendingJobs.map { .job($0.id) }
         guard !entries.isEmpty else { return }
         // The draft sits after them all: left of it is the last one, right of it nothing.
         if viewer == .draft, offset < 0 { return }
@@ -659,16 +680,17 @@ final class AppModel {
         }
     }
 
-    /// Moves items to the Trash. The one on show gives way to its neighbor in the strip: the newer
-    /// one, which slides into its place, or else the older. The controls on the left stay as they are.
+    /// Moves items to the Trash. The one on show gives way to its neighbor in the strip: the one on
+    /// its right, which slides into its place, or else the one on its left. The controls on the left
+    /// stay as they are.
     func delete(_ items: [HistoryItem]) {
         let ids = Set(items.map(\.id))
+        let arranged = arrangedHistory
         if let shown = displayedItem, ids.contains(shown.id),
-           let index = history.items.firstIndex(where: { $0.id == shown.id }) {
-            // Newest first: newer items come before it.
-            let newer = history.items[..<index].last { !ids.contains($0.id) }
-            let older = history.items[(index + 1)...].first { !ids.contains($0.id) }
-            viewer = (newer ?? older).map { .item($0.id) } ?? .live
+           let index = arranged.firstIndex(where: { $0.id == shown.id }) {
+            let right = arranged[(index + 1)...].first { !ids.contains($0.id) }
+            let left = arranged[..<index].last { !ids.contains($0.id) }
+            viewer = (right ?? left).map { .item($0.id) } ?? .live
         }
         history.remove(ids)
     }

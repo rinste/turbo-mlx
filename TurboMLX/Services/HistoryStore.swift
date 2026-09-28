@@ -13,9 +13,13 @@ final class HistoryStore {
     /// Newest first.
     private(set) var items: [HistoryItem] = []
     private(set) var loadError: String?
+    /// The order the user dragged the items into, left to right (ids of items since deleted are
+    /// skipped). Kept in its own file, so the index stays as older versions read it.
+    private(set) var customOrder: [HistoryItem.ID] = []
 
     @ObservationIgnored private var reservedNames: Set<String> = []
     private var indexURL: URL { Self.directory.appending(path: "history.json") }
+    private var orderURL: URL { Self.directory.appending(path: "order.json") }
 
     private static let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -44,6 +48,40 @@ final class HistoryStore {
             let stored = try Self.decoder.decode([HistoryItem].self, from: Data(contentsOf: indexURL))
             // Images deleted from Finder simply drop out of the history.
             items = stored.filter { FileManager.default.fileExists(atPath: url(for: $0).path) }
+            customOrder = (try? Self.decoder.decode([HistoryItem.ID].self, from: Data(contentsOf: orderURL))) ?? []
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
+
+    /// The items left to right: by date, oldest first; or in the custom order, the items it does
+    /// not place yet (newer ones) after it by date.
+    func arranged(_ order: HistoryOrder) -> [HistoryItem] {
+        let byDate = Array(items.reversed())
+        guard order == .custom, !customOrder.isEmpty else { return byDate }
+        let byID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let placed = customOrder.compactMap { byID[$0] }
+        let placedIDs = Set(placed.map(\.id))
+        return placed + byDate.filter { !placedIDs.contains($0.id) }
+    }
+
+    /// Puts `id` where `target` is in `arrangement` (moving right it lands after it, moving left
+    /// before it), and keeps that as the custom order.
+    func move(_ id: HistoryItem.ID, to target: HistoryItem.ID, in arrangement: [HistoryItem]) {
+        var ids = arrangement.map(\.id)
+        guard let from = ids.firstIndex(of: id), let to = ids.firstIndex(of: target), from != to else { return }
+        ids.remove(at: from)
+        ids.insert(id, at: to)
+        customOrder = ids
+        saveOrder()
+    }
+
+    private func saveOrder() {
+        let present = Set(items.map(\.id))
+        customOrder.removeAll { !present.contains($0) }
+        do {
+            try FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
+            try Self.encoder.encode(customOrder).write(to: orderURL, options: .atomic)
         } catch {
             loadError = error.localizedDescription
         }
@@ -181,6 +219,7 @@ final class HistoryStore {
         }
         items.removeAll { ids.contains($0.id) }
         save()
+        if customOrder.contains(where: ids.contains) { saveOrder() }
     }
 
     func removeAll() {
