@@ -1,8 +1,11 @@
 Turbo MLX: acknowledgements
 
-Turbo MLX is built on open-source software; thank you to its authors. The
-models are not part of the app: each one is downloaded from Hugging Face
-under its own license (Settings → About).
+Turbo MLX is free software under the MIT License, © 2026 Stefano Rinaldo:
+https://github.com/rinste/turbo-mlx
+
+It is built on open-source software; thank you to its authors. The models
+are not part of the app: each one is downloaded from Hugging Face under its
+own license (Settings → About).
 
 The engine's Swift ports follow these projects:
 

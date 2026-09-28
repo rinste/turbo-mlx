@@ -217,3 +217,9 @@ with. The repository must be public for the check, and the download, to reach an
 
 - **Engine Log** (⌥⌘L): what the engine prints, warnings included.
 - Settings (⌘,) → Engine: the engine's versions and executable, restart.
+
+## License
+
+Turbo MLX is released under the [MIT License](LICENSE). The models it downloads come with their
+own licenses, listed in the table above and in Settings → About; the libraries built into the app
+and the projects its engine follows, in Settings → About → Acknowledgements.

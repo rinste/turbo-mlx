@@ -167,6 +167,9 @@ private struct AboutSettings: View {
                 LabeledContent("Turbo MLX", value: UpdateChecker.currentVersion)
                 Text("Generates images, and videos with sound, on your Mac’s GPU with MLX. Models download from Hugging Face and stay on your computer: prompts, images and videos never leave your Mac.")
                     .foregroundStyle(.secondary)
+                LabeledContent("Source code") {
+                    Link("MIT License · GitHub", destination: URL(string: "https://github.com/rinste/turbo-mlx")!)
+                }
             }
             Section {
                 Toggle("Check for updates automatically", isOn: $updates.checksAutomatically)
