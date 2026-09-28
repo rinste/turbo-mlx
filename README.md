@@ -31,6 +31,23 @@ app downloads it, and that is all the setup there is.
   controls or the View menu (⌘+, ⌘-, ⌘0 actual size, ⌘9 fit); two-finger scroll (⌥-wheel with a
   mouse) or drag to move around. Quick Look (space), drag and drop, copy.
 
+## Install
+
+Download the disk image from [Releases](https://github.com/rinste/turbo-mlx/releases), open it and
+drag Turbo MLX to Applications. It needs a Mac with Apple silicon, macOS 15 or later, 16 GB of
+memory for the lightest models (each model's needs are in the table below) and room on the disk
+for the models you pick, 5 to 38 GB each.
+
+On first launch, pick a model and click *Download and Generate*: the model downloads once from
+Hugging Face into `~/.cache/huggingface`, where mflux and other tools find it too, and stays there.
+A download resumes where it stopped, tries again by itself when the network drops, and keeps the
+Mac from going to sleep while it runs. *Move to Trash…*, in the ⋯ menu next to the model or in
+Settings → Models, takes a model off the disk again.
+
+Prompts, images and videos never leave the Mac. Besides the model downloads, the app only asks
+GitHub once a day whether a newer version is out (Settings → About turns that off, and Turbo MLX →
+Check for Updates asks at any time).
+
 ## Models
 
 | Model | Memory | Download | Peak at 1024 px | Notes |
@@ -116,8 +133,15 @@ SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo-engine serve ──▶ 
   whose tiles would show seams), and keeps MLX's buffer cache small.
 - **Downloads.** The app downloads models itself (`Services/HubDownloader.swift`) into the
   Hugging Face cache, in the same layout huggingface_hub uses, so mflux and other tools share
-  them; an interrupted download resumes. No engine is needed to download. A gated or private
-  repository uses the token the Hugging Face CLI saved (`hf auth login`).
+  them. Each catalog model comes at the commit it was checked with (`revision` in
+  `Models/ModelCatalog.swift`), so a change upstream never reaches the app untested: move a
+  revision forward only after generating with the model at the new commit. An interrupted
+  download resumes; a transfer the network cuts off is tried again for about two minutes before
+  the download fails; the Mac stays awake while a download or the generation queue runs
+  (`Services/KeepAwake.swift`). A download first checks the disk has room for what is still
+  missing, and fails aloud when the files that arrived are not a complete model. No engine is
+  needed to download. A gated or private repository uses the token the Hugging Face CLI saved
+  (`hf auth login`).
 - **Sandbox.** The app runs in the App Sandbox (`TurboMLX.entitlements`): its history and
   settings live in its container, and outside it the app reaches only `~/.cache/huggingface`,
   the folder the Hugging Face CLI and mflux use by default, through an entitlement for that path
@@ -130,7 +154,7 @@ SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo-engine serve ──▶ 
 
 | What | Where |
 |---|---|
-| History (PNGs + `history.json`) | `~/Library/Containers/com.stefanorinaldo.TurboMLX/Data/Library/Application Support/TurboMLX/History` |
+| History (PNGs, MP4s + `history.json`) | `~/Library/Containers/com.stefanorinaldo.TurboMLX/Data/Library/Application Support/TurboMLX/History` |
 | Models | `~/.cache/huggingface/hub` |
 
 ```
@@ -139,10 +163,11 @@ TurboMLX/
   Models/     catalog and families, settings, jobs, history items
   Services/   the engine process, downloads, Hugging Face cache, history
   Views/      left column, output, history, settings, log
-Engine/       the engine (Swift package: turbo-engine, TurboEngineCore), its fixtures and the
-              mflux reference worker
+Engine/       the engine (Swift package: turbo-engine, TurboEngineCore), its fixtures, the
+              mflux reference worker and the licenses of the projects its ports follow (Licenses/)
 scripts/      release.sh, embed-engine.sh, build-engine.sh, ExportOptions.plist, make-icon.swift
-              (draws the app icon at every size into the asset catalog)
+              (draws the app icon at every size into the asset catalog), make-acknowledgements.swift
+              (the licenses Settings → About shows: Resources/Acknowledgements.txt)
 TurboMLX.entitlements   the app's sandbox (the engine's: Engine/turbo-engine.entitlements)
 ```
 
@@ -181,6 +206,12 @@ scripts/release.sh
 The DMG ends up in `build/release/`. The script checks that the exported app carries
 `turbo-engine`, signed with the Developer ID and allowed to inherit the app's sandbox: without it
 the app cannot generate.
+
+**Publishing a version:** raise `MARKETING_VERSION` (and `CURRENT_PROJECT_VERSION`) in the project,
+run `swift scripts/make-acknowledgements.swift` if the engine's dependencies changed, build the
+DMG, and attach it to a GitHub release of this repository tagged with the same number (`v1.1`
+for 1.1), not marked as a pre-release: that is the release the app's update check compares itself
+with. The repository must be public for the check, and the download, to reach anyone.
 
 ## Troubleshooting
 

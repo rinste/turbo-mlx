@@ -27,6 +27,9 @@ Fixtures/make_*_fixture.py    build the checkpoint + references `verify` compare
 Fixtures/requirements.txt     the mflux revision they (and the reference worker) run with
 Fixtures/requirements-ltx.txt the ltx-2-mlx revision the LTX-2 port follows
 Reference/turbo_worker.py     mflux behind the same protocol, to compare real images
+Licenses/                     the MIT licenses of the projects the ports follow (mflux, ltx-2-mlx,
+                              and mlx-lm with mlx-swift-lm for the mixture-of-experts layers),
+                              which the app's acknowledgements reproduce
 ```
 
 The modules mirror mflux's module tree name for name, so the checkpoints the app already
