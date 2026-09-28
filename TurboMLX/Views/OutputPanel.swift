@@ -8,6 +8,8 @@ struct OutputPanel: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.undoManager) private var undoManager
     @State private var quickLookURL: URL?
+    /// The clip on the stage, here so that space reaches it.
+    @State private var clip = ClipPlayer()
     @FocusState private var isFocused: Bool
 
     var body: some View {
@@ -38,9 +40,14 @@ struct OutputPanel: View {
             default: break
             }
         }
+        // Space plays or pauses a clip, and opens or closes Quick Look on an image.
         .onKeyPress(.space) {
             guard let item = app.displayedItem else { return .ignored }
-            quickLookURL = quickLookURL == nil ? app.url(for: item) : nil
+            if item.kind == .video {
+                clip.togglePlayback()
+            } else {
+                quickLookURL = quickLookURL == nil ? app.url(for: item) : nil
+            }
             return .handled
         }
     }
@@ -58,8 +65,7 @@ struct OutputPanel: View {
         } else if app.showsDraft {
             DraftView()
         } else if let item = app.displayedItem, item.kind == .video {
-            VideoStage(url: app.url(for: item), size: item.size)
-                .id(item.id)
+            VideoStage(player: clip, url: app.url(for: item), size: item.size) { isFocused = true }
         } else if let item = app.displayedItem {
             // A new stage for each image, so it starts fitted.
             ImageStage(item: item) { isFocused = true }
@@ -120,57 +126,79 @@ struct OutputPanel: View {
 // MARK: - Video
 
 /// A clip from the history, its controls under the picture: AVKit's own lay a dark veil over it
-/// while they show. The pointer over the picture plays it silently, over and over; a click plays
-/// or pauses it for real, with the sound as set.
+/// while they show. It plays over and over from the start; a click on the picture, like space,
+/// pauses or plays it.
 private struct VideoStage: View {
+    let player: ClipPlayer
     let url: URL
     let size: PixelSize
-    @State private var player = ClipPlayer()
+    /// A click on the picture also gives the panel the keyboard (space, arrows).
+    let onClick: () -> Void
 
     var body: some View {
         VStack(spacing: 12) {
             PlayerSurface(player: player.player)
                 .aspectRatio(CGSize(width: size.width, height: size.height), contentMode: .fit)
                 .contentShape(Rectangle())
-                .onHover { player.preview($0) }
-                .onTapGesture { player.togglePlayback() }
+                .onTapGesture {
+                    onClick()
+                    player.togglePlayback()
+                }
             TransportBar(player: player)
                 .frame(maxWidth: 560)
         }
         .padding(28)
         .onAppear { player.load(url) }
+        .onChange(of: url) { _, url in player.load(url) }
         .onDisappear { player.stop() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            player.applyPlayback()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            player.applyPlayback()
+        }
     }
 }
 
-/// An AVPlayer and what the controls show of it.
+/// The clip on the stage and what the controls show of it. Each clip plays in a loop, without a gap,
+/// until it is paused, and only while Turbo MLX is in front: a clip that finishes, or keeps looping,
+/// behind another app would play its sound there. The sound stays as last set, for every clip.
 @Observable
 private final class ClipPlayer {
-    let player = AVPlayer()
-    private(set) var isPlaying = false
-    /// Playing only because the pointer is over the picture: silent, and looping.
-    private(set) var isPreviewing = false
+    let player = AVQueuePlayer()
+    /// Paused by the user; a clip starts playing when it is shown.
+    private(set) var isPaused = false
     private(set) var duration: Double = 0
     private(set) var currentTime: Double = 0
-    /// The sound as the user set it, for playing for real.
-    var isMuted = false {
-        didSet { applySound() }
+    var isMuted = UserDefaults.standard.bool(forKey: ClipPlayer.mutedKey) {
+        didSet {
+            player.isMuted = isMuted
+            UserDefaults.standard.set(isMuted, forKey: Self.mutedKey)
+        }
     }
 
-    var isSilent: Bool { isPreviewing || isMuted }
+    private static let mutedKey = "mutesClips"
+    @ObservationIgnored private var url: URL?
+    @ObservationIgnored private var looper: AVPlayerLooper?
     @ObservationIgnored private var timeObserver: Any?
-    @ObservationIgnored private var endObserver: NSObjectProtocol?
     @ObservationIgnored private var isScrubbing = false
+
+    init() {
+        player.isMuted = isMuted
+    }
 
     func load(_ url: URL) {
         stop()
-        let item = AVPlayerItem(url: url)
-        player.replaceCurrentItem(with: item)
-        player.actionAtItemEnd = .pause
+        self.url = url
+        isPaused = false
         currentTime = 0
+        duration = 0
+        let item = AVPlayerItem(url: url)
+        looper = AVPlayerLooper(player: player, templateItem: item)
         Task { [weak self] in
             let duration = (try? await item.asset.load(.duration))?.seconds ?? 0
-            self?.duration = duration.isFinite ? duration : 0
+            guard let self, self.url == url else { return }
+            self.duration = duration.isFinite ? duration : 0
         }
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 30), queue: .main) { [weak self] time in
             MainActor.assumeIsolated {
@@ -178,64 +206,22 @@ private final class ClipPlayer {
                 self.currentTime = time.seconds
             }
         }
-        endObserver = NotificationCenter.default.addObserver(
-            forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                if self.isPreviewing {
-                    self.player.seek(to: .zero)
-                    self.player.play()
-                } else {
-                    self.isPlaying = false
-                }
-            }
-        }
-    }
-
-    /// The pointer entered or left the picture: a silent preview while it is there, unless the
-    /// clip is already playing for real.
-    func preview(_ hovering: Bool) {
-        if hovering {
-            guard !isPlaying else { return }
-            isPreviewing = true
-            applySound()
-            play()
-        } else if isPreviewing {
-            isPreviewing = false
-            player.pause()
-            isPlaying = false
-            applySound()
-        }
+        applyPlayback()
     }
 
     func togglePlayback() {
-        // A click during the preview plays it for real from where it is.
-        if isPreviewing {
-            isPreviewing = false
-            applySound()
-            return
-        }
-        if isPlaying {
-            player.pause()
-            isPlaying = false
+        isPaused.toggle()
+        applyPlayback()
+    }
+
+    /// Plays unless paused, while the app is in front; called again when it comes and goes.
+    func applyPlayback() {
+        guard looper != nil else { return }
+        if !isPaused, NSApp.isActive {
+            player.play()
         } else {
-            play()
+            player.pause()
         }
-    }
-
-    private func play() {
-        // From the start again once it has played to the end.
-        if duration > 0, currentTime >= duration - 0.05 {
-            currentTime = 0
-            player.seek(to: .zero)
-        }
-        player.play()
-        isPlaying = true
-    }
-
-    private func applySound() {
-        player.isMuted = isSilent
     }
 
     func scrub(to seconds: Double) {
@@ -249,11 +235,12 @@ private final class ClipPlayer {
 
     func stop() {
         player.pause()
-        isPlaying = false
+        looper?.disableLooping()
+        looper = nil
+        player.removeAllItems()
         if let timeObserver { player.removeTimeObserver(timeObserver) }
-        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         timeObserver = nil
-        endObserver = nil
+        url = nil
     }
 }
 
@@ -300,11 +287,11 @@ private struct TransportBar: View {
             Button {
                 player.togglePlayback()
             } label: {
-                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                Image(systemName: player.isPaused ? "play.fill" : "pause.fill")
                     .frame(width: 18)
             }
             .buttonStyle(.borderless)
-            .help(player.isPlaying ? "Pause" : "Play")
+            .help(player.isPaused ? "Play (space)" : "Pause (space)")
 
             Text(verbatim: Self.time(player.currentTime))
                 .monospacedDigit()
@@ -323,7 +310,7 @@ private struct TransportBar: View {
             Button {
                 player.isMuted.toggle()
             } label: {
-                Image(systemName: player.isSilent ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                Image(systemName: player.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                     .frame(width: 20)
             }
             .buttonStyle(.borderless)
