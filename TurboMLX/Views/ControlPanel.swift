@@ -48,12 +48,10 @@ private struct ModelSelection: View {
         @Bindable var app = app
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                // One flat list: the names say the family, and the menu stays short.
+                // Images, then videos; within each, the names say the family and the memory.
                 Picker("Model", selection: $app.selectedModelID) {
-                    ForEach(app.models) { model in
-                        Label(model.name, systemImage: app.isInstalled(model) ? "checkmark.circle.fill" : "arrow.down.circle")
-                            .tag(model.id)
-                    }
+                    section("Image", media: .image)
+                    section("Video", media: .video)
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
@@ -75,6 +73,19 @@ private struct ModelSelection: View {
         }
         .sheet(isPresented: $showsAddModel) {
             AddModelSheet()
+        }
+    }
+
+    @ViewBuilder
+    private func section(_ title: String, media: MediaKind) -> some View {
+        let models = app.models.filter { $0.family.media == media }
+        if !models.isEmpty {
+            Section(title) {
+                ForEach(models) { model in
+                    Label(model.name, systemImage: app.isInstalled(model) ? "checkmark.circle.fill" : "arrow.down.circle")
+                        .tag(model.id)
+                }
+            }
         }
     }
 }
@@ -1062,10 +1073,11 @@ private struct MemoryRows: View {
 
 // MARK: - Generate
 
-/// The model and the main action, under the settings. The action adapts to what is missing:
-/// engine, model, then generation.
+/// The model and the main action, under the settings, on a darker tray. The action adapts to what
+/// is missing: engine, model, then generation, with how long that should take.
 private struct GenerateBar: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(spacing: 10) {
@@ -1109,7 +1121,12 @@ private struct GenerateBar: View {
             }
         }
         .padding(14)
-        .background(.bar)
+        // Darker than the settings it follows: the model and the button are a tray of their own.
+        .background {
+            Rectangle()
+                .fill(.bar)
+                .overlay(Color.black.opacity(colorScheme == .dark ? 0.32 : 0.07))
+        }
         .overlay(alignment: .top) { Divider() }
     }
 
@@ -1134,14 +1151,45 @@ private struct GenerateBar: View {
             wideButton("Downloading\(percent)", systemImage: "arrow.down.circle") {}
                 .disabled(true)
         case .noModel, .emptyPrompt:
-            wideButton(generateTitle, systemImage: generateSymbol, shortcut: "⌘↩") {}
+            wideButton(generateTitle, systemImage: generateSymbol, note: note) {}
                 .disabled(true)
         case nil:
-            wideButton(generateTitle, systemImage: generateSymbol, shortcut: "⌘↩") { app.generate() }
-                .help(app.isBusy
-                      ? "Queue these settings: they start when the images ahead are done (⌘↩)"
-                      : "Generate (⌘↩)")
+            wideButton(generateTitle, systemImage: generateSymbol, note: note) { app.generate() }
+                .help((app.isBusy
+                       ? "Queue these settings: they start when the ones ahead are done (⌘↩)."
+                       : "Generate (⌘↩).") + (estimateSource.map { " " + $0 } ?? ""))
         }
+    }
+
+    /// "~4 min · ⌘↩": how long the button's work should take, then its shortcut.
+    private var note: String {
+        [estimate.map { Format.estimate($0.seconds) }, "⌘↩"].compactMap(\.self).joined(separator: " · ")
+    }
+
+    private var estimateSource: String? {
+        guard let estimate else { return nil }
+        return estimate.isFromHistory
+            ? "The time is judged from this Mac’s earlier generations with this model."
+            : "The time is a first guess, from this model’s speed on an M1 Max; it follows this Mac once it has used the model."
+    }
+
+    /// With the settings as they are now, for all the images or clips the button would queue.
+    private var estimate: TimeEstimate.Result? {
+        guard let model = app.selectedModel else { return nil }
+        let settings = app.settings
+        return TimeEstimate.estimate(
+            model: model,
+            size: settings.size(for: model.family),
+            steps: min(max(settings.steps, model.stepRange.lowerBound), model.stepRange.upperBound),
+            guidance: settings.guidance,
+            frames: model.family.media == .video ? settings.videoFrames : nil,
+            lowMemory: settings.lowMemory,
+            count: settings.batchCount,
+            // A model the queue is using will be in memory by then.
+            isLoaded: app.isLoaded(model) || (app.queue.last ?? app.activeJob)?.model.id == model.id,
+            history: app.history.items,
+            models: app.models
+        )
     }
 
     /// Prompt, model and settings are captured now, so the user can keep editing while it waits.
@@ -1169,17 +1217,17 @@ private struct GenerateBar: View {
         }
     }
 
-    /// `shortcut` follows the title, lighter, e.g. "Generate (⌘↩)".
+    /// `note` follows the title, lighter, e.g. "Generate (~4 min · ⌘↩)".
     private func wideButton(
         _ title: String,
         systemImage: String,
-        shortcut: String? = nil,
+        note: String? = nil,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Label {
-                if let shortcut {
-                    Text("\(title) \(Text(verbatim: "(\(shortcut))").fontWeight(.regular).foregroundStyle(.secondary))")
+                if let note {
+                    Text("\(title) \(Text(verbatim: "(\(note))").fontWeight(.regular).foregroundStyle(.secondary))")
                         .accessibilityLabel(title)
                 } else {
                     Text(title)

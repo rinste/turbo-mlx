@@ -152,6 +152,14 @@ enum Format {
         value < 10 ? "\(value.formatted(.number.precision(.fractionLength(1)))) s" : duration(value)
     }
 
+    /// "~45 s", "~4 min", "~1 h 10 min": a duration no more precise than a guess can be.
+    static func estimate(_ seconds: Double) -> String {
+        if seconds < 100 { return "~\(max(5, Int((seconds / 5).rounded()) * 5)) s" }
+        if seconds < 3570 { return "~\(Int((seconds / 60).rounded())) min" }
+        let minutes = Int((seconds / 300).rounded()) * 5
+        return minutes % 60 == 0 ? "~\(minutes / 60) h" : "~\(minutes / 60) h \(minutes % 60) min"
+    }
+
     static func remaining(_ seconds: Double) -> String {
         seconds < 5 ? "almost done" : "about \(duration(seconds)) left"
     }

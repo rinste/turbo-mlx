@@ -12,9 +12,11 @@ app downloads it, and that is all the setup there is.
   guidance; under *Advanced*, the resolution or a custom size, seed, number of images, transparent
   or white background, memory saving. For a video model, a *Reference Image* above the prompt
   (dropped from Finder or from the history, chosen from a file or among the generated images: the
-  clip's first frame) and the clip's duration and frame rate. At the bottom, the model (with
-  download and status) above the main button, which does what the current state needs:
-  *Download and Generate* → *Generate*.
+  clip's first frame) and the clip's duration and frame rate. At the bottom, on a darker tray, the
+  model (image and video models in two groups, with download and status) above the main button,
+  which does what the current state needs: *Download and Generate* → *Generate*, with how long it
+  should take (judged from this Mac's earlier generations with the model, e.g. *Generate (~4 min ·
+  ⌘↩)*).
 - **Right column:** the image (on a checkerboard when transparent) or the clip, with its prompt (a
   long one scrolls) and metadata, the running generation with its model, per-step progress and time left,
   and the history with the queue. Zoom: pinch, the mouse wheel, double-click, ⌘-scroll, the − % +
