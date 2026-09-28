@@ -104,7 +104,9 @@ private struct ModelSelection: View {
                     Label {
                         // The memory as a small dark badge after the name, where a name has it.
                         if model.shortName != model.name, let memory = model.memoryLabel {
-                            Text("\(model.shortName)  \(Image(nsImage: MemoryBadge.image(memory)))")
+                            // Lowered from the baseline, where a picture in a text sits, to the
+                            // middle of the name.
+                            Text("\(model.shortName)  \(Text(Image(nsImage: MemoryBadge.image(memory))).baselineOffset(MemoryBadge.baselineOffset))")
                         } else {
                             Text(model.name)
                         }
@@ -156,26 +158,32 @@ private enum ModelIcon {
 }
 
 /// "24 GB RAM" in small white letters on a dark pill, drawn once as an image so a menu item can
-/// carry it after the name.
+/// carry it after the name. The capitals sit in the middle of the pill, with room around them.
 private enum MemoryBadge {
     private static var cache: [String: NSImage] = [:]
+    private static let height: CGFloat = 15
+
+    /// A picture in a text stands on the baseline: this brings the pill's middle down to the middle
+    /// of the name's capitals (13-point text, capitals about 9.4 points tall).
+    static let baselineOffset: CGFloat = -3
 
     static func image(_ text: String) -> NSImage {
         if let cached = cache[text] { return cached }
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 9.5, weight: .semibold),
-            .foregroundColor: NSColor.white,
-        ]
-        let textSize = (text as NSString).size(withAttributes: attributes)
-        let size = NSSize(width: ceil(textSize.width) + 12, height: 15)
+        let font = NSFont.systemFont(ofSize: 8, weight: .semibold)
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white, .kern: 0.3]
+        let textWidth = ceil((text as NSString).size(withAttributes: attributes).width)
+        let size = NSSize(width: textWidth + 14, height: height)
         let image = NSImage(size: size, flipped: false) { rect in
-            let pill = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 7, yRadius: 7)
+            let pill = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: rect.height / 2 - 0.5, yRadius: rect.height / 2 - 0.5)
             NSColor(white: 0.08, alpha: 0.9).setFill()
             pill.fill()
             NSColor(white: 1, alpha: 0.18).setStroke()
             pill.lineWidth = 1
             pill.stroke()
-            (text as NSString).draw(at: NSPoint(x: 6, y: (rect.height - textSize.height) / 2), withAttributes: attributes)
+            // The baseline where the capitals' middle is the pill's (the descender lies below the
+            // point the text is drawn at).
+            let baseline = rect.midY - font.capHeight / 2
+            (text as NSString).draw(at: NSPoint(x: 7, y: baseline + font.descender), withAttributes: attributes)
             return true
         }
         image.accessibilityDescription = text
