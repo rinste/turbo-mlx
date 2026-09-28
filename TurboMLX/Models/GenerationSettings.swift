@@ -186,8 +186,8 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
 /// Everything the backend needs for one image.
 nonisolated struct GenerationRequest: Codable, Hashable, Sendable {
     var prompt: String
-    /// The blocks the prompt was assembled from, so Reuse Settings brings them back (older
-    /// history items have none).
+    /// The blocks the prompt was assembled from, so Reuse Prompt and Settings brings them back
+    /// (older history items have none).
     var blocks: [PromptBlock]?
     var seed: Int
     var size: PixelSize

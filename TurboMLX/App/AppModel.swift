@@ -486,10 +486,11 @@ final class AppModel {
         history.removeAll()
     }
 
-    /// Loads an image's settings back into the controls.
+    /// Loads an image's prompt blocks, model and settings back into the controls.
     func reuse(_ item: HistoryItem) {
         // The model first: switching family resets steps and guidance to its defaults.
-        if models.contains(where: { $0.id == item.modelID }) { selectedModelID = item.modelID }
+        let model = models.first { $0.id == item.modelID }
+        if let model { selectedModelID = model.id }
         var updated = settings
         if let blocks = item.request.blocks, !blocks.isEmpty {
             updated.blocks = blocks
@@ -501,7 +502,11 @@ final class AppModel {
         updated.guidance = item.request.guidance
         updated.randomSeed = false
         updated.seed = item.request.seed
-        updated.transparentBackground = item.request.transparentBackground
+        // Only a model that makes transparent images says which background was chosen: the
+        // others always save false, which would turn the choice off for the next Ming image.
+        if model?.family.producesAlpha == true {
+            updated.transparentBackground = item.request.transparentBackground
+        }
         settings = updated
     }
 

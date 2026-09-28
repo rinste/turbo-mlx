@@ -89,7 +89,7 @@ private struct GenerationCommands: Commands {
             Divider()
 
             let item = model.showsLiveJob ? nil : model.displayedItem
-            Button("Reuse Settings") {
+            Button("Reuse Prompt and Settings") {
                 if let item { model.reuse(item) }
             }
             .keyboardShortcut("r", modifiers: .command)

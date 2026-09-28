@@ -68,6 +68,7 @@ struct OutputPanel: View {
         }
     }
 
+    /// Reuse Prompt and Settings is not here but in the bar under the image, next to the settings.
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .status) {
@@ -75,14 +76,6 @@ struct OutputPanel: View {
         }
         ToolbarItemGroup(placement: .primaryAction) {
             let item = app.showsLiveJob ? nil : app.displayedItem
-            Button {
-                if let item { app.reuse(item) }
-            } label: {
-                Label("Reuse Settings", systemImage: "arrow.uturn.backward.circle")
-            }
-            .help("Load this image’s prompt, seed and settings into the controls (⌘R)")
-            .disabled(item == nil)
-
             Button {
                 if let item { NSPasteboard.general.copyImage(at: app.url(for: item)) }
             } label: {
@@ -176,30 +169,55 @@ private struct ItemInfoBar: View {
     @Environment(AppModel.self) private var app
     let item: HistoryItem
 
+    /// Five lines of callout text, 15 pt each: a longer prompt scrolls, so the image keeps its room.
+    private static let promptHeight: CGFloat = 75
+    /// The prompt's scroll bar goes in the bar's margin instead of over the text.
+    private static let scrollBarMargin: CGFloat = 12
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(item.prompt)
-                .font(.callout)
-                .lineLimit(3)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .help(item.prompt)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    MetadataChip(systemImage: "cpu", text: shortModelName, help: "\(item.modelName)\n\(item.modelID)")
-                    MetadataChip(systemImage: "aspectratio", text: "\(item.size.width)×\(item.size.height)")
-                    MetadataChip(systemImage: "stairs", text: "\(item.request.steps) steps")
-                    MetadataChip(systemImage: "dial.medium", text: "CFG \(Format.guidance(item.request.guidance))")
-                    MetadataChip(systemImage: "dice", text: "\(item.request.seed)", help: "Seed \(item.request.seed)")
-                    MetadataChip(systemImage: "timer", text: Format.duration(item.seconds), help: timingHelp)
-                    if let peak = item.peakMemory {
-                        MetadataChip(systemImage: "memorychip", text: Format.memory(peak), help: "Peak memory")
-                    }
-                    MetadataChip(
-                        systemImage: "calendar",
-                        text: item.createdAt.formatted(date: .abbreviated, time: .shortened)
-                    )
+            HeightLimit(maxHeight: Self.promptHeight) {
+                ScrollView {
+                    Text(item.prompt)
+                        .font(.callout)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .contentMargins(.trailing, Self.scrollBarMargin, for: .scrollContent)
+                .scrollBounceBehavior(.basedOnSize)
+                // Shows that a long prompt goes on below.
+                .scrollIndicatorsFlash(onAppear: true)
+            }
+            .padding(.trailing, -Self.scrollBarMargin)
+            // Each image's prompt starts from the top.
+            .id(item.id)
+
+            HStack(spacing: 10) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        MetadataChip(systemImage: "cpu", text: shortModelName, help: "\(item.modelName)\n\(item.modelID)")
+                        MetadataChip(systemImage: "aspectratio", text: "\(item.size.width)×\(item.size.height)")
+                        MetadataChip(systemImage: "stairs", text: "\(item.request.steps) steps")
+                        MetadataChip(systemImage: "dial.medium", text: "CFG \(Format.guidance(item.request.guidance))")
+                        MetadataChip(systemImage: "dice", text: "\(item.request.seed)", help: "Seed \(item.request.seed)")
+                        MetadataChip(systemImage: "timer", text: Format.duration(item.seconds), help: timingHelp)
+                        if let peak = item.peakMemory {
+                            MetadataChip(systemImage: "memorychip", text: Format.memory(peak), help: "Peak memory")
+                        }
+                        MetadataChip(
+                            systemImage: "calendar",
+                            text: item.createdAt.formatted(date: .abbreviated, time: .shortened)
+                        )
+                    }
+                }
+
+                Button {
+                    app.reuse(item)
+                } label: {
+                    Label("Reuse Prompt and Settings", systemImage: "rectangle.lefthalf.inset.filled.arrow.left")
+                }
+                .controlSize(.small)
+                .help("Put this image’s prompt, in its blocks, its model, size, steps, guidance and seed in the controls on the left (⌘R)")
             }
         }
         .padding(.horizontal, 16)
@@ -223,13 +241,32 @@ private struct ItemInfoBar: View {
     }
 }
 
+/// Its content at the height it needs, up to `maxHeight`: a scroll view in it is as tall as a
+/// short text, and scrolls a long one.
+private nonisolated struct HeightLimit: Layout {
+    let maxHeight: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let content = subviews.first else { return .zero }
+        let ideal = content.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+        return CGSize(
+            width: proposal.width ?? ideal.width,
+            height: min(ideal.height, maxHeight, proposal.height ?? .infinity)
+        )
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+    }
+}
+
 /// Actions shared by the viewer and the thumbnails.
 struct HistoryItemMenu: View {
     @Environment(AppModel.self) private var app
     let item: HistoryItem
 
     var body: some View {
-        Button("Reuse Settings") { app.reuse(item) }
+        Button("Reuse Prompt and Settings") { app.reuse(item) }
         Button("Copy Prompt") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(item.prompt, forType: .string)

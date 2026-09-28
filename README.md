@@ -13,11 +13,13 @@ app downloads it, and that is all the setup there is.
   or white background, memory saving. At the bottom, the model (with download and status) above
   the main button, which does what the current state needs:
   *Download and Generate* → *Generate*.
-- **Right column:** the image (on a checkerboard when transparent) with its metadata, the running
-  generation with per-step progress and time left, and the history with the queue. Zoom: pinch,
-  the mouse wheel, double-click, ⌘-scroll, the − % + controls or the View menu (⌘+, ⌘-, ⌘0 actual
-  size, ⌘9 fit); two-finger scroll (⌥-wheel with a mouse) or drag to move around. Quick Look
-  (space), drag and drop, copy, *Reuse Settings* (⌘R).
+- **Right column:** the image (on a checkerboard when transparent) with its prompt (a long one
+  scrolls) and metadata, the running generation with per-step progress and time left, and the
+  history with the queue. Zoom: pinch, the mouse wheel, double-click, ⌘-scroll, the − % + controls
+  or the View menu (⌘+, ⌘-, ⌘0 actual size, ⌘9 fit); two-finger scroll (⌥-wheel with a mouse) or
+  drag to move around. Quick Look (space), drag and drop, copy. *Reuse Prompt and Settings* (the
+  button under the image, or ⌘R) puts the image's prompt, in its blocks, its model and its
+  settings back in the left column.
 
 ## Models
 
