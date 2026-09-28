@@ -296,14 +296,21 @@ private struct LiveJobView: View {
                         .strokeBorder(.tertiary, style: StrokeStyle(lineWidth: 1, dash: [6, 5]))
                 }
                 .overlay {
+                    // What is being made: which model, and how big.
                     VStack(spacing: 6) {
                         Image(systemName: "sparkles")
                             .font(.system(size: 34, weight: .light))
                             .symbolEffect(.pulse, isActive: !job.isCancelling)
+                        // The family, as under a finished image; the tooltip has the full name.
+                        Text(job.model.family.displayName)
+                            .font(.callout.weight(.medium))
+                            .lineLimit(1)
+                            .help(job.model.name)
                         Text(verbatim: "\(size.width) × \(size.height)")
                             .font(.caption.monospacedDigit())
                     }
                     .foregroundStyle(.secondary)
+                    .padding(8)
                 }
                 .aspectRatio(CGSize(width: size.width, height: size.height), contentMode: .fit)
                 .frame(maxWidth: min(CGFloat(size.width), 520), maxHeight: min(CGFloat(size.height), 520))
