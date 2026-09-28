@@ -30,22 +30,22 @@ final class QwenCausalConv3D: Module {
 }
 
 /// `QwenImageRMSNorm`: the L2 norm over the channels (floored at eps), scaled by √C and a weight.
-/// The weight keeps the shape mflux stores it with ([C, 1, 1] or [C, 1, 1, 1]).
+/// The weight is flat ([C]), as mflux's checkpoints store it (see `QwenImageVAE.weights(_:)`).
 final class QwenImageRMSNorm: Module {
     @ParameterInfo var weight: MLXArray
     let eps: Float = 1e-12
     let scale: Float
 
-    init(channels: Int, images: Bool) {
+    init(channels: Int) {
         scale = Float(channels).squareRoot()
-        _weight.wrappedValue = MLXArray.ones(images ? [channels, 1, 1] : [channels, 1, 1, 1])
+        _weight.wrappedValue = MLXArray.ones([channels])
         super.init()
     }
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
         let norm = sqrt((x * x).sum(axis: -1, keepDims: true))
         let denominator = maximum(norm, MLXArray(eps).asType(norm.dtype))
-        return x / denominator * scale * weight.reshaped([-1])
+        return x / denominator * scale * weight
     }
 }
 
@@ -57,9 +57,9 @@ final class QwenResBlock3D: Module {
     @ModuleInfo(key: "skip_conv") var skipConv: QwenCausalConv3D?
 
     init(inChannels: Int, outChannels: Int) {
-        _norm1.wrappedValue = QwenImageRMSNorm(channels: inChannels, images: false)
+        _norm1.wrappedValue = QwenImageRMSNorm(channels: inChannels)
         _conv1.wrappedValue = QwenCausalConv3D(inChannels: inChannels, outChannels: outChannels, kernelSize: 3, padding: 1)
-        _norm2.wrappedValue = QwenImageRMSNorm(channels: outChannels, images: false)
+        _norm2.wrappedValue = QwenImageRMSNorm(channels: outChannels)
         _conv2.wrappedValue = QwenCausalConv3D(inChannels: outChannels, outChannels: outChannels, kernelSize: 3, padding: 1)
         _skipConv.wrappedValue = inChannels != outChannels
             ? QwenCausalConv3D(inChannels: inChannels, outChannels: outChannels, kernelSize: 1, padding: 0)
@@ -84,7 +84,7 @@ final class QwenAttentionBlock3D: Module {
 
     init(dim: Int) {
         self.dim = dim
-        _norm.wrappedValue = QwenImageRMSNorm(channels: dim, images: true)
+        _norm.wrappedValue = QwenImageRMSNorm(channels: dim)
         _toQKV.wrappedValue = Conv2d(inputChannels: dim, outputChannels: dim * 3, kernelSize: 1, stride: 1, padding: 0)
         _proj.wrappedValue = Conv2d(inputChannels: dim, outputChannels: dim, kernelSize: 1, stride: 1, padding: 0)
         super.init()
@@ -95,12 +95,11 @@ final class QwenAttentionBlock3D: Module {
         let frames = x.reshaped([batch * time, height, width, channels])
         let qkv = toQKV(norm(frames)).reshaped([batch * time, height * width, 3 * channels])
         let parts = qkv.split(parts: 3, axis: -1)
-        let q = parts[0].expandedDimensions(axis: 1)
-        let k = parts[1].expandedDimensions(axis: 1)
-        let v = parts[2].expandedDimensions(axis: 1)
-        let attended = MLXFast.scaledDotProductAttention(
-            queries: q, keys: k, values: v, scale: 1 / Float(channels).squareRoot(), mask: nil
-        )
+        // Computed as mflux does: the scores in the activations' dtype, then a float32 scale. A
+        // decode that starts in bf16 (Ming-Image's) goes on in float32 from here, as it does there.
+        let scale = 1 / sqrt(MLXArray(Float(channels)))
+        let scores = matmul(parts[0], parts[1].transposed(0, 2, 1)) * scale
+        let attended = matmul(softmax(scores, axis: -1), parts[2])
         let merged = proj(attended.reshaped([batch * time, height, width, channels]))
         return merged.reshaped([batch, time, height, width, channels]) + x
     }
@@ -182,7 +181,7 @@ final class QwenDecoder3D: Module {
         _upBlock1.wrappedValue = QwenUpBlock3D(inChannels: d2, outChannels: d4, upsample: true)
         _upBlock2.wrappedValue = QwenUpBlock3D(inChannels: d2, outChannels: d2, upsample: true)
         _upBlock3.wrappedValue = QwenUpBlock3D(inChannels: d1, outChannels: d1, upsample: false)
-        _normOut.wrappedValue = QwenImageRMSNorm(channels: d1, images: false)
+        _normOut.wrappedValue = QwenImageRMSNorm(channels: d1)
         _convOut.wrappedValue = QwenCausalConv3D(inChannels: d1, outChannels: outChannels, kernelSize: 3, padding: 1)
         super.init()
     }
@@ -223,6 +222,20 @@ public final class QwenImageVAE: Module {
     /// not part of this still-image, decoder-only port.
     public static func ignoresKey(_ key: String) -> Bool {
         key.hasPrefix("encoder.") || key.hasPrefix("quant_conv.") || key.contains(".time_conv.")
+    }
+
+    /// The checkpoint's tensors with the norms' weights flat. mflux's checkpoints store them so
+    /// ([C], `reshape_gamma_to_1d`); one saved straight from mflux's modules, as the fixtures
+    /// are, keeps [C, 1, 1(, 1)]. mflux takes either and reshapes the weight where it uses it.
+    public static func weights(_ tensors: [String: MLXArray]) -> [String: MLXArray] {
+        var weights = tensors
+        for (key, value) in tensors where value.ndim > 1 {
+            let path = key.split(separator: ".")
+            if path.count >= 2, path[path.count - 1] == "weight", path[path.count - 2].hasPrefix("norm") {
+                weights[key] = value.reshaped([-1])
+            }
+        }
+        return weights
     }
 
     /// [B, h, w, 16] channels-last latents (as the transformer left them) → [B, H, W, C] in [-1, 1].

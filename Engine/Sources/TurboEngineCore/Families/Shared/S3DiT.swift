@@ -297,7 +297,7 @@ public final class S3DiTTransformer: Module {
 
         // Positions: the caption on the t axis from 1, the image grid after the (32-aligned) caption.
         var capIds = Self.coordinates([capPadded, 1, 1], start: [1, 0, 0])
-        var imageIds = Self.coordinates([size.frames, size.height / Self.patchSize, size.width / Self.patchSize], start: [capPadded + 1, 0, 0])
+        var imageIds = Self.coordinates([size.frames, size.height / S3DiTConfig.patchSize, size.width / S3DiTConfig.patchSize], start: [capPadded + 1, 0, 0])
         var image = tokens
         var imagePad = 0
         if config.padsToMultiple {
@@ -353,7 +353,7 @@ public final class S3DiTTransformer: Module {
 
     /// [C, F, H, W] → [F·(H/p)·(W/p), p·p·C] tokens, (p, p, C) inside each, row-major over the grid.
     static func patchify(_ x: MLXArray) -> (MLXArray, LatentSize) {
-        let p = patchSize
+        let p = S3DiTConfig.patchSize
         let (c, f, h, w) = (x.shape[0], x.shape[1], x.shape[2], x.shape[3])
         let reshaped = x.reshaped([c, f, 1, h / p, p, w / p, p])
         let ordered = reshaped.transposed(1, 3, 5, 2, 4, 6, 0)
@@ -362,7 +362,7 @@ public final class S3DiTTransformer: Module {
 
     /// The inverse: tokens [F·(H/p)·(W/p), p·p·C] → [C, F, H, W].
     static func unpatchify(_ x: MLXArray, size: LatentSize, outChannels: Int) -> MLXArray {
-        let p = patchSize
+        let p = S3DiTConfig.patchSize
         let (f, h, w) = (size.frames, size.height, size.width)
         let reshaped = x.reshaped([f, h / p, w / p, 1, p, p, outChannels])
         return reshaped.transposed(6, 0, 3, 1, 4, 2, 5).reshaped([outChannels, f, h, w])

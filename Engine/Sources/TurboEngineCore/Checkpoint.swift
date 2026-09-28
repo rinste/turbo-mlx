@@ -97,34 +97,80 @@ public enum WeightLoading {
         var weights: [String: MLXArray] = [:]
         for (key, value) in tensors where !ignoring(key) { weights[key] = value }
 
-        quantize(model: module, filter: { (path: String, layer: Module) -> (groupSize: Int, bits: Int)? in
-            guard let scales = weights["\(path).scales"], let packed = weights["\(path).weight"] else { return nil }
-            let inputDims: Int
-            if let linear = layer as? Linear {
-                inputDims = linear.weight.shape[1]
-            } else if let embedding = layer as? Embedding {
-                inputDims = embedding.weight.shape[1]
-            } else if let experts = layer as? SwitchLinear {
-                // Stacked experts [E, out, in]: the packed width and the scales are per expert row.
-                inputDims = experts.weight.shape[2]
-            } else {
-                return nil
-            }
-            guard inputDims > 0, let packedWidth = packed.shape.last, let scalesWidth = scales.shape.last, scalesWidth > 0
-            else { return nil }
-            let bits = packedWidth * 32 / inputDims
-            let groupSize = inputDims / scalesWidth
-            guard inferableBits.contains(bits), inferableGroupSizes.contains(groupSize) else {
-                Emitter.shared.log("[turbo] cannot read the quantization of \(path) (bits \(bits), group \(groupSize))")
-                return nil
-            }
-            return (groupSize: groupSize, bits: bits)
-        })
-
         do {
+            let leaves = module.leafModules().flattened()
+            let replacements = leaves.compactMap { (path, layer) -> (String, Module)? in
+                guard let (groupSize, bits) = storedQuantization(of: layer, at: path, in: weights),
+                      let quantized = quantizeSingle(layer: layer, groupSize: groupSize, bits: bits, mode: .affine)
+                else { return nil }
+                return (path, quantized)
+            }
+            if !replacements.isEmpty {
+                let layers = Dictionary(leaves, uniquingKeysWith: { first, _ in first })
+                let tree = completingLists(NestedItem.unflattened(replacements), at: "", layers: layers)
+                try module.update(modules: NestedDictionary(item: tree), verify: .none)
+            }
             try module.update(parameters: ModuleParameters.unflattened(weights), verify: .all)
         } catch {
             throw LoadError.update(String(describing: error))
+        }
+    }
+
+    /// The bits and group size a layer is stored with, read off the packed weight and the scales;
+    /// nil for a layer stored as it is.
+    static func storedQuantization(of layer: Module, at path: String, in weights: [String: MLXArray]) -> (groupSize: Int, bits: Int)? {
+        guard let scales = weights["\(path).scales"], let packed = weights["\(path).weight"] else { return nil }
+        let inputDims: Int
+        if let linear = layer as? Linear {
+            inputDims = linear.weight.shape[1]
+        } else if let embedding = layer as? Embedding {
+            inputDims = embedding.weight.shape[1]
+        } else if let experts = layer as? SwitchLinear {
+            // Stacked experts [E, out, in]: the packed width and the scales are per expert row.
+            inputDims = experts.weight.shape[2]
+        } else {
+            return nil
+        }
+        guard inputDims > 0, let packedWidth = packed.shape.last, let scalesWidth = scales.shape.last, scalesWidth > 0
+        else { return nil }
+        let bits = packedWidth * 32 / inputDims
+        let groupSize = inputDims / scalesWidth
+        guard inferableBits.contains(bits), inferableGroupSizes.contains(groupSize) else {
+            Emitter.shared.log("[turbo] cannot read the quantization of \(path) (bits \(bits), group \(groupSize))")
+            return nil
+        }
+        return (groupSize: groupSize, bits: bits)
+    }
+
+    /// MLXNN replaces the modules of a list only when the update starts with the list's first
+    /// element, and keeps only as many as it is given: a list whose first layer stays as it is (the
+    /// S3-DiT's `cap_embedder`, an RMSNorm then a quantized linear) or whose first block has
+    /// nothing quantized would not load. This fills the gaps: a list of layers gets every layer,
+    /// the ones that stay passed as themselves, and a list of blocks an empty update for the blocks
+    /// with nothing to replace.
+    static func completingLists(_ item: NestedItem<String, Module>, at path: String, layers: [String: Module]) -> NestedItem<String, Module> {
+        let prefix = path.isEmpty ? "" : "\(path)."
+        switch item {
+        case .dictionary(let children):
+            var completed: [String: NestedItem<String, Module>] = [:]
+            for (key, child) in children {
+                completed[key] = completingLists(child, at: prefix + key, layers: layers)
+            }
+            return .dictionary(completed)
+        case .array(let elements) where elements.contains(where: { if case .value = $0 { true } else { false } }):
+            var count = elements.count
+            while layers["\(prefix)\(count)"] != nil { count += 1 }
+            return .array((0 ..< count).map { index in
+                if index < elements.count, case .value = elements[index] { return elements[index] }
+                return layers["\(prefix)\(index)"].map { .value($0) } ?? .none
+            })
+        case .array(let elements):
+            return .array(elements.enumerated().map { index, element in
+                if case .none = element { return .dictionary([:]) }
+                return completingLists(element, at: "\(prefix)\(index)", layers: layers)
+            })
+        default:
+            return item
         }
     }
 }

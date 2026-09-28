@@ -52,7 +52,7 @@ public final class MingModel: FamilyModel {
         let transformer = S3DiTTransformer(config: config.transformer)
         let vae = QwenImageVAE(outChannels: 4, baseDim: config.vaeBaseDim, normalization: .scale(config.vaeScalingFactor))
         try WeightLoading.apply(try checkpoint.loadComponent("transformer"), to: transformer, ignoring: Self.ignoresTransformerKey)
-        try WeightLoading.apply(try checkpoint.loadComponent("vae"), to: vae, ignoring: QwenImageVAE.ignoresKey)
+        try WeightLoading.apply(QwenImageVAE.weights(try checkpoint.loadComponent("vae")), to: vae, ignoring: QwenImageVAE.ignoresKey)
         bits = checkpoint.bits
         imageSide = (transformer, vae)
         imageSideUsed = false

@@ -47,7 +47,7 @@ public final class QwenImageModel: FamilyModel {
         let transformer = QwenImageTransformer(config: config.transformer)
         let vae = QwenImageVAE(outChannels: 3, baseDim: config.vaeBaseDim, normalization: .meanStd)
         try WeightLoading.apply(try checkpoint.loadComponent("transformer"), to: transformer)
-        try WeightLoading.apply(try checkpoint.loadComponent("vae"), to: vae, ignoring: QwenImageVAE.ignoresKey)
+        try WeightLoading.apply(QwenImageVAE.weights(try checkpoint.loadComponent("vae")), to: vae, ignoring: QwenImageVAE.ignoresKey)
         bits = checkpoint.bits
         imageSide = (transformer, vae)
         imageSideUsed = false

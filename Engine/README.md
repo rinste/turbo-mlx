@@ -98,7 +98,9 @@ activations, and that check decides for it: in bf16 its layers carry the roundin
 kernels, which differ between mlx-swift's MLX (0.31) and the Python one, and the fixture's random
 weights amplify it (shown, marked "·"). Ming's router picks experts from bf16 scores, so a rounding
 difference between the two MLX versions can flip a choice; the fixture's random weights make that
-unlikely, and it would show as a large error on the caption features alone.
+unlikely, and it would show as a large error on the caption features alone. Ming's text side and
+the start of its decode run in bf16 as well, as in mflux, and land at 2–3% on the fixture where
+the other families' stages stay under 1%.
 
 The fixture generators are ordinary mflux code and run wherever mflux imports (they were exercised
 on a Linux CPU build of MLX while the ports were written); `verify` needs the Mac.

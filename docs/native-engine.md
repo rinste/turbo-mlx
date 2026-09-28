@@ -34,10 +34,27 @@ Qwen-Image 2512 and Ming-Image on the native engine (`Engine/Sources/TurboEngine
 each loading the catalog's mflux checkpoint unchanged, with a fixture generator and a `verify`
 stage of its own, and Klein's base checkpoints with their classifier-free guidance. The app routes
 every built-in family to `turbo-engine` when the binary is there; the Python engine is only
-started without it. What is still to be done on a Mac: build, run the four `verify` checks (the
-fixture generators were run on a Linux CPU build of MLX, so the Python side is known to work),
-then compare real images with mflux per family, and measure time and memory against the README's
-figures. Phase 3 (removing the Python engine and its installer) waits for those numbers.
+started without it. Checked on the M1 Max on 28 September:
+
+- **Build.** One error: the S3-DiT read its patch size off the transformer instead of its config.
+- **Loading.** Two problems, fixed in `WeightLoading` and `QwenImageVAE`. MLXNN replaces the
+  modules of a list only when it is given the list's first element, so the S3-DiT's
+  `cap_embedder` (an RMSNorm, then a quantized linear) kept Z-Image and Ming from loading; the
+  loader now completes such lists. And the catalog's checkpoints store the Qwen VAE's norms flat
+  ([C], mflux's `reshape_gamma_to_1d`) where the fixtures, saved straight from mflux's modules,
+  keep [C, 1, 1, 1]: the port takes both, as mflux does. Only a real checkpoint shows that one.
+- **`verify`** passes for the four families. Z-Image and Qwen-Image are within 0.6% at every
+  stage (Qwen-Image within 1e-5); Ming's text side (2.7%) and decode (2.4%) run in bf16 and carry
+  the two MLX versions' rounding. One difference from mflux turned up there and was fixed: the
+  VAE's attention multiplies the scores by a float32 scale, which carries Ming's bf16 decode on
+  in float32 from the mid block, where the port had stayed in bf16 (3.6% off).
+- **Same prompt and seed**, through the app's protocol at 512 × 512: the same image as mflux for
+  every family (composition, text, alpha), PSNR 35 dB for Z-Image q8, 31 dB for Ming, 29 dB for
+  Qwen-Image, 27 dB for Klein. Native against mflux: Z-Image 22.6 s against 24.4 s, Qwen-Image
+  121 s against 121 s, Ming 43.6 s against 37.8 s, Klein 15.0 s against 10.7 s; peaks within
+  1.5 GB of mflux's, lower for Ming and Qwen-Image.
+- **Save memory at 1024 × 1024**, native: Ming-Image peaks at 12.5 GB (151 s), Qwen-Image at
+  16.4 GB (589 s), against the 14.7 and 21.3 GB measured with mflux; no seams between the tiles.
 
 Since then the app's build embeds the engine in the bundle (the *Embed turbo-engine* phase,
 `scripts/embed-engine.sh`, signed with the app), so a distributed app carries it and the Python
