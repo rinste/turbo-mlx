@@ -1,5 +1,4 @@
 import AVFoundation
-import QuickLook
 import SwiftUI
 
 /// Right column: the current output on top, the history below.
@@ -7,7 +6,6 @@ struct OutputPanel: View {
     @Environment(AppModel.self) private var app
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.undoManager) private var undoManager
-    @State private var quickLookURL: URL?
     /// The clip on the stage, here so that space reaches it.
     @State private var clip = ClipPlayer()
     @FocusState private var isFocused: Bool
@@ -27,7 +25,6 @@ struct OutputPanel: View {
         // No band behind the toolbar: without a scroll view under it (a clip, the draft, a running
         // job) it would otherwise draw one.
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
-        .quickLookPreview($quickLookURL)
         .toolbar { toolbarContent }
         .focusable()
         .focused($isFocused)
@@ -40,14 +37,10 @@ struct OutputPanel: View {
             default: break
             }
         }
-        // Space plays or pauses a clip, and opens or closes Quick Look on an image.
+        // Space plays or pauses a clip, and does nothing else: no Quick Look on an image, and no
+        // beep for a key nobody took.
         .onKeyPress(.space) {
-            guard let item = app.displayedItem else { return .ignored }
-            if item.kind == .video {
-                clip.togglePlayback()
-            } else {
-                quickLookURL = quickLookURL == nil ? app.url(for: item) : nil
-            }
+            if app.displayedItem?.kind == .video { clip.togglePlayback() }
             return .handled
         }
     }
@@ -331,7 +324,7 @@ private struct TransportBar: View {
 private struct ImageStage: View {
     @Environment(AppModel.self) private var app
     let item: HistoryItem
-    /// A click on the image gives the panel the keyboard (arrows, space).
+    /// A click on the image gives the panel the keyboard (arrows).
     let onClick: () -> Void
 
     @State private var zoom = ImageZoom()

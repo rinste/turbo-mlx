@@ -33,8 +33,8 @@ app downloads it, and that is all the setup there is.
   model and its settings in the left column, with a random seed; ⌘Z brings back what was there. A
   queued one says when it starts, and a running one stays in view as its result once done. Zoom:
   pinch, the mouse wheel, double-click, ⌘-scroll, the − % + controls or the View menu (⌘+, ⌘-, ⌘0
-  actual size, ⌘9 fit); two-finger scroll (⌥-wheel with a mouse) or drag to move around. Quick Look
-  (space, on an image), drag and drop, copy.
+  actual size, ⌘9 fit); two-finger scroll (⌥-wheel with a mouse) or drag to move around. Drag and
+  drop, copy.
 
 ## Install
 
