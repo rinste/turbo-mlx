@@ -1,4 +1,4 @@
-# Turbo MLX
+# Turbo MLX: Local AI Image & Video Generation for Apple Silicon
 
 A macOS app (SwiftUI) that generates images, and videos with sound, on the Mac's GPU with MLX.
 It is built to be distributed: the people who install it never open Terminal and need neither Python nor Xcode. The
