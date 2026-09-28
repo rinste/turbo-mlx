@@ -94,20 +94,6 @@ private struct ModelStatusRow: View {
             .font(.callout)
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                // The main button downloads the model, unless the engine comes first: then this
-                // one lets the download run while the engine installs.
-                if app.blocker == .backendNotInstalled || app.blocker == .backendInstalling {
-                    Button {
-                        app.download(model)
-                    } label: {
-                        Label(
-                            model.sizeBytes.map { "Download · \(Format.bytes($0))" } ?? "Download",
-                            systemImage: "arrow.down.circle"
-                        )
-                        .frame(maxWidth: .infinity)
-                    }
-                    .disabled(model.repo == nil)
-                }
                 if let failure = app.downloads.failures[model.id] {
                     Text(failure)
                         .font(.caption)
@@ -888,11 +874,6 @@ private struct GenerateBar: View {
     private var primaryButton: some View {
         let model = app.selectedModel
         switch app.blocker {
-        case .backendNotInstalled:
-            wideButton("Install Image Engine", systemImage: "shippingbox") { app.backend.install() }
-        case .backendInstalling:
-            wideButton("Installing Image Engine…", systemImage: "shippingbox") {}
-                .disabled(true)
         case .modelNotDownloaded:
             let size = model?.sizeBytes.map { " · \(Format.bytes($0))" } ?? ""
             if app.settings.trimmedPrompt.isEmpty {
@@ -933,7 +914,6 @@ private struct GenerateBar: View {
 
     private var caption: String? {
         switch app.blocker {
-        case .backendNotInstalled: "One time only: about 1 GB, a few minutes."
         case .modelNotDownloaded: "Models download once and stay on this Mac."
         case .some(let blocker): blocker.hint
         case nil:

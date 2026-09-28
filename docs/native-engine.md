@@ -56,10 +56,15 @@ started without it. Checked on the M1 Max on 28 September:
 - **Save memory at 1024 × 1024**, native: Ming-Image peaks at 12.5 GB (151 s), Qwen-Image at
   16.4 GB (589 s), against the 14.7 and 21.3 GB measured with mflux; no seams between the tiles.
 
-Since then the app's build embeds the engine in the bundle (the *Embed turbo-engine* phase,
-`scripts/embed-engine.sh`, signed with the app), so a distributed app carries it and the Python
-engine is a fallback for builds without it: the app never installs, updates or starts Python
-while the native engine is there. What remains of Phase 3 is deleting the fallback.
+The app's build embeds the engine in the bundle (the *Embed turbo-engine* phase,
+`scripts/embed-engine.sh`, signed with the app), and on 28 September Python left the app, the
+first half of Phase 3: `uv`, `setup_backend.sh`, the install UI and the Python settings are gone,
+the build fails without the engine, and the app went from 77 to 41 MB. `turbo_worker.py` moved to
+`Engine/Reference/`, outside the app, as the reference real images are compared with (the check
+that found the flat VAE norms), next to the fixture generators; the mflux revision both run with
+is in `Engine/Fixtures/requirements.txt`. `ShellEnvironment`'s shell probe stays for now: it
+reads `HF_HOME` and `HF_TOKEN` for the model cache and the downloads, so it goes with the App
+Sandbox, which, with the Mac App Store question, is what remains of Phase 3.
 
 ## The question
 

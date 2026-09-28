@@ -3,8 +3,8 @@
 mflux computes from it: the native engine's `verify` compares its own outputs against them, so the
 Swift port is checked module by module before a real checkpoint and a real Mac are involved.
 
-Run it with the app's Python (it has mflux):
-  ~/Library/Application\\ Support/TurboMLX/venv/bin/python Engine/Fixtures/make_zimage_fixture.py <out-dir>
+Run it with a Python that has mflux (Engine/Fixtures/requirements.txt):
+  $PY Engine/Fixtures/make_zimage_fixture.py <out-dir>
 
 Everything is shrunk: the Qwen3 encoder to 4 layers of 128 (Z-Image reads its second-to-last
 hidden state), the S3-DiT to two layers of 256, the decoder to a few dozen channels per stage

@@ -1,8 +1,9 @@
 # turbo-engine
 
-The native engine of Turbo MLX: the catalog's four families on [MLX Swift](https://github.com/ml-explore/mlx-swift),
-speaking the same JSON-lines protocol as `turbo_worker.py`, so the app runs either without knowing
-the difference (see `docs/native-engine.md` for the why and the plan).
+The engine of Turbo MLX: the catalog's four families on [MLX Swift](https://github.com/ml-explore/mlx-swift),
+behind a JSON-lines protocol (below) that the app speaks to it; the Python engine the app used to
+ship, `Reference/turbo_worker.py`, speaks it too (see `docs/native-engine.md` for the why and the
+plan).
 
 ```
 Sources/turbo-engine/         the executable: `serve` (the worker) and `verify` (parity checks)
@@ -18,6 +19,8 @@ Sources/TurboEngineCore/      protocol, mflux checkpoint loading, PNG output, th
   Families/Ming/              Ming-Image: the Ling MoE encoder, the Qwen2 connector and heads,
                               the S3-DiT in bf16, the RGBA decoder
 Fixtures/make_*_fixture.py    build the checkpoint + references `verify` compares against
+Fixtures/requirements.txt     the mflux revision they (and the reference worker) run with
+Reference/turbo_worker.py     mflux behind the same protocol, to compare real images
 ```
 
 The modules mirror mflux's module tree name for name, so the checkpoints the app already
@@ -50,40 +53,40 @@ The app's build does it: its *Embed turbo-engine* phase runs `scripts/embed-engi
 builds the engine in Release (`scripts/build-engine.sh`, derived data in `build/engine`) and puts
 it in the bundle, `turbo-engine` in `Contents/MacOS` and the resource bundles it loads
 (mlx-swift's Metal library among them) in `Contents/Resources`, signed like the app. Start the
-app: the engine status shows "turbo-engine 0.2" and every built-in model runs natively; the
-Python engine is neither installed nor started. The engine is rebuilt only when `Engine/`
-changed; when it fails to build, the phase warns and the app runs on the Python engine.
+app: the engine status shows "turbo-engine 0.2" and every model runs on it. The engine is rebuilt
+only when `Engine/` changed; when it fails to build, so does the app.
 
-An engine can also be installed for an app built without one (`TURBO_NO_ENGINE=1`):
+For the checks below, or to run the app on another build of the engine:
 
 ```bash
-scripts/build-engine.sh            # builds Release and installs the binary for the app
+scripts/build-engine.sh            # builds Release into build/bin/turbo-engine
 ```
 
-That puts `turbo-engine` and its bundles in `~/Library/Application Support/TurboMLX/bin/`, where
-the app looks after `TURBO_ENGINE` and its own bundle. Deleting the `bin` folder puts such a
-build back on Python.
-
-To work on the engine in Xcode, open `Engine/Package.swift` and run the `turbo-engine` scheme
-with the arguments below.
+The app runs the engine `TURBO_ENGINE` names before its own (`open --env
+TURBO_ENGINE=$PWD/build/bin/turbo-engine "path/to/Turbo MLX.app"`). To work on the engine in
+Xcode, open `Engine/Package.swift` and run the `turbo-engine` scheme with the arguments below.
 
 ## Checking a port against mflux
 
 Before trusting it with a real checkpoint, compare each family with mflux on a small one:
 
 ```bash
+# 0. A Python with mflux, once (any 3.10+; uv is the quickest way to one)
+uv venv --python 3.12 ~/.venvs/mflux
+uv pip install --python ~/.venvs/mflux/bin/python -r Engine/Fixtures/requirements.txt
+PY=~/.venvs/mflux/bin/python
+
 # 1. A tiny checkpoint with random weights, and what mflux computes from it
-PY=~/Library/Application\ Support/TurboMLX/venv/bin/python
 $PY Engine/Fixtures/make_klein_fixture.py      /tmp/fixtures/klein
 $PY Engine/Fixtures/make_zimage_fixture.py     /tmp/fixtures/zimage
 $PY Engine/Fixtures/make_qwen_image_fixture.py /tmp/fixtures/qwen-image
 $PY Engine/Fixtures/make_ming_fixture.py       /tmp/fixtures/ming
 
 # 2. The same computations in Swift (the fixture names its family)
-turbo-engine verify /tmp/fixtures/klein
-turbo-engine verify /tmp/fixtures/zimage
-turbo-engine verify /tmp/fixtures/qwen-image
-turbo-engine verify /tmp/fixtures/ming
+build/bin/turbo-engine verify /tmp/fixtures/klein
+build/bin/turbo-engine verify /tmp/fixtures/zimage
+build/bin/turbo-engine verify /tmp/fixtures/qwen-image
+build/bin/turbo-engine verify /tmp/fixtures/ming
 ```
 
 `verify` reports, stage by stage, the largest difference relative to the reference's scale (and
@@ -105,8 +108,13 @@ the other families' stages stay under 1%.
 The fixture generators are ordinary mflux code and run wherever mflux imports (they were exercised
 on a Linux CPU build of MLX while the ports were written); `verify` needs the Mac.
 
-Then the real thing: generate the same prompt and seed with the app on the Python engine and on
-the native one (rename the engine binary to switch), and compare the two PNGs.
+Then the real thing, which the fixtures cannot stand in for: they are saved straight from mflux's
+modules, and a published checkpoint can store a tensor in another shape (the Qwen VAE's norms
+are flat in the catalog's checkpoints, for one). Start `build/bin/turbo-engine serve` and
+`$PY Engine/Reference/turbo_worker.py serve`, send both the same `generate` line with the same
+checkpoint, prompt, seed and size, and compare the two PNGs: the same image, with small local
+differences from the two MLX versions' rounding (PSNR 27–35 dB at 512 × 512 for the four
+families).
 
 ## Protocol
 

@@ -1,6 +1,6 @@
 import Foundation
 
-/// One JSON line written by `turbo_worker.py` on stdout. Fields depend on `event`.
+/// One JSON line written by `turbo-engine` on stdout. Fields depend on `event`.
 nonisolated struct WorkerEvent: Decodable, Sendable {
     let event: String
     var id: String?
@@ -20,11 +20,9 @@ nonisolated struct WorkerEvent: Decodable, Sendable {
     /// Seconds per phase of a finished image: load, encode, denoise, decode, save.
     var timings: [String: Double]?
     var message: String?
-    // "ready": mflux and python from the Python worker, engine from the native one
-    var mflux: String?
+    // "ready"
     var engine: String?
     var mlx: String?
-    var python: String?
     var device: String?
     var memory: Int64?
 
@@ -40,18 +38,17 @@ nonisolated struct WorkerEvent: Decodable, Sendable {
     }
 }
 
-/// Versions and hardware reported by a worker that started successfully.
+/// Versions and hardware reported by an engine that started successfully.
 nonisolated struct BackendInfo: Equatable, Sendable {
-    /// "mflux 0.20.0" or "turbo-engine 0.1".
+    /// "turbo-engine 0.2".
     var engine: String
-    /// "Python 3.12.3" or "Swift".
-    var runtime: String
+    /// "mlx-swift 0.31.6".
     var mlx: String
     var device: String
     var memory: Int64
 }
 
-/// Commands understood by `turbo_worker.py serve`.
+/// Commands understood by `turbo-engine serve`.
 nonisolated enum WorkerCommand: Sendable {
     /// `upcomingPrompts` are the distinct prompts of the images queued behind this one: the
     /// worker encodes them while the text encoder is resident, so they will not reload the model.
@@ -66,7 +63,7 @@ nonisolated enum WorkerCommand: Sendable {
         [
             "family": model.family.rawValue,
             "path": path,
-            // mflux infers some variants (FLUX.2 Klein 4B/9B) from the model's name.
+            // The engine infers some variants (FLUX.2 Klein 4B/9B) from the model's name, as mflux does.
             "name": model.id,
             "variant": model.variant ?? "",
             "low_ram": lowMemory,

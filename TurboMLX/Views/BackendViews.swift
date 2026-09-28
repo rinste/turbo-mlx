@@ -1,82 +1,5 @@
 import SwiftUI
 
-/// Shown in place of the image until the Python engine exists: only in a build without the
-/// native engine, which needs no setup.
-struct BackendSetupView: View {
-    @Environment(AppModel.self) private var app
-    @Environment(\.openWindow) private var openWindow
-    @State private var showsDetails = false
-
-    var body: some View {
-        let backend = app.backend
-        VStack(spacing: 18) {
-            Image(systemName: "shippingbox")
-                .font(.system(size: 44, weight: .light))
-                .foregroundStyle(.secondary)
-            VStack(spacing: 8) {
-                Text(backend.isUpdating ? "Updating the Image Engine" : "Set Up the Image Engine")
-                    .font(.title2.bold())
-                Text("Turbo MLX generates images right on your Mac, on the GPU. This build has no native engine, so the first time it downloads the Python one (Python, MLX and mflux, about 1 GB) into a folder of its own: there’s nothing else to install, and the rest of your system is left untouched.")
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.secondary)
-            }
-
-            switch backend.status {
-            case .installing:
-                VStack(spacing: 8) {
-                    ProgressView()
-                        .progressViewStyle(.linear)
-                        .frame(maxWidth: 360)
-                    Text(backend.installPhase ?? "Starting the installation…")
-                        .font(.callout)
-                    Text("This usually takes a few minutes, depending on your connection.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            case .failed(let message):
-                VStack(spacing: 10) {
-                    Text(message)
-                        .foregroundStyle(.red)
-                        .multilineTextAlignment(.center)
-                        .textSelection(.enabled)
-                    HStack {
-                        Button("Try Again") { backend.install() }
-                            .buttonStyle(.borderedProminent)
-                        Button("Open Log") { openWindow(id: WindowID.log) }
-                    }
-                }
-            default:
-                Button {
-                    backend.install()
-                } label: {
-                    Label("Install Image Engine", systemImage: "arrow.down.circle")
-                        .padding(.horizontal, 8)
-                }
-                .buttonStyle(.primaryAction)
-            }
-
-            if !backend.installOutput.isEmpty {
-                // Not a DisclosureGroup: collapsed, it still sized itself to the whole log.
-                VStack(alignment: .leading, spacing: 8) {
-                    Button {
-                        withAnimation(.snappy) { showsDetails.toggle() }
-                    } label: {
-                        Label("Details", systemImage: showsDetails ? "chevron.down" : "chevron.right")
-                    }
-                    .buttonStyle(.borderless)
-                    if showsDetails {
-                        InstallLog(lines: backend.installOutput)
-                    }
-                }
-                .frame(maxWidth: 580, alignment: .leading)
-            }
-        }
-        .frame(minWidth: 320, maxWidth: 580)
-        .padding(32)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
 /// Shown instead of an empty history when the selected model is not on disk yet.
 struct ModelDownloadCard: View {
     @Environment(AppModel.self) private var app
@@ -124,34 +47,6 @@ struct ModelDownloadCard: View {
     }
 }
 
-private struct InstallLog: View {
-    let lines: [String]
-
-    var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 1) {
-                    ForEach(Array(lines.suffix(400).enumerated()), id: \.offset) { index, line in
-                        Text(verbatim: line)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(line.hasPrefix("==>") ? .primary : .secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .id(index)
-                    }
-                }
-                .padding(10)
-                .textSelection(.enabled)
-            }
-            .frame(height: 200)
-            .clipped()
-            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
-            .onChange(of: lines.count) {
-                proxy.scrollTo(min(lines.count, 400) - 1, anchor: .bottom)
-            }
-        }
-    }
-}
-
 /// Toolbar indicator with the engine's state; the popover has details and controls.
 struct BackendStatusButton: View {
     @Environment(AppModel.self) private var app
@@ -180,8 +75,6 @@ struct BackendStatusButton: View {
         switch app.backend.status {
         case .ready: .green
         case .starting, .checking: .yellow
-        case .installing: .blue
-        case .notInstalled: .orange
         case .stopped: .gray
         case .failed: .red
         }
@@ -190,8 +83,6 @@ struct BackendStatusButton: View {
     private var title: String {
         switch app.backend.status {
         case .checking: "Starting…"
-        case .notInstalled: "Engine not installed"
-        case .installing: "Installing…"
         case .starting: "Starting the engine…"
         case .ready: app.backend.loadedModelPath == nil ? "Ready" : "Ready · model in memory"
         case .stopped: "Engine stopped"
@@ -213,7 +104,6 @@ struct BackendDetails: View {
                     GridRow { Text("Mac").foregroundStyle(.secondary); Text("\(info.device) · \(Format.memory(info.memory))") }
                     GridRow { Text("Engine").foregroundStyle(.secondary); Text(info.engine) }
                     GridRow { Text("MLX").foregroundStyle(.secondary); Text(info.mlx) }
-                    GridRow { Text("Runtime").foregroundStyle(.secondary); Text(info.runtime) }
                     GridRow {
                         Text("In memory").foregroundStyle(.secondary)
                         Text(loadedModelName ?? "no model")
@@ -233,12 +123,10 @@ struct BackendDetails: View {
             Divider()
 
             HStack {
-                if backend.hasNativeEngine || backend.isInstalled {
-                    Button("Restart") { backend.restartWorker() }
-                        .disabled(app.isBusy)
-                    Button("Free Memory") { app.freeMemory() }
-                        .disabled(backend.loadedModelPath == nil || app.isBusy)
-                }
+                Button("Restart") { backend.restartWorker() }
+                    .disabled(app.isBusy)
+                Button("Free Memory") { app.freeMemory() }
+                    .disabled(backend.loadedModelPath == nil || app.isBusy)
                 Spacer()
                 Button("Log…") { openWindow(id: WindowID.log) }
             }

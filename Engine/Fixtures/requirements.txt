@@ -1,0 +1,4 @@
+# The mflux revision the engine's ports follow, for the fixture generators and the reference
+# worker (Engine/Reference/turbo_worker.py); the app installed the same one while it had a Python
+# engine. Ming-Image came after mflux 0.20.0, the latest release on PyPI, hence the source archive.
+mflux @ https://github.com/mflux-community/mflux/archive/5e607e29559fb6354268cf6ed41cb6891ca9afcb.zip

@@ -1,10 +1,10 @@
 #!/bin/zsh
-# Builds the native engine (Engine/Package.swift) in Release with xcodebuild, which compiles
-# mlx-swift's Metal shaders (`swift build` does not on macOS), and installs the binary where the
-# app looks for it. The app's own build runs this (scripts/embed-engine.sh) to embed the engine in
-# the bundle, so running it by hand is only for an app built without one.
+# Builds the engine (Engine/Package.swift) in Release with xcodebuild, which compiles mlx-swift's
+# Metal shaders (`swift build` does not on macOS), and copies the binary with its resource bundles.
+# The app's build runs this (scripts/embed-engine.sh) to embed the engine in the bundle; by hand it
+# gives a binary for `turbo-engine verify`, or for the app's TURBO_ENGINE.
 #
-# Usage: scripts/build-engine.sh                 -> ~/Library/Application Support/TurboMLX/bin/turbo-engine
+# Usage: scripts/build-engine.sh                 -> build/bin/turbo-engine
 #        scripts/build-engine.sh path/to/bin      -> that directory instead
 #        scripts/build-engine.sh path/to/bin path/to/resources
 #                                                -> the resource bundles go there instead of next to
@@ -12,7 +12,7 @@
 set -euo pipefail
 
 cd "${0:A:h}/.."
-DEST="${1:-$HOME/Library/Application Support/TurboMLX/bin}"
+DEST="${1:-build/bin}"
 RESOURCES="${2:-$DEST}"
 DERIVED="build/engine"
 
@@ -40,5 +40,5 @@ for lib in "$DERIVED"/Build/Products/Release/*.bundle(N); do
 done
 print "Installed: $DEST/turbo-engine"
 if [[ $# -eq 0 ]]; then
-  print "The app picks it up on its next launch (Settings → Engine shows the path)."
+  print "Check a port with $DEST/turbo-engine verify <fixture>, or run the app on it with TURBO_ENGINE=$PWD/$DEST/turbo-engine."
 fi

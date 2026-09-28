@@ -1,6 +1,6 @@
 import Foundation
 
-/// A family of models: one `FamilyModel` in the native engine, one adapter in `turbo_worker.py`.
+/// A family of models: one `FamilyModel` in the engine (`Engine/Sources/TurboEngineCore/Families/`).
 nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable {
     case ming
     case zImageTurbo = "z-image-turbo"

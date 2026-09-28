@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Everything the engine printed: its log lines, warnings and, from the Python one, tracebacks.
+/// Everything the engine printed: its log lines and warnings.
 struct LogView: View {
     @Environment(AppModel.self) private var app
 

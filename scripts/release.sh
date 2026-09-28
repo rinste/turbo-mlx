@@ -34,9 +34,8 @@ VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Co
 
 step "Verifying the signature"
 codesign --verify --deep --strict --verbose=2 "$APP"
-codesign -dvv "$APP/Contents/MacOS/uv" 2>&1 | grep -E "Authority=Developer ID|flags"
-# The native engine is embedded by the app's build phase (scripts/embed-engine.sh), which only
-# warns when it fails; a release without it would install Python on every Mac.
+# The engine is embedded by the app's build phase (scripts/embed-engine.sh), which fails the build
+# without it; checked again here, as the app cannot generate an image without it.
 [[ -x "$APP/Contents/MacOS/turbo-engine" ]] || {
   print -u2 "turbo-engine is missing from the app: the Embed turbo-engine phase failed, see the archive log"
   exit 1

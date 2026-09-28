@@ -3,8 +3,8 @@
 mflux computes from it: the native engine's `verify` compares its own outputs against them, so the
 Swift port is checked module by module before a real checkpoint and a real Mac are involved.
 
-Run it with the app's Python (it has mflux):
-  ~/Library/Application\\ Support/TurboMLX/venv/bin/python Engine/Fixtures/make_qwen_image_fixture.py <out-dir>
+Run it with a Python that has mflux (Engine/Fixtures/requirements.txt):
+  $PY Engine/Fixtures/make_qwen_image_fixture.py <out-dir>
 
 Everything is shrunk: the Qwen2.5-VL language model to 2 layers of 256 (kept in bf16, unquantized,
 as the catalog's checkpoint keeps it), the transformer to 2 blocks of 256, the 3D decoder to

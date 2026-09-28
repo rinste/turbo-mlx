@@ -3,8 +3,8 @@
 mflux computes from it: the native engine's `verify` compares its own outputs against them, so the
 Swift port is checked module by module before a real checkpoint and a real Mac are involved.
 
-Run it with the app's Python (it has mflux):
-  ~/Library/Application\\ Support/TurboMLX/venv/bin/python Engine/Fixtures/make_ming_fixture.py <out-dir>
+Run it with a Python that has mflux (Engine/Fixtures/requirements.txt):
+  $PY Engine/Fixtures/make_ming_fixture.py <out-dir>
 
 mflux keeps Ming's sizes in module-level constants, so they are overridden before anything is
 built: the Ling MoE encoder becomes 3 layers of 128 with 16 experts (4 chosen from 2 of 4 groups),

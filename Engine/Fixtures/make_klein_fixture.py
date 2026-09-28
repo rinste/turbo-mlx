@@ -3,8 +3,8 @@
 mflux computes from it: the native engine's `verify` compares its own outputs against them, so the
 Swift port is checked module by module before a real checkpoint and a real Mac are involved.
 
-Run it with the app's Python (it has mflux):
-  ~/Library/Application\\ Support/TurboMLX/venv/bin/python Engine/Fixtures/make_klein_fixture.py <out-dir>
+Run it with a Python that has mflux (Engine/Fixtures/requirements.txt):
+  $PY Engine/Fixtures/make_klein_fixture.py <out-dir>
 
 The model is tiny (a few MB) except for the VAE, whose channel counts the architecture fixes; the
 text encoder keeps 28 layers because Klein reads the hidden states of layers 9, 18 and 27.

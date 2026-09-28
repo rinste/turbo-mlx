@@ -57,9 +57,9 @@ open TurboMLX.xcodeproj
 Then ⌘R in Xcode. The app's build also builds the native engine from `Engine/` and embeds it
 (the *Embed turbo-engine* phase, `scripts/embed-engine.sh`): the first build takes a few minutes
 for MLX's C++ core and Metal kernels, the next ones seconds, since the engine is only rebuilt when
-`Engine/` changed. `TURBO_NO_ENGINE=1 xcodebuild …` builds the app without it, on the Python
-engine. To try the first-run experience without touching your real installation, point the app
-at an empty data folder:
+`Engine/` changed. The app cannot generate without it, so when the engine does not build, neither
+does the app. To try the first-run experience without touching your real installation, point the
+app at an empty data folder:
 
 ```bash
 open -n --env TURBO_MLX_HOME=/tmp/turbo-first-run "path/to/Turbo MLX.app"
@@ -68,56 +68,48 @@ open -n --env TURBO_MLX_HOME=/tmp/turbo-first-run "path/to/Turbo MLX.app"
 ## How it works
 
 ```
-SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo-engine serve   ──▶ MLX Swift (GPU)   every built-in family
-                                    └──▶ turbo_worker.py serve ──▶ mflux / MLX (GPU)   only in a build without the engine
+SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo-engine serve ──▶ MLX Swift (GPU)
 ```
 
-- **Native engine.** `Engine/` is a Swift package that runs all four families (FLUX.2 Klein,
-  Z-Image Turbo, Qwen-Image 2512, Ming-Image) on MLX Swift from the same mflux checkpoints. The
-  app's build embeds its `turbo-engine` binary in the bundle (`Contents/MacOS`, signed with the
-  app), and every model runs there: nothing is installed on first launch, the engine starts in
-  an instant, and no Python process sits between the app and the GPU. The engine keeps the
+- **Engine.** `Engine/` is a Swift package that runs all four families (FLUX.2 Klein,
+  Z-Image Turbo, Qwen-Image 2512, Ming-Image) on MLX Swift from mflux's checkpoints. The app's
+  build embeds its `turbo-engine` binary in the bundle (`Contents/MacOS`, signed with the app),
+  and every model runs there: nothing is installed on first launch, the engine starts in an
+  instant, and no Python process sits between the app and the GPU. The engine keeps the
   selected model in memory, loads it as soon as a prompt is being written, encodes the prompts
   of the queued images while the text encoder is in memory, reports phases, per-step progress
   and the seconds each phase took (shown when hovering the time of an image), and stops a
   generation at the next step. See `Engine/README.md` and
   [docs/native-engine.md](docs/native-engine.md).
-- **Python engine.** The reference the native ports are checked against, and the fallback of a
-  build without the native binary: inference in [mflux](https://github.com/mflux-community/mflux)
-  (Python + MLX) behind `Backend/turbo_worker.py`, which speaks the same protocol with one
-  adapter per family (`FAMILIES`). `Backend/setup_backend.sh` creates the environment with
-  **uv, which ships inside the app** (`Vendor/uv`, copied to `Contents/MacOS` and signed with
-  the app); uv also downloads a standalone Python, so even then the Mac needs nothing
-  preinstalled. mflux is installed from the GitHub source archive of the tested commit
-  (`BackendController.mfluxCommit`), so git isn't needed either. With the native engine present
-  the app never installs, updates or starts it.
+- **mflux is the reference.** The ports follow [mflux](https://github.com/mflux-community/mflux)
+  (Python + MLX) module for module: `Engine/Fixtures` builds the references `verify` compares
+  each stage against, and `Engine/Reference/turbo_worker.py`, the Python engine the app used to
+  ship, runs a real checkpoint through mflux behind the same protocol, to compare the images.
+  Neither is part of the app.
 - **Save memory.** Frees the text encoder of Ming-Image and Qwen-Image once the prompt is read
-  (a new prompt reloads it, with the transformer released first, so the two are never in memory
-  together; the native engine reloads only the text side, the Python one the whole model),
-  decodes the image in tiles where the VAE allows it (not FLUX.2, whose tiles would show seams),
-  and keeps MLX's buffer cache small.
+  (a new prompt reloads only the text side, with the transformer released first, so the two are
+  never in memory together), decodes the image in tiles where the VAE allows it (not FLUX.2,
+  whose tiles would show seams), and keeps MLX's buffer cache small.
 - **Downloads.** The app downloads models itself (`Services/HubDownloader.swift`) into the
   Hugging Face cache, in the same layout huggingface_hub uses, so mflux and other tools share
   them; an interrupted download resumes. No engine is needed to download.
-- The app reads the login shell's environment (PATH, `HF_HOME`, `HF_TOKEN`…).
+- The app reads the login shell's environment for Hugging Face (`HF_HOME`, `HF_HUB_CACHE`,
+  `HF_TOKEN`), so its models go where the user's other tools keep them.
 
 | What | Where |
 |---|---|
 | History (PNGs + `history.json`) | `~/Library/Application Support/TurboMLX/History` |
 | Models | `~/.cache/huggingface/hub` |
-| Native engine (development builds without one embedded) | `~/Library/Application Support/TurboMLX/bin` |
-| Python engine, when a build falls back to it | `~/Library/Application Support/TurboMLX/{venv,python}`, cache in `~/Library/Caches/TurboMLX/uv` |
 
 ```
 TurboMLX/
-  App/        entry point, AppModel (queue, worker events, selection, persistence)
+  App/        entry point, AppModel (queue, engine events, selection, persistence)
   Models/     catalog and families, settings, jobs, history items
-  Services/   child processes, engines, downloads, Hugging Face cache, history
+  Services/   the engine process, downloads, Hugging Face cache, history
   Views/      left column, output, history, settings, log
-  Backend/    turbo_worker.py, setup_backend.sh (copied into the bundle)
-Engine/       the native engine (Swift package: turbo-engine, TurboEngineCore, fixtures)
-Vendor/uv/    the uv binary (update with scripts/update-uv.sh)
-scripts/      release.sh, embed-engine.sh, build-engine.sh, ExportOptions.plist, update-uv.sh
+Engine/       the engine (Swift package: turbo-engine, TurboEngineCore), its fixtures and the
+              mflux reference worker
+scripts/      release.sh, embed-engine.sh, build-engine.sh, ExportOptions.plist
 ```
 
 The project uses Xcode's synchronized folders: files added under `TurboMLX/` join the target on
@@ -125,12 +117,12 @@ their own.
 
 **Adding a model family:** a case in `ModelFamily` (`Models/ModelCatalog.swift`: download
 patterns, components, steps, guidance), a `FamilyModel` under `Engine/Sources/TurboEngineCore/Families/`
-with its fixture and `verify` stage (see `Engine/README.md`), and, for the Python fallback, an
-adapter in `FAMILIES` in `turbo_worker.py`.
+with its fixture and `verify` stage (see `Engine/README.md`), and an adapter in `FAMILIES` in
+`Engine/Reference/turbo_worker.py` to compare real images with mflux.
 
 **Where this is going:** [docs/native-engine.md](docs/native-engine.md) is the case for the
-native engine, what is checked so far, and what comes next: removing the Python fallback, and
-video models (LTX).
+native engine, what is checked so far, and what comes next: the App Sandbox, and video models
+(LTX).
 [docs/generation-performance.md](docs/generation-performance.md) ranks the ways to make generation
 faster, with the measurements that decide each one.
 
@@ -154,11 +146,9 @@ scripts/release.sh
 ```
 
 The DMG ends up in `build/release/`. The script checks that the exported app carries
-`turbo-engine`, signed with the Developer ID: a release without it would install Python on
-every Mac.
+`turbo-engine`, signed with the Developer ID: without it the app cannot generate.
 
 ## Troubleshooting
 
 - **Engine Log** (⌥⌘L): what the engine prints, warnings included.
-- Settings (⌘,) → Engine: which engine this build has and its versions, restart; for the Python
-  fallback, **Repair Python Engine** rebuilds its environment.
+- Settings (⌘,) → Engine: the engine's versions and executable, restart.

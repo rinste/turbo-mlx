@@ -23,8 +23,6 @@ final class AppModel {
         case noModel
         case modelNotDownloaded
         case modelDownloading
-        case backendNotInstalled
-        case backendInstalling
         case emptyPrompt
 
         var hint: String {
@@ -32,8 +30,6 @@ final class AppModel {
             case .noModel: "Choose a model."
             case .modelNotDownloaded: "Download the model to get started."
             case .modelDownloading: "Waiting for the download to finish."
-            case .backendNotInstalled: "Install the image engine to get started."
-            case .backendInstalling: "Installing the image engine…"
             case .emptyPrompt: "Write a prompt."
             }
         }
@@ -135,18 +131,7 @@ final class AppModel {
         await backend.prepare()
         locator = ModelLocator(environment: backend.environment)
         refreshInstalled()
-        startEngineForSelection()
-    }
-
-    /// The engine the selected model runs on.
-    var selectedEngine: EngineKind {
-        selectedModel.map { backend.engineKind(for: $0) } ?? .python
-    }
-
-    /// Brings up the engine of the selected model, unless an installation is running.
-    private func startEngineForSelection() {
-        guard backend.status != .installing else { return }
-        backend.ensureWorker(for: selectedEngine)
+        backend.ensureWorker()
     }
 
     func shutdown() {
@@ -223,16 +208,15 @@ final class AppModel {
 
     /// Loads the selected model as soon as a prompt is being written, so that the first image
     /// starts at the prompt instead of at a 5–40 s load. Nothing happens while the worker is
-    /// busy, when the model is already in memory, or after "Free Memory". A prompt for a model
-    /// of the other engine brings that engine up first.
+    /// busy, when the model is already in memory, or after "Free Memory". An engine that is not
+    /// running (stopped, or crashed) is brought up first.
     private func preloadIfUseful() {
         guard !preloadDeclined, activeJob == nil, queue.isEmpty, !settings.trimmedPrompt.isEmpty,
               let model = selectedModel, let location = installed[model.id]
         else { return }
-        let kind = backend.engineKind(for: model)
-        if backend.activeKind != kind {
+        if !backend.isRunning {
             switch backend.status {
-            case .ready, .stopped, .failed: backend.ensureWorker(for: kind) // onReady comes back here
+            case .stopped, .failed: backend.ensureWorker() // onReady comes back here
             default: break
             }
             return
@@ -282,10 +266,6 @@ final class AppModel {
 
     var blocker: Blocker? {
         guard let model = selectedModel else { return .noModel }
-        if backend.engineKind(for: model) == .python {
-            if backend.status == .installing { return .backendInstalling }
-            if !backend.isInstalled { return .backendNotInstalled }
-        }
         if downloads.isDownloading(model) { return .modelDownloading }
         if !isInstalled(model) { return .modelNotDownloaded }
         if settings.trimmedPrompt.isEmpty { return .emptyPrompt }
@@ -347,15 +327,14 @@ final class AppModel {
     private func pump() {
         defer { updateDockBadge() }
         guard activeJob == nil, let job = queue.first else { return }
-        let kind = backend.engineKind(for: job.model)
         switch backend.status {
-        case .ready where backend.activeKind == kind:
+        case .ready:
             break
-        case .starting, .installing, .checking:
+        case .starting, .checking:
             return // onReady pumps again
-        default:
-            // Not running, crashed, or the other engine: bring up the right one; onReady pumps.
-            backend.ensureWorker(for: kind)
+        case .stopped, .failed:
+            // Not running, or crashed: bring it up; onReady pumps.
+            backend.ensureWorker()
             return
         }
         queue.removeFirst()

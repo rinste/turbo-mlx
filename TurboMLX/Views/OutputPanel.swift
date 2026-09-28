@@ -13,7 +13,7 @@ struct OutputPanel: View {
         VStack(spacing: 0) {
             stage
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if let item = app.displayedItem, !app.showsLiveJob, showsBackendSetup == false {
+            if let item = app.displayedItem, !app.showsLiveJob {
                 Divider()
                 ItemInfoBar(item: item)
             }
@@ -46,21 +46,9 @@ struct OutputPanel: View {
         colorScheme == .dark ? Color(white: 0.1) : Color(white: 0.82)
     }
 
-    /// The Python engine's installation, shown only when the selected model needs that engine.
-    private var showsBackendSetup: Bool {
-        guard app.selectedEngine == .python else { return false }
-        switch app.backend.status {
-        case .notInstalled, .installing: return true
-        case .failed: return !app.backend.isInstalled || !app.backend.installOutput.isEmpty
-        default: return false
-        }
-    }
-
     @ViewBuilder
     private var stage: some View {
-        if showsBackendSetup {
-            BackendSetupView()
-        } else if app.showsLiveJob, let job = app.activeJob {
+        if app.showsLiveJob, let job = app.activeJob {
             LiveJobView(job: job)
         } else if let item = app.displayedItem, item.kind == .video {
             VideoStage(url: app.url(for: item))

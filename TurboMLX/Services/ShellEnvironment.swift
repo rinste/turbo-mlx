@@ -1,34 +1,15 @@
 import Foundation
 
-/// Apps launched from the Dock get a bare environment. Child processes should instead see what
-/// the user's Terminal sees (PATH with uv/python, HF_HOME, HF_TOKEN…), so it is read once from an
-/// interactive login shell.
+/// Apps launched from the Dock get a bare environment, without what the user set up for Hugging
+/// Face in their shell (HF_HOME, HF_HUB_CACHE, HF_TOKEN), so it is read once from an interactive
+/// login shell: the models go where the user's other tools keep them.
 nonisolated enum ShellEnvironment {
-    /// Variables that would make our Python pick up someone else's packages.
-    private static let pythonOverrides = [
-        "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "VIRTUAL_ENV", "CONDA_PREFIX", "CONDA_DEFAULT_ENV",
-        "CONDA_SHLVL", "__PYVENV_LAUNCHER__",
-    ]
-
     @concurrent
     nonisolated static func resolve() async -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         if let shell = await loginShellEnvironment() {
             environment.merge(shell) { _, fromShell in fromShell }
         }
-        for key in pythonOverrides { environment.removeValue(forKey: key) }
-
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        var path = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
-        for extra in ["/opt/homebrew/bin", "/usr/local/bin", "\(home)/.local/bin", "\(home)/.cargo/bin",
-                      "/usr/bin", "/bin", "/usr/sbin", "/sbin"] where !path.contains(extra) {
-            path.append(extra)
-        }
-        environment["PATH"] = path.joined(separator: ":")
-        environment["PYTHONUNBUFFERED"] = "1"
-        environment["PYTHONIOENCODING"] = "utf-8"
-        environment["TOKENIZERS_PARALLELISM"] = "false"
-        environment["HF_HUB_DISABLE_TELEMETRY"] = "1"
         return environment
     }
 
