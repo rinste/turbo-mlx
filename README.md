@@ -1,5 +1,8 @@
 # Turbo MLX: AI Image & Video Generation for Apple Silicon
 
+**[⬇ Download the latest version](https://github.com/rinste/turbo-mlx/releases/latest)**: a disk image
+for Macs with Apple silicon and macOS 15 or later. Open it and drag Turbo MLX to Applications.
+
 A macOS app (SwiftUI) that generates images, and videos with sound, on the Mac's GPU with MLX.
 It is built to be distributed: the people who install it never open Terminal and need neither Python nor Xcode. The
 engine is part of the app, written in Swift on MLX; on first launch the user picks a model, the
