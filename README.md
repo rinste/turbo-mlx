@@ -94,10 +94,12 @@ for MLX's C++ core and Metal kernels, the next ones seconds, since the engine is
 `Engine/` changed. The app cannot generate without it, so when the engine does not build, neither
 does the app.
 
-Builds are signed with the team's Developer ID certificate, local ones too: the sandbox ties the
-app's container to its signature, and an ad hoc one changes with every build. Without the
-certificate, override `CODE_SIGN_IDENTITY=-`, knowing macOS may then keep a new build out of the
-data an older one left.
+Builds are signed ad hoc unless `Signing.local.xcconfig`, a file next to `Signing.xcconfig` that
+git ignores, names a team and its certificate (`DEVELOPMENT_TEAM`, `CODE_SIGN_IDENTITY =
+Developer ID Application`). With a Developer ID every build keeps the app's data: the sandbox ties
+the container to the signature, and an ad hoc one changes with every build, so macOS may keep a
+new build out of the data an older one left. The script that builds a release,
+`scripts/release.sh`, explains in its header how to set up notarization and publish a version.
 
 To try the first-run experience without touching your real history, point the app at an empty
 data folder in its container (`~` is the container's home there, hence the quotes):
@@ -154,7 +156,7 @@ SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo-engine serve ──▶ 
 
 | What | Where |
 |---|---|
-| History (PNGs, MP4s + `history.json`) | `~/Library/Containers/com.stefanorinaldo.TurboMLX/Data/Library/Application Support/TurboMLX/History` |
+| History (PNGs, MP4s + `history.json`) | `~/Library/Containers/io.github.rinste.TurboMLX/Data/Library/Application Support/TurboMLX/History` |
 | Models | `~/.cache/huggingface/hub` |
 
 ```
@@ -169,6 +171,7 @@ scripts/      release.sh, embed-engine.sh, build-engine.sh, ExportOptions.plist,
               (draws the app icon at every size into the asset catalog), make-acknowledgements.swift
               (the licenses Settings → About shows: Resources/Acknowledgements.txt)
 TurboMLX.entitlements   the app's sandbox (the engine's: Engine/turbo-engine.entitlements)
+Signing.xcconfig        how local builds are signed (the team goes in Signing.local.xcconfig)
 ```
 
 The project uses Xcode's synchronized folders: files added under `TurboMLX/` join the target on
@@ -183,35 +186,6 @@ with its fixture and `verify` stage (see `Engine/README.md`), and an adapter in 
 native engine, what is checked so far, and what comes next.
 [docs/generation-performance.md](docs/generation-performance.md) ranks the ways to make generation
 faster, with the measurements that decide each one.
-
-## Distribution
-
-The app is Apple silicon only and uses the hardened runtime; it must be signed with a Developer ID
-and notarized.
-
-**From Xcode:** Product → Archive → Distribute App → Direct Distribution (Xcode signs, notarizes
-and staples).
-
-**From the command line** (also builds the DMG): store the notarization credentials once (an
-app-specific password, kept in the keychain), then run the script.
-
-```bash
-xcrun notarytool store-credentials turbo-mlx --apple-id YOUR_APPLE_ID --team-id YOUR_TEAM_ID
-```
-
-```bash
-scripts/release.sh
-```
-
-The DMG ends up in `build/release/`. The script checks that the exported app carries
-`turbo-engine`, signed with the Developer ID and allowed to inherit the app's sandbox: without it
-the app cannot generate.
-
-**Publishing a version:** raise `MARKETING_VERSION` (and `CURRENT_PROJECT_VERSION`) in the project,
-run `swift scripts/make-acknowledgements.swift` if the engine's dependencies changed, build the
-DMG, and attach it to a GitHub release of this repository tagged with the same number (`v1.1`
-for 1.1), not marked as a pre-release: that is the release the app's update check compares itself
-with. The repository must be public for the check, and the download, to reach anyone.
 
 ## Troubleshooting
 

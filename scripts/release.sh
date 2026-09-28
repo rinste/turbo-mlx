@@ -1,16 +1,26 @@
 #!/bin/zsh
 # Builds Turbo MLX for distribution outside the Mac App Store: Developer ID signature,
-# notarization, stapling and a disk image.
-#
-# One-time setup (stores an app-specific password in the keychain):
-#   xcrun notarytool store-credentials turbo-mlx --apple-id <apple-id> --team-id YOUR_TEAM_ID
+# notarization, stapling and a disk image. It needs a "Developer ID Application" certificate in
+# the keychain, whose team signs the app, and the notarization credentials, stored once: an
+# app-specific password of the team's Apple ID (account.apple.com → Sign-In and Security), saved
+# by the command below, which asks for the Apple ID and the password.
+#   xcrun notarytool store-credentials turbo-mlx --team-id <team-id>
 #
 # Usage: scripts/release.sh            -> build/release/Turbo-MLX-<version>.dmg
 #        NOTARY_PROFILE=other scripts/release.sh
+#        TEAM_ID=<team-id> scripts/release.sh   (with more than one Developer ID certificate)
+#
+# To publish a version: raise MARKETING_VERSION (and CURRENT_PROJECT_VERSION) in the project, run
+# `swift scripts/make-acknowledgements.swift` if the engine's dependencies changed, run this
+# script and attach the DMG to a GitHub release tagged with the same number (v1.1 for 1.1), not
+# a pre-release: that is the release the app's update check compares itself with.
 set -euo pipefail
 
 cd "${0:A:h}/.."
-TEAM_ID="YOUR_TEAM_ID"
+# The team of the Developer ID certificate in the keychain, unless TEAM_ID names one.
+TEAM_ID="${TEAM_ID:-$(security find-identity -v -p codesigning \
+  | sed -nE 's/.*"Developer ID Application: .*\(([A-Z0-9]{10})\)"$/\1/p' | head -1)}"
+[[ -n "$TEAM_ID" ]] || { print -u2 "No Developer ID Application certificate in the keychain."; exit 1 }
 PROFILE="${NOTARY_PROFILE:-turbo-mlx}"
 OUT="build/release"
 ARCHIVE="$OUT/TurboMLX.xcarchive"
@@ -34,7 +44,7 @@ notarize() {
 # The credentials first, so that a missing profile does not stop the script after the build.
 xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null || {
   print -u2 "No working notarization profile \"$PROFILE\". Store it once with:"
-  print -u2 "  xcrun notarytool store-credentials $PROFILE --apple-id <apple-id> --team-id $TEAM_ID"
+  print -u2 "  xcrun notarytool store-credentials $PROFILE --team-id $TEAM_ID"
   exit 1
 }
 

@@ -1,0 +1,14 @@
+// How local builds are signed. The team is not in the repository: put it, with its certificate,
+// in Signing.local.xcconfig next to this file (git ignores it), for instance
+//
+//   DEVELOPMENT_TEAM = ABCDE12345
+//   CODE_SIGN_IDENTITY = Developer ID Application
+//
+// Signed with a Developer ID, each build keeps the sandbox container of the one before (macOS
+// ties the container to the signature). Without that file builds are signed ad hoc: they run, but
+// macOS may keep a new build out of the data an older one left. scripts/release.sh signs with the
+// Developer ID certificate in the keychain whatever these files say.
+
+CODE_SIGN_IDENTITY = -
+
+#include? "Signing.local.xcconfig"
