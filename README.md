@@ -141,7 +141,8 @@ TurboMLX/
   Views/      left column, output, history, settings, log
 Engine/       the engine (Swift package: turbo-engine, TurboEngineCore), its fixtures and the
               mflux reference worker
-scripts/      release.sh, embed-engine.sh, build-engine.sh, ExportOptions.plist
+scripts/      release.sh, embed-engine.sh, build-engine.sh, ExportOptions.plist, make-icon.swift
+              (draws the app icon at every size into the asset catalog)
 TurboMLX.entitlements   the app's sandbox (the engine's: Engine/turbo-engine.entitlements)
 ```
 
