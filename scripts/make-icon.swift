@@ -1,87 +1,71 @@
-// Draws the app icon: a white line sparkle on a dark field, full-bleed (macOS rounds the corners).
-// Every size is drawn from the same vector, with a heavier line and one star less where the icon
-// gets small, and written into the asset catalog.
+// Draws the app icon: a halftone of white dots on black, largest in the middle, full-bleed
+// (macOS rounds the corners). Every size is drawn from the same description, with fewer dots
+// where the icon gets small, and written into the asset catalog.
 //
 //   swiftc -O scripts/make-icon.swift -o /tmp/make-icon && /tmp/make-icon
-//   /tmp/make-icon preview.png 1024      (one size, anywhere, to look at)
+//   /tmp/make-icon preview.png 1024 [variant]     (one size, anywhere, to look at)
 
 import AppKit
 import CoreGraphics
+import Foundation
 
 let sizes = [16, 32, 64, 128, 256, 512, 1024]
 let catalog = "TurboMLX/Resources/Assets.xcassets/AppIcon.appiconset"
 
-/// A four-pointed star whose sides curve in towards the middle: tips at `radius` (up, down) and
-/// `radius * width` (left, right). Each side leaves a tip almost along its axis (`near`) and bends
-/// round towards the centre (`far`): the smaller they are, the thinner the waist.
-func sparkle(center: CGPoint, radius: CGFloat, width: CGFloat, near: CGFloat = 0.04, far: CGFloat = 0.30) -> CGPath {
-    let (rx, ry) = (radius * width, radius)
-    func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: center.x + x * rx, y: center.y + y * ry) }
-    let path = CGMutablePath()
-    path.move(to: point(0, 1))
-    // Clockwise from the top: each quadrant from one tip to the next.
-    for (from, to) in [((0.0, 1.0), (1.0, 0.0)), ((1.0, 0.0), (0.0, -1.0)), ((0.0, -1.0), (-1.0, 0.0)), ((-1.0, 0.0), (0.0, 1.0))] {
-        let (fx, fy) = from, (tx, ty) = to
-        // Leaving `from` along its own axis, arriving at `to` along its axis.
-        let c1 = point(fx == 0 ? near * tx : far * fx, fy == 0 ? near * ty : far * fy)
-        let c2 = point(tx == 0 ? near * fx : far * tx, ty == 0 ? near * fy : far * ty)
-        path.addCurve(to: point(tx, ty), control1: c1, control2: c2)
-    }
-    path.closeSubpath()
-    return path
-}
+/// How big each dot is, 0...1, at a grid position `(x, y)` in -1...1 from the middle.
+typealias Tone = (_ x: Double, _ y: Double) -> Double
 
-/// The star's outline drawn inside it, so its points stay sharp, with a faint halo.
-func drawOutline(_ path: CGPath, width: CGFloat, glow: CGFloat, in context: CGContext) {
-    context.saveGState()
-    context.setShadow(offset: .zero, blur: glow, color: CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.28))
-    context.beginTransparencyLayer(auxiliaryInfo: nil)
-    context.addPath(path)
-    context.clip()
-    context.setLineWidth(width * 2)
-    context.setLineJoin(.round)
-    context.setStrokeColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
-    context.addPath(path)
-    context.strokePath()
-    context.endTransparencyLayer()
-    context.restoreGState()
-}
+let variants: [String: Tone] = [
+    // Round and centred: a glow in dots, full in the middle and falling off towards the edge.
+    "center": { x, y in exp(-pow((x * x + y * y) / 0.5, 1.4)) },
+    // A sphere lit from the upper left: the dots swell towards the light, and fall off at its rim.
+    "sphere": { x, y in
+        let r2 = x * x + y * y
+        guard r2 < 0.86 else { return 0 }
+        let z = (1 - r2 / 0.86).squareRoot()
+        let (lx, ly, lz) = (-0.45, 0.5, 0.74)
+        let lit = max(0, (x / 0.93) * lx + (y / 0.93) * ly + z * lz)
+        return 0.25 + 0.75 * pow(lit, 1.4)
+    },
+    // Off-centre, as in the reference: a bright patch up to the right.
+    "offset": { x, y in exp(-((x - 0.2) * (x - 0.2) + (y - 0.22) * (y - 0.22)) / 0.3) },
+]
 
-func render(size: Int) -> CGImage {
+func render(size: Int, variant: String) -> CGImage {
     let side = CGFloat(size)
     let space = CGColorSpace(name: CGColorSpace.displayP3)!
     let context = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0, space: space,
                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
     context.setShouldAntialias(true)
-    context.interpolationQuality = .high
 
-    // A dark field, a little lighter behind the star.
-    let field = CGGradient(colorsSpace: space, colors: [
-        CGColor(srgbRed: 0.105, green: 0.106, blue: 0.125, alpha: 1),
-        CGColor(srgbRed: 0.035, green: 0.035, blue: 0.045, alpha: 1),
+    // Near black, a touch lighter in the middle.
+    context.setFillColor(CGColor(srgbRed: 0.025, green: 0.025, blue: 0.03, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: side, height: side))
+    let lift = CGGradient(colorsSpace: space, colors: [
+        CGColor(srgbRed: 0.10, green: 0.10, blue: 0.12, alpha: 1),
+        CGColor(srgbRed: 0.10, green: 0.10, blue: 0.12, alpha: 0),
     ] as CFArray, locations: [0, 1])!
-    context.drawLinearGradient(field, start: CGPoint(x: 0, y: side), end: CGPoint(x: side, y: 0), options: [])
-    let glow = CGGradient(colorsSpace: space, colors: [
-        CGColor(srgbRed: 0.42, green: 0.44, blue: 0.60, alpha: 0.22),
-        CGColor(srgbRed: 0.42, green: 0.44, blue: 0.60, alpha: 0),
-    ] as CFArray, locations: [0, 1])!
-    let middle = CGPoint(x: side * 0.47, y: side * 0.47)
-    context.drawRadialGradient(glow, startCenter: middle, startRadius: 0, endCenter: middle, endRadius: side * 0.52, options: [])
+    let middle = CGPoint(x: side / 2, y: side / 2)
+    context.drawRadialGradient(lift, startCenter: middle, startRadius: 0, endCenter: middle, endRadius: side * 0.55, options: [])
 
-    // The line: heavier, relative to the icon, as it gets small, so it still reads at 16 px.
-    let line = max(side * 0.016, min(1.3, side * 0.09))
-    let main = sparkle(center: middle, radius: side * 0.33, width: 0.76)
-    drawOutline(main, width: line, glow: side * 0.02, in: context)
+    // Fewer, larger dots as the icon shrinks, so that they stay dots.
+    let count = size >= 128 ? 9 : size >= 64 ? 7 : size >= 32 ? 5 : 4
+    let span = side * 0.62
+    let step = span / CGFloat(count - 1)
+    let origin = (side - span) / 2
+    let smallest = max(step * 0.09, 0.45)
+    let largest = step * 0.46
+    let tone = variants[variant] ?? variants["center"]!
 
-    // A small solid one up to the right, where there is room for it.
-    if size >= 32 {
-        let small = sparkle(center: CGPoint(x: side * 0.745, y: side * 0.755), radius: side * 0.075, width: 0.76)
-        context.saveGState()
-        context.setShadow(offset: .zero, blur: side * 0.015, color: CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.35))
-        context.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
-        context.addPath(small)
-        context.fillPath()
-        context.restoreGState()
+    context.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
+    for row in 0..<count {
+        for column in 0..<count {
+            let x = Double(column) / Double(count - 1) * 2 - 1
+            let y = Double(row) / Double(count - 1) * 2 - 1
+            let radius = smallest + (largest - smallest) * CGFloat(min(max(tone(x, y), 0), 1))
+            let center = CGPoint(x: origin + CGFloat(column) * step, y: origin + CGFloat(row) * step)
+            context.fillEllipse(in: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
+        }
     }
     return context.makeImage()!
 }
@@ -92,12 +76,14 @@ func write(_ image: CGImage, to path: String) {
     try! data.write(to: URL(fileURLWithPath: path))
 }
 
-let arguments = CommandLine.arguments.dropFirst()
+let arguments = Array(CommandLine.arguments.dropFirst())
+let chosen = "center"
 if let path = arguments.first {
-    write(render(size: Int(arguments.dropFirst().first ?? "1024") ?? 1024), to: path)
+    let size = arguments.count > 1 ? Int(arguments[1]) ?? 1024 : 1024
+    write(render(size: size, variant: arguments.count > 2 ? arguments[2] : chosen), to: path)
 } else {
     for size in sizes {
-        write(render(size: size), to: "\(catalog)/icon_\(size).png")
+        write(render(size: size, variant: chosen), to: "\(catalog)/icon_\(size).png")
     }
     print("Wrote \(sizes.count) sizes to \(catalog)")
 }
