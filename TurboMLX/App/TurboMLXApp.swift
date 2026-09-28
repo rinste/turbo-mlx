@@ -90,11 +90,6 @@ private struct GenerationCommands: Commands {
             Divider()
 
             let item = model.showsLiveJob ? nil : model.displayedItem
-            Button("Reuse Prompt and Settings") {
-                if let item { model.reuse(item) }
-            }
-            .keyboardShortcut("r", modifiers: .command)
-            .disabled(item == nil)
             Button(item?.kind == .video ? "Copy Video" : "Copy Image") {
                 if let item { NSPasteboard.general.copyItem(item, at: model.url(for: item)) }
             }
@@ -107,10 +102,11 @@ private struct GenerationCommands: Commands {
 
             Divider()
 
-            Button("Newer Image") { model.moveSelection(by: -1) }
+            // As in the strip: older to the left, newer to the right. Each loads its settings.
+            Button("Older Image") { model.moveSelection(by: 1) }
                 .keyboardShortcut("[", modifiers: .command)
                 .disabled(model.history.items.isEmpty)
-            Button("Older Image") { model.moveSelection(by: 1) }
+            Button("Newer Image") { model.moveSelection(by: -1) }
                 .keyboardShortcut("]", modifiers: .command)
                 .disabled(model.history.items.isEmpty)
         }

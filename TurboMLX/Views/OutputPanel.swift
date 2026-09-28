@@ -6,6 +6,7 @@ import SwiftUI
 struct OutputPanel: View {
     @Environment(AppModel.self) private var app
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.undoManager) private var undoManager
     @State private var quickLookURL: URL?
     @FocusState private var isFocused: Bool
 
@@ -26,10 +27,11 @@ struct OutputPanel: View {
         .focusable()
         .focused($isFocused)
         .focusEffectDisabled()
+        // Left is older, as in the strip.
         .onMoveCommand { direction in
             switch direction {
-            case .left: app.moveSelection(by: -1)
-            case .right: app.moveSelection(by: 1)
+            case .left: app.moveSelection(by: 1, undoManager: undoManager)
+            case .right: app.moveSelection(by: -1, undoManager: undoManager)
             default: break
             }
         }
@@ -69,7 +71,6 @@ struct OutputPanel: View {
         }
     }
 
-    /// Reuse Prompt and Settings is not here but in the bar under the image, next to the settings.
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .status) {
@@ -212,41 +213,31 @@ private struct ItemInfoBar: View {
             // Each image's prompt starts from the top.
             .id(item.id)
 
-            HStack(spacing: 10) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        MetadataChip(systemImage: "cpu", text: shortModelName, help: "\(item.modelName)\n\(item.modelID)")
-                        MetadataChip(systemImage: "aspectratio", text: "\(item.size.width)×\(item.size.height)")
-                        if item.kind == .video, let frames = item.request.frames, let fps = item.request.fps, fps > 0 {
-                            MetadataChip(systemImage: "film", text: "\(Format.clipDuration(frames: frames, fps: fps)) · \(fps) fps",
-                                         help: "\(frames) frames at \(fps) fps")
-                        }
-                        if item.request.referenceImage != nil {
-                            MetadataChip(systemImage: "photo", text: "From an image", help: "The clip started from a reference image")
-                        }
-                        MetadataChip(systemImage: "stairs", text: "\(item.request.steps) steps")
-                        if item.kind == .image {
-                            MetadataChip(systemImage: "dial.medium", text: "CFG \(Format.guidance(item.request.guidance))")
-                        }
-                        MetadataChip(systemImage: "dice", text: "\(item.request.seed)", help: "Seed \(item.request.seed)")
-                        MetadataChip(systemImage: "timer", text: Format.duration(item.seconds), help: timingHelp)
-                        if let peak = item.peakMemory {
-                            MetadataChip(systemImage: "memorychip", text: Format.memory(peak), help: "Peak memory")
-                        }
-                        MetadataChip(
-                            systemImage: "calendar",
-                            text: item.createdAt.formatted(date: .abbreviated, time: .shortened)
-                        )
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    MetadataChip(systemImage: "cpu", text: shortModelName, help: "\(item.modelName)\n\(item.modelID)")
+                    MetadataChip(systemImage: "aspectratio", text: "\(item.size.width)×\(item.size.height)")
+                    if item.kind == .video, let frames = item.request.frames, let fps = item.request.fps, fps > 0 {
+                        MetadataChip(systemImage: "film", text: "\(Format.clipDuration(frames: frames, fps: fps)) · \(fps) fps",
+                                     help: "\(frames) frames at \(fps) fps")
                     }
+                    if item.request.referenceImage != nil {
+                        MetadataChip(systemImage: "photo", text: "From an image", help: "The clip started from a reference image")
+                    }
+                    MetadataChip(systemImage: "stairs", text: "\(item.request.steps) steps")
+                    if item.kind == .image {
+                        MetadataChip(systemImage: "dial.medium", text: "CFG \(Format.guidance(item.request.guidance))")
+                    }
+                    MetadataChip(systemImage: "dice", text: "\(item.request.seed)", help: "Seed \(item.request.seed)")
+                    MetadataChip(systemImage: "timer", text: Format.duration(item.seconds), help: timingHelp)
+                    if let peak = item.peakMemory {
+                        MetadataChip(systemImage: "memorychip", text: Format.memory(peak), help: "Peak memory")
+                    }
+                    MetadataChip(
+                        systemImage: "calendar",
+                        text: item.createdAt.formatted(date: .abbreviated, time: .shortened)
+                    )
                 }
-
-                Button {
-                    app.reuse(item)
-                } label: {
-                    Label("Reuse Prompt and Settings", systemImage: "rectangle.lefthalf.inset.filled.arrow.left")
-                }
-                .controlSize(.small)
-                .help("Put this image’s prompt, in its blocks, its model, size, steps, guidance and seed in the controls on the left (⌘R)")
             }
         }
         .padding(.horizontal, 16)
@@ -295,7 +286,6 @@ struct HistoryItemMenu: View {
     let item: HistoryItem
 
     var body: some View {
-        Button("Reuse Prompt and Settings") { app.reuse(item) }
         if app.selectedModel?.family.takesReferenceImage == true {
             Button("Use as Reference Image") { app.useAsReference(item) }
         }

@@ -12,10 +12,11 @@ struct ControlPanel: View {
         @Bindable var app = app
         Form {
             if let model = app.selectedModel {
+                // Reset sits at the top right, in the first section's header.
                 if model.family.takesReferenceImage {
                     ReferenceImageSection(settings: $app.settings)
                 }
-                PromptSection(settings: $app.settings, focus: $focusedBlock)
+                PromptSection(settings: $app.settings, focus: $focusedBlock, showsReset: !model.family.takesReferenceImage)
                 FormatSection(settings: $app.settings)
                 if model.family.media == .video {
                     ClipSection(settings: $app.settings)
@@ -33,6 +34,26 @@ struct ControlPanel: View {
             GenerateBar()
         }
         .onAppear { focusedBlock = app.settings.blocks.first?.id }
+    }
+}
+
+// MARK: - Reset
+
+/// Back to the model and settings of a first launch, with an empty prompt; ⌘Z brings them back.
+private struct ResetButton: View {
+    @Environment(AppModel.self) private var app
+    @Environment(\.undoManager) private var undoManager
+
+    var body: some View {
+        Button {
+            app.resetControls(undoManager: undoManager)
+        } label: {
+            Image(systemName: "arrow.counterclockwise")
+                .font(.body.weight(.medium))
+        }
+        .buttonStyle(.borderless)
+        .help("Reset the prompt, the model and the settings to their defaults (⌘Z undoes it)")
+        .accessibilityLabel("Reset")
     }
 }
 
@@ -238,6 +259,7 @@ private struct ModelMenu: View {
 private struct PromptSection: View {
     @Binding var settings: GenerationSettings
     var focus: FocusState<PromptBlock.ID?>.Binding
+    let showsReset: Bool
 
     /// The block being dragged; back to nil when it's let go, or when the drag is cancelled.
     @GestureState(resetTransaction: Transaction(animation: .snappy)) private var drag: BlockDrag? = nil
@@ -281,7 +303,13 @@ private struct PromptSection: View {
             }
             .coordinateSpace(Self.space)
         } header: {
-            Text("Prompt")
+            HStack {
+                Text("Prompt")
+                if showsReset {
+                    Spacer()
+                    ResetButton()
+                }
+            }
         } footer: {
             VStack(alignment: .leading, spacing: 8) {
                 Button("Add Prompt Block", systemImage: "plus") { addBlock() }
@@ -625,7 +653,11 @@ private struct ReferenceImageSection: View {
                 }
             }
         } header: {
-            Text("Reference Image")
+            HStack {
+                Text("Reference Image")
+                Spacer()
+                ResetButton()
+            }
         } footer: {
             if let failure {
                 Text(failure).font(.caption).foregroundStyle(.red)

@@ -74,6 +74,7 @@ final class AppModel {
     @ObservationIgnored private var preloadRequested: String?
     /// Set when the user frees the memory: no preloading until the model changes or an image runs.
     @ObservationIgnored private var preloadDeclined = false
+    @ObservationIgnored private var preloadScheduled = false
 
     private(set) var queue: [GenerationJob] = []
     private(set) var activeJob: GenerationJob?
@@ -102,15 +103,7 @@ final class AppModel {
            let saved = try? JSONDecoder().decode(GenerationSettings.self, from: data) {
             settings = saved
         } else {
-            var initial = GenerationSettings()
-            // At 1024 px with everything resident Ming-Image peaks at ~35 GB and Qwen-Image at
-            // ~43 GB (~15 and ~21 GB with Save memory): below 64 GB the full-speed mode would swap.
-            initial.lowMemory = ProcessInfo.processInfo.physicalMemory < 64 << 30
-            if let model = catalog.first(where: { $0.id == selectedID }) {
-                initial.steps = model.defaultSteps
-                initial.guidance = model.defaultGuidance
-            }
-            settings = initial
+            settings = Self.initialSettings(for: catalog.first { $0.id == selectedID })
         }
 
         backend.onReady = { [weak self] in
@@ -211,7 +204,20 @@ final class AppModel {
     /// starts at the prompt instead of at a 5–40 s load. Nothing happens while the worker is
     /// busy, when the model is already in memory, or after "Free Memory". An engine that is not
     /// running (stopped, or crashed) is brought up first.
+    ///
+    /// At most once every 1.5 s, for the model selected by then: clicking through the history
+    /// switches models, and each switch would otherwise start loading one.
     private func preloadIfUseful() {
+        guard !preloadScheduled else { return }
+        preloadScheduled = true
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.5))
+            self?.preloadScheduled = false
+            self?.preloadNow()
+        }
+    }
+
+    private func preloadNow() {
         guard !preloadDeclined, activeJob == nil, queue.isEmpty, !settings.trimmedPrompt.isEmpty,
               let model = selectedModel, let location = installed[model.id]
         else { return }
@@ -310,6 +316,30 @@ final class AppModel {
             let output = isVideo ? history.newVideoURL(seed: seed) : history.newImageURL(seed: seed)
             queue.append(GenerationJob(model: model, request: request, outputURL: output))
         }
+        viewer = .live
+        pump()
+    }
+
+    /// What the "+" after the history repeats: the last generation queued, running or finished.
+    var lastGeneration: (model: ModelDescriptor, request: GenerationRequest)? {
+        if let job = queue.last ?? activeJob { return (job.model, job.request) }
+        guard let item = history.items.first, let model = models.first(where: { $0.id == item.modelID }) else { return nil }
+        return (model, item.request)
+    }
+
+    /// One more generation like the last one, with a new seed; the controls are left as they are.
+    func generateAgain() {
+        guard let (model, last) = lastGeneration, isInstalled(model) else { return }
+        preloadDeclined = false
+        var request = last
+        request.seed = Int.random(in: 0..<1_000_000_000)
+        request.lowMemory = settings.lowMemory
+        if let reference = request.referenceImage,
+           !FileManager.default.fileExists(atPath: HistoryStore.referenceURL(reference).path) {
+            request.referenceImage = nil
+        }
+        let output = model.family.media == .video ? history.newVideoURL(seed: request.seed) : history.newImageURL(seed: request.seed)
+        queue.append(GenerationJob(model: model, request: request, outputURL: output))
         viewer = .live
         pump()
     }
@@ -473,21 +503,26 @@ final class AppModel {
     /// The live viewer shows the running job instead of the last image.
     var showsLiveJob: Bool { viewer == .live && activeJob != nil }
 
-    func select(_ item: HistoryItem) {
+    /// Shows a history item and puts its prompt, model and settings in the controls on the left.
+    /// `undoManager` is the window's, where ⌘Z finds what they replaced.
+    func select(_ item: HistoryItem, undoManager: UndoManager? = nil) {
         viewer = item.id == history.items.first?.id && activeJob == nil ? .live : .item(item.id)
+        let controls = controls(from: item)
+        replaceControls(with: controls.settings, modelID: controls.modelID, actionName: "Load Settings", undoManager: undoManager)
     }
 
     func isSelected(_ item: HistoryItem) -> Bool {
         !showsLiveJob && displayedItem?.id == item.id
     }
 
-    /// Moves through the history; `offset` -1 is newer, +1 is older.
-    func moveSelection(by offset: Int) {
+    /// Moves through the history, loading each item's settings as a click would; `offset` -1 is
+    /// newer (to the right in the strip), +1 is older.
+    func moveSelection(by offset: Int, undoManager: UndoManager? = nil) {
         let items = history.items
         guard !items.isEmpty else { return }
         let current = displayedItem.flatMap { item in items.firstIndex { $0.id == item.id } } ?? 0
         let next = min(max(current + offset, 0), items.count - 1)
-        select(items[next])
+        select(items[next], undoManager: undoManager)
     }
 
     func delete(_ items: [HistoryItem]) {
@@ -501,11 +536,11 @@ final class AppModel {
         history.removeAll()
     }
 
-    /// Loads an image's prompt blocks, model and settings back into the controls.
-    func reuse(_ item: HistoryItem) {
-        // The model first: switching family resets steps and guidance to its defaults.
+    /// An item's prompt blocks, model and settings, as the controls should show them. Its seed goes
+    /// in the seed field, but Random seed stays as it was: Generate makes a variation unless it is
+    /// turned off.
+    private func controls(from item: HistoryItem) -> (settings: GenerationSettings, modelID: String) {
         let model = models.first { $0.id == item.modelID }
-        if let model { selectedModelID = model.id }
         var updated = settings
         if let blocks = item.request.blocks, !blocks.isEmpty {
             updated.blocks = blocks
@@ -526,14 +561,53 @@ final class AppModel {
         }
         updated.steps = item.request.steps
         updated.guidance = item.request.guidance
-        updated.randomSeed = false
         updated.seed = item.request.seed
         // Only a model that makes transparent images says which background was chosen: the
         // others always save false, which would turn the choice off for the next Ming image.
         if model?.family.producesAlpha == true {
             updated.transparentBackground = item.request.transparentBackground
         }
-        settings = updated
+        return (updated, model?.id ?? selectedModelID)
+    }
+
+    /// Reset: the model and settings of a first launch, with an empty prompt.
+    func resetControls(undoManager: UndoManager? = nil) {
+        let model = models.first { $0.id == ModelCatalog.defaultModelID } ?? models.first
+        replaceControls(with: Self.initialSettings(for: model), modelID: model?.id ?? selectedModelID, actionName: "Reset",
+                        undoManager: undoManager)
+    }
+
+    /// Settings for a first launch: the model's steps and guidance, Save memory below 64 GB.
+    private static func initialSettings(for model: ModelDescriptor?) -> GenerationSettings {
+        var initial = GenerationSettings()
+        // At 1024 px with everything resident Ming-Image peaks at ~35 GB and Qwen-Image at
+        // ~43 GB (~15 and ~21 GB with Save memory): below 64 GB the full-speed mode would swap.
+        initial.lowMemory = ProcessInfo.processInfo.physicalMemory < 64 << 30
+        if let model {
+            initial.steps = model.defaultSteps
+            initial.guidance = model.defaultGuidance
+        }
+        return initial
+    }
+
+    /// Puts other settings and another model in the controls so that ⌘Z brings back what they
+    /// replaced: a click in the history or Reset does not lose a prompt being written. Without the
+    /// view's undo manager (a menu command), the main window's, which exists while the app is active.
+    private func replaceControls(with new: GenerationSettings, modelID: String, actionName: String, undoManager: UndoManager?) {
+        let previous = (settings: settings, modelID: selectedModelID)
+        guard new != previous.settings || modelID != previous.modelID else { return }
+        if let undoManager = undoManager ?? NSApp.mainWindow?.undoManager {
+            undoManager.registerUndo(withTarget: self) { model in
+                MainActor.assumeIsolated {
+                    model.replaceControls(with: previous.settings, modelID: previous.modelID, actionName: actionName,
+                                          undoManager: undoManager)
+                }
+            }
+            undoManager.setActionName(actionName)
+        }
+        // The model first: switching family resets steps and guidance, which `new` then sets.
+        selectedModelID = modelID
+        settings = new
     }
 
     /// Makes a generated image (a clip's first frame) the reference image of the next clip.

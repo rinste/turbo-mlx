@@ -1,9 +1,13 @@
 import SwiftUI
 
-/// Film strip of queued jobs and past images, newest on the left.
+/// Film strip of past images and clips in the order they were made, the newest on the right, then
+/// the running and queued jobs and a "+" for one more like the last. A click shows an item and puts
+/// its settings on the left.
 struct HistoryStrip: View {
     @Environment(AppModel.self) private var app
     @State private var confirmsClear = false
+    /// At the end, where the newest are, until the user scrolls away.
+    @State private var position = ScrollPosition(edge: .trailing)
 
     private let thumbnailHeight: CGFloat = 92
 
@@ -40,29 +44,36 @@ struct HistoryStrip: View {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
                     LazyHStack(spacing: 8) {
-                        // Newest on the left here too: the last queued job first, the running one
-                        // next to the images it will join.
-                        ForEach(app.pendingJobs.reversed()) { job in
-                            JobThumbnail(job: job, height: thumbnailHeight)
-                        }
-                        ForEach(app.history.items) { item in
+                        // The history is stored newest first.
+                        ForEach(app.history.items.reversed()) { item in
                             HistoryThumbnail(item: item, height: thumbnailHeight, isSelected: app.isSelected(item))
                                 .id(item.id)
+                        }
+                        // The running job next to the images it will join, then the queue.
+                        ForEach(app.pendingJobs) { job in
+                            JobThumbnail(job: job, height: thumbnailHeight)
                         }
                         if app.history.items.isEmpty && app.pendingJobs.isEmpty {
                             Text("Generated images will appear here.")
                                 .font(.callout)
                                 .foregroundStyle(.tertiary)
                                 .frame(height: thumbnailHeight)
+                        } else {
+                            AgainTile(height: thumbnailHeight)
                         }
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                 }
                 .scrollIndicators(.automatic)
+                .scrollPosition($position)
                 .onChange(of: app.displayedItem?.id) { _, id in
                     guard let id else { return }
                     withAnimation(.snappy) { proxy.scrollTo(id, anchor: .center) }
+                }
+                // A new job or a finished one: back to the end, where they are.
+                .onChange(of: app.history.items.count + app.pendingJobs.count) {
+                    withAnimation(.snappy) { position.scrollTo(edge: .trailing) }
                 }
             }
         }
@@ -81,6 +92,51 @@ struct HistoryStrip: View {
     }
 }
 
+/// After the last generation: one more like it, with a new seed.
+private struct AgainTile: View {
+    @Environment(AppModel.self) private var app
+    let height: CGFloat
+    @State private var isHovered = false
+
+    var body: some View {
+        let last = app.lastGeneration
+        let enabled = last.map { app.isInstalled($0.model) } ?? false
+        Button { app.generateAgain() } label: {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isHovered && enabled ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(.tertiary, style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                }
+                .overlay {
+                    Image(systemName: "plus")
+                        .font(.title2.weight(.medium))
+                        .foregroundStyle(enabled ? .secondary : .tertiary)
+                }
+                .frame(width: height * 0.7, height: height)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .onHover { isHovered = $0 }
+        .help(help(for: last))
+        .accessibilityLabel("One more like the last")
+    }
+
+    private func help(for last: (model: ModelDescriptor, request: GenerationRequest)?) -> String {
+        guard let last else { return "" }
+        let request = last.request
+        let estimate = TimeEstimate.estimate(
+            model: last.model, size: request.size, steps: request.steps, guidance: request.guidance, frames: request.frames,
+            lowMemory: app.settings.lowMemory, count: 1,
+            isLoaded: app.isLoaded(last.model) || (app.queue.last ?? app.activeJob)?.model.id == last.model.id,
+            history: app.history.items, models: app.models
+        )
+        let thing = last.model.family.media == .video ? "clip" : "image"
+        return "One more \(thing) like the last, with a new seed (\(Format.estimate(estimate.seconds)))"
+    }
+}
+
 private func thumbnailWidth(for size: PixelSize, height: CGFloat) -> CGFloat {
     let ratio = CGFloat(size.width) / CGFloat(max(size.height, 1))
     return min(max(height * ratio, height * 0.56), height * 1.78)
@@ -88,6 +144,7 @@ private func thumbnailWidth(for size: PixelSize, height: CGFloat) -> CGFloat {
 
 private struct HistoryThumbnail: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.undoManager) private var undoManager
     let item: HistoryItem
     let height: CGFloat
     let isSelected: Bool
@@ -116,7 +173,7 @@ private struct HistoryThumbnail: View {
                     .strokeBorder(isSelected ? Color.active : Color.primary.opacity(0.1), lineWidth: isSelected ? 3 : 1)
             }
             .contentShape(Rectangle())
-            .onTapGesture { app.select(item) }
+            .onTapGesture { app.select(item, undoManager: undoManager) }
             .onDrag { NSItemProvider(contentsOf: url) ?? NSItemProvider() }
             .contextMenu { HistoryItemMenu(item: item) }
             .help(item.prompt)
