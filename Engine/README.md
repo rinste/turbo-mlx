@@ -1,9 +1,9 @@
 # turbo-engine
 
-The engine of Turbo MLX: the catalog's four families on [MLX Swift](https://github.com/ml-explore/mlx-swift),
-behind a JSON-lines protocol (below) that the app speaks to it; the Python engine the app used to
-ship, `Reference/turbo_worker.py`, speaks it too (see `docs/native-engine.md` for the why and the
-plan).
+The engine of Turbo MLX: the catalog's five families (four image models and LTX-2 for video) on
+[MLX Swift](https://github.com/ml-explore/mlx-swift), behind a JSON-lines protocol (below) that
+the app speaks to it; the Python engine the app used to ship, `Reference/turbo_worker.py`, speaks
+it too for the image families (see `docs/native-engine.md` for the why and the plan).
 
 ```
 Sources/turbo-engine/         the executable: `serve` (the worker) and `verify` (parity checks)
@@ -18,8 +18,14 @@ Sources/TurboEngineCore/      protocol, mflux checkpoint loading, PNG output, th
                               transformer, the causal 3D decoder, classifier-free guidance
   Families/Ming/              Ming-Image: the Ling MoE encoder, the Qwen2 connector and heads,
                               the S3-DiT in bf16, the RGBA decoder
+  Families/LTX/               LTX-2.3: Gemma 3 12B and the text connector, the audio–video
+                              transformer, the video VAE (tiled decode, image encoder), the ×2
+                              latent upsampler, the audio VAE and the 48 kHz vocoder, the
+                              distilled two-stage pipeline
+VideoOutput.swift             MP4 (H.264 + AAC) with AVAssetWriter, frames as they are decoded
 Fixtures/make_*_fixture.py    build the checkpoint + references `verify` compares against
 Fixtures/requirements.txt     the mflux revision they (and the reference worker) run with
+Fixtures/requirements-ltx.txt the ltx-2-mlx revision the LTX-2 port follows
 Reference/turbo_worker.py     mflux behind the same protocol, to compare real images
 ```
 
@@ -37,6 +43,7 @@ every tensor where its key says.
 | Z-Image Turbo | Qwen3 4B in float32, second-to-last state, real tokens only, thinking on | S3-DiT, tokens padded to 32 with learned pad tokens, float32 stream | FLUX.1-style, 16 channels, tiles with Save memory | off |
 | Qwen-Image 2512 | Qwen2.5-VL 7B (bf16, unquantized), the template's 34 tokens dropped | 60 dual-stream blocks, float32 stream, modulation producers at 8 bits | Wan-derived causal 3D, 16 channels, tiles | true CFG, rescaled to the conditional norm; the unconditional pass is skipped at 1 |
 | Ming-Image 0.1 Design | Ling-mini-2.0 MoE (256 experts, 8 routed with group-limited top-k, bf16 router as upstream), Qwen2 connector over 256 query tokens, direct-VLM head | S3-DiT in bf16, no padding, two caption streams | Qwen VAE for RGBA, one scaling factor, tiles | zeroed conditions |
+| LTX-2.3 distilled | Gemma 3 12B (4-bit, all 49 hidden states, prompt left-padded to 1024), per-token RMS, two projections and two 8-block connectors with learnable registers | 48 audio–video blocks (4096 + 2048 wide, cross-modal attention both ways), block linears 4 or 8 bits, float32 activations | causal-3D conv VAE (non-causal decoder, 32 × 32 × 8, 128 channels), tiled over frames and pixels; audio VAE + BigVGAN vocoder with bandwidth extension to 48 kHz | none (distilled); two stages: 8 steps at half size, ×2 latent upsampler, 3 steps |
 
 Every family keeps a prompt cache and encodes the queued prompts while its text encoder is
 resident. With *Save memory*, Qwen-Image and Ming-Image release the text side once the prompts are
@@ -66,6 +73,40 @@ scripts/build-engine.sh            # builds Release into build/bin/turbo-engine
 
 To work on the engine in Xcode, open `Engine/Package.swift` and run the `turbo-engine` scheme
 with the arguments below.
+
+## Checking LTX-2 against ltx-2-mlx
+
+LTX-2 has no mflux port: its reference is dgrauet's [ltx-2-mlx](https://github.com/dgrauet/ltx-2-mlx)
+(MIT, the revision in `Fixtures/requirements-ltx.txt`), and its fixture is not a small random
+checkpoint but a tiny run of the reference's distilled pipeline on a real pack (`dgrauet/ltx-2.3-mlx-q4`
+or `-q8`, with `mlx-community/gemma-3-12b-it-4bit`), recorded stage by stage by hooks around its
+own functions:
+
+```bash
+$PY Engine/Fixtures/make_ltx_fixture.py <pack> <gemma> /tmp/fixtures/ltx          # text to video
+$PY Engine/Fixtures/make_ltx_fixture.py <pack> <gemma> /tmp/fixtures/ltx-i2v --image picture.png
+build/bin/turbo-engine verify /tmp/fixtures/ltx
+```
+
+`verify` feeds each stage the reference's own inputs: the tokens (identical), Gemma's states, the
+connector on the reference's 49 states (bit-identical), the noise and the positions (identical),
+every transformer pass of both stages (within 1e-4), the upsampler, the image encoder, the
+decoders and the vocoder. Three stages are shown but do not decide, for the reasons the output
+gives: Gemma's deeper states and the contexts they lead to carry bfloat16 rounding through 48
+layers; the first stage's loop moves a bfloat16 latent by about one unit of its last place at each
+early step, so two correct loops end a percent apart; and the video encoder and decoder, whose
+bfloat16 convolutions follow MLX's conv3d, which changed between mlx-swift's MLX (0.31) and the
+reference's (0.32.2). The encoder and decoder are therefore also compared in float32, where they
+match within 1e-4 (the generator writes those references too, from the reference's modules with
+upcast weights, next to Gemma's 49 states for the connector's check). Both packs pass, the 4-bit
+one from a prompt and from an image.
+
+The whole pipeline, same prompt and seed through the app's protocol, 768 × 512 × 49 frames with
+the 4-bit pack: the same clip as the reference (PSNR 29–35 dB per frame, 32.6 on average, through
+H.264), the same loudness, in 97 s against 97 s, peaking at 15 GB with Save memory. A 5-second
+clip (121 frames) takes 231 s and peaks at 17 GB; with the 8-bit pack and no Save memory, 294 s and
+38 GB (41 GB for the whole process: a clip holds MLX's buffer cache to 4 GB, which otherwise kept
+15 GB of passes already done).
 
 ## Checking a port against mflux
 

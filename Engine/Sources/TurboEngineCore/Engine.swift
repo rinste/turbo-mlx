@@ -102,8 +102,13 @@ public final class Engine {
 
             let request = FamilyRequest(
                 prompt: params.prompt, seed: params.seed, width: params.width, height: params.height,
-                steps: params.steps, guidance: params.guidance, flattenAlpha: params.flattenAlpha ?? false
+                steps: params.steps, guidance: params.guidance, flattenAlpha: params.flattenAlpha ?? false,
+                frames: params.frames, fps: params.fps, imagePath: params.image
             )
+            if let video = model as? VideoFamilyModel {
+                try generateVideo(video, request: request, id: id, spec: spec, params: params, started: started)
+                return
+            }
             let image = try model.generate(
                 request,
                 phase: { [self] phase in
@@ -159,6 +164,83 @@ public final class Engine {
         }
     }
 
+    /// A clip: the sound decoded first, then the frames written to the MP4 with it as the decoder
+    /// produces them, a PNG of the first frame next to it as the poster.
+    private func generateVideo(
+        _ model: VideoFamilyModel, request: FamilyRequest, id: String, spec: ModelSpec, params: GenerationParams, started: Date
+    ) throws {
+        let output = URL(fileURLWithPath: params.output)
+        var writer: VideoOutput?
+        var sound: (samples: MLXArray?, rate: Int) = (nil, 48000)
+        let totalSteps = model.totalSteps(request)
+        // A clip stopped or failed halfway leaves no partial MP4 behind.
+        var clip: GeneratedClip?
+        defer { if clip == nil { writer?.cancel() } }
+        clip = try model.generateVideo(
+            request,
+            phase: { [self] phase in
+                switch phase {
+                case .denoising:
+                    mark("denoise_start")
+                    emitter.emit("phase", ["id": id, "phase": "denoising", "total": totalSteps])
+                case .decoding:
+                    mark("denoise_end")
+                    emitter.emit("phase", ["id": id, "phase": "decoding"])
+                default:
+                    break
+                }
+            },
+            progress: { [self] step, total in
+                emitter.emit("progress", ["id": id, "step": step, "total": total])
+            },
+            isCancelled: { [self] in isCancelled(id) },
+            audio: { samples, rate in sound = (samples, rate) },
+            frames: { frames in
+                if writer == nil {
+                    writer = try VideoOutput(url: output, width: frames.shape[2], height: frames.shape[1],
+                                             fps: request.fps ?? 24, audio: sound.samples, sampleRate: sound.rate)
+                }
+                try writer!.append(frames: frames)
+            }
+        )
+        mark("decode_end")
+
+        emitter.emit("phase", ["id": id, "phase": "encoding_video"])
+        guard let writer, let clip else { throw VideoOutput.OutputError.cannotWrite("no frames were decoded") }
+        do {
+            try writer.finish()
+        } catch {
+            writer.cancel()
+            throw error
+        }
+        let poster = output.deletingPathExtension().appendingPathExtension("png")
+        if let first = writer.firstFrame {
+            try ImageOutput.writePNG(first, to: poster, metadata: [
+                "engine": "turbo-engine \(Self.version)",
+                "model": spec.name ?? spec.path,
+                "prompt": params.prompt,
+                "seed": params.seed,
+            ])
+        }
+        mark("save_end")
+
+        let timings = self.timings()
+        emitter.log("[turbo] " + timings.map { "\($0.key) \(String(format: "%.1f", $0.value))s" }.sorted().joined(separator: " · "))
+        emitter.emit("done", [
+            "id": id,
+            "path": params.output,
+            "poster": poster.path,
+            "seed": params.seed,
+            "width": clip.width,
+            "height": clip.height,
+            "frames": writer.frameCount,
+            "fps": clip.fps,
+            "seconds": (Date().timeIntervalSince(started) * 100).rounded() / 100,
+            "peak_memory": Memory.peakMemory,
+            "timings": timings,
+        ])
+    }
+
     // MARK: Timings
 
     private func mark(_ name: String) {
@@ -185,10 +267,12 @@ public final class Engine {
 
 public enum EngineError: LocalizedError {
     case unsupportedFamily(String)
+    case missingTextEncoder(String)
 
     public var errorDescription: String? {
         switch self {
         case .unsupportedFamily(let family): "The native engine does not run the \(family) family."
+        case .missingTextEncoder(let family): "The \(family) model needs the path of its text encoder."
         }
     }
 }

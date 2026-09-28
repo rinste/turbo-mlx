@@ -18,6 +18,8 @@ public struct ModelSpec: Decodable, Equatable {
     public let name: String?
     public let variant: String?
     public let lowRam: Bool?
+    /// Families whose text encoder is a checkpoint of its own (LTX-2: Gemma 3).
+    public let textEncoderPath: String?
 
     /// What identifies a loaded model: the same triple `turbo_worker.py` keys its cache by.
     public var key: String { "\(family)|\(path)|\(variant ?? "")" }
@@ -34,6 +36,10 @@ public struct GenerationParams: Decodable {
     public let flattenAlpha: Bool?
     public let output: String
     public let upcomingPrompts: [String]?
+    /// Video families: frame count, frame rate, and the image the clip starts from.
+    public let frames: Int?
+    public let fps: Double?
+    public let image: String?
 }
 
 public enum Wire {

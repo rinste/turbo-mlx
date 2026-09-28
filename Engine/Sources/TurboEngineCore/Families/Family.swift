@@ -11,8 +11,15 @@ public struct FamilyRequest {
     public var guidance: Double
     /// Composite an RGBA result onto white (families that produce alpha).
     public var flattenAlpha: Bool
+    /// Video families: how many frames, at what rate, and the image the clip starts from.
+    public var frames: Int?
+    public var fps: Double?
+    public var imagePath: String?
 
-    public init(prompt: String, seed: Int, width: Int, height: Int, steps: Int, guidance: Double, flattenAlpha: Bool) {
+    public init(
+        prompt: String, seed: Int, width: Int, height: Int, steps: Int, guidance: Double, flattenAlpha: Bool,
+        frames: Int? = nil, fps: Double? = nil, imagePath: String? = nil
+    ) {
         self.prompt = prompt
         self.seed = seed
         self.width = width
@@ -20,6 +27,9 @@ public struct FamilyRequest {
         self.steps = steps
         self.guidance = guidance
         self.flattenAlpha = flattenAlpha
+        self.frames = frames
+        self.fps = fps
+        self.imagePath = imagePath
     }
 }
 
@@ -53,7 +63,7 @@ public protocol FamilyModel: AnyObject {
 /// Loads the model a spec names, by family.
 public enum FamilyLoader {
     /// Families this engine implements, as the app names them.
-    public static let families = ["flux2-klein", "z-image-turbo", "qwen-image", "ming"]
+    public static let families = ["flux2-klein", "z-image-turbo", "qwen-image", "ming", "ltx-2"]
 
     public static func load(_ spec: ModelSpec, loadTokenizer: Bool = true) throws -> FamilyModel {
         let root = URL(fileURLWithPath: spec.path)
@@ -67,6 +77,9 @@ public enum FamilyLoader {
             return try QwenImageModel(modelPath: root, config: .qwenImage2512, loadTokenizer: loadTokenizer)
         case "ming":
             return try MingModel(modelPath: root, config: .design, loadTokenizer: loadTokenizer)
+        case "ltx-2":
+            guard let textEncoder = spec.textEncoderPath else { throw EngineError.missingTextEncoder(spec.family) }
+            return try LTXVideoModel(pack: root, textEncoder: URL(fileURLWithPath: textEncoder), loadTokenizer: loadTokenizer)
         default:
             throw EngineError.unsupportedFamily(spec.family)
         }

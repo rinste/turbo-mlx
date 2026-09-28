@@ -1,0 +1,7 @@
+# The ltx-2-mlx revision the LTX-2 port follows (dgrauet, MIT), for make_ltx_fixture.py. It is a
+# uv workspace: clone it at this commit and `uv sync` in the clone, then run the generator with the
+# clone's .venv/bin/python (mlx 0.32.2 and mlx-lm 0.31.1 from its lock file).
+#
+#   git clone https://github.com/dgrauet/ltx-2-mlx.git && cd ltx-2-mlx
+#   git checkout 1724ca673d59f023a8a95efee06e5d36d61c2765 && uv sync
+ltx-2-mlx @ git+https://github.com/dgrauet/ltx-2-mlx.git@1724ca673d59f023a8a95efee06e5d36d61c2765

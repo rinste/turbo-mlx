@@ -22,10 +22,12 @@ enum Verify {
             case "z-image-turbo": ok = try VerifyZImage.run(fixture: fixture, json: json, references: references)
             case "qwen-image": ok = try VerifyQwenImage.run(fixture: fixture, json: json, references: references)
             case "ming": ok = try VerifyMing.run(fixture: fixture, json: json, references: references)
+            case "ltx-2": ok = try VerifyLTX.run(fixture: fixture, json: json, references: references)
             default:
                 print("fixture.json names an unknown family: \(family)"); return false
             }
-            print(ok ? "OK: the \(family) port matches mflux on this checkpoint" : "FAILED: see the stages above")
+            let reference = family == "ltx-2" ? "ltx-2-mlx" : "mflux"
+            print(ok ? "OK: the \(family) port matches \(reference) on this checkpoint" : "FAILED: see the stages above")
             return ok
         } catch {
             print("verify failed: \(error)")
