@@ -72,8 +72,10 @@ struct HistoryStrip: View {
                     guard let id else { return }
                     withAnimation(.snappy) { proxy.scrollTo(id, anchor: .center) }
                 }
-                // A new job or a finished one: back to the end, where they are.
-                .onChange(of: app.history.items.count + app.pendingJobs.count) {
+                // A new job: back to the end, where it is. Not after a deletion, which leaves the
+                // strip where it was.
+                .onChange(of: app.history.items.count + app.pendingJobs.count) { old, new in
+                    guard new > old else { return }
                     withAnimation(.snappy) { position.scrollTo(edge: .trailing) }
                 }
             }

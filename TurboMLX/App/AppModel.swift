@@ -651,9 +651,17 @@ final class AppModel {
         }
     }
 
+    /// Moves items to the Trash. The one on show gives way to its neighbor in the strip: the newer
+    /// one, which slides into its place, or else the older. The controls on the left stay as they are.
     func delete(_ items: [HistoryItem]) {
         let ids = Set(items.map(\.id))
-        if case .item(let id) = viewer, ids.contains(id) { viewer = .live }
+        if let shown = displayedItem, ids.contains(shown.id),
+           let index = history.items.firstIndex(where: { $0.id == shown.id }) {
+            // Newest first: newer items come before it.
+            let newer = history.items[..<index].last { !ids.contains($0.id) }
+            let older = history.items[(index + 1)...].first { !ids.contains($0.id) }
+            viewer = (newer ?? older).map { .item($0.id) } ?? .live
+        }
         history.remove(ids)
     }
 
