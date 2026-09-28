@@ -14,14 +14,14 @@ final class GenerationJob: Identifiable {
         case encodingVideo
         case saving
 
-        var label: String {
+        func label(video: Bool) -> String {
             switch self {
             case .queued: "Queued"
             case .starting: "Starting…"
             case .loadingModel: "Loading the model…"
             case .encodingPrompt: "Reading the prompt…"
             case .denoising: "Generating"
-            case .decoding: "Decoding the image…"
+            case .decoding: video ? "Decoding the video and sound…" : "Decoding the image…"
             case .encodingVideo: "Encoding the video…"
             case .saving: "Saving…"
             }
@@ -35,6 +35,8 @@ final class GenerationJob: Identifiable {
 
     var phase = Phase.queued
     var step = 0
+    /// The steps the engine says it will count (LTX-2 adds its refining steps to the ones asked).
+    var reportedTotal: Int?
     var startedAt: Date?
     var isCancelling = false
     private(set) var denoiseStartedAt: Date?
@@ -46,12 +48,12 @@ final class GenerationJob: Identifiable {
         self.outputURL = outputURL
     }
 
-    var totalSteps: Int { request.steps }
+    var totalSteps: Int { reportedTotal ?? request.steps }
 
     var statusLabel: String {
         if isCancelling { return "Stopping…" }
         if phase == .denoising { return "Step \(step) of \(totalSteps)" }
-        return phase.label
+        return phase.label(video: model.family.media == .video)
     }
 
     /// Progress in 0...1, or nil while the current phase cannot be measured.
@@ -63,8 +65,10 @@ final class GenerationJob: Identifiable {
         }
     }
 
+    /// None for a clip: its refining steps cost several times the first ones, and the decode after
+    /// them is long, so a per-step average would promise too little.
     var estimatedSecondsRemaining: Double? {
-        guard phase == .denoising, let secondsPerStep else { return nil }
+        guard phase == .denoising, model.family.media == .image, let secondsPerStep else { return nil }
         return Double(totalSteps - step) * secondsPerStep
     }
 

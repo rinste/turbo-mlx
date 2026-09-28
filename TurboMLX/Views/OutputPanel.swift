@@ -51,7 +51,7 @@ struct OutputPanel: View {
         if app.showsLiveJob, let job = app.activeJob {
             LiveJobView(job: job)
         } else if let item = app.displayedItem, item.kind == .video {
-            VideoStage(url: app.url(for: item))
+            VideoStage(url: app.url(for: item), size: item.size)
                 .id(item.id)
         } else if let item = app.displayedItem {
             // A new stage for each image, so it starts fitted.
@@ -60,10 +60,11 @@ struct OutputPanel: View {
         } else if let model = app.selectedModel, !app.isInstalled(model) {
             ModelDownloadCard(model: model)
         } else {
+            let video = app.selectedModel?.family.media == .video
             ContentUnavailableView {
-                Label("No Images Yet", systemImage: "photo.on.rectangle.angled")
+                Label(video ? "No Clips Yet" : "No Images Yet", systemImage: video ? "film.stack" : "photo.on.rectangle.angled")
             } description: {
-                Text("Write a prompt on the left and click Generate.\nThe images you create stay here, in the history.")
+                Text("Write a prompt on the left and click Generate.\nThe \(video ? "clips" : "images") you create stay here, in the history.")
             }
         }
     }
@@ -77,18 +78,18 @@ struct OutputPanel: View {
         ToolbarItemGroup(placement: .primaryAction) {
             let item = app.showsLiveJob ? nil : app.displayedItem
             Button {
-                if let item { NSPasteboard.general.copyImage(at: app.url(for: item)) }
+                if let item { NSPasteboard.general.copyItem(item, at: app.url(for: item)) }
             } label: {
                 Label("Copy", systemImage: "doc.on.doc")
             }
-            .help("Copy the image (⇧⌘C)")
+            .help(item?.kind == .video ? "Copy the video (⇧⌘C)" : "Copy the image (⇧⌘C)")
             .disabled(item == nil)
 
             if let item {
                 ShareLink(item: app.url(for: item)) {
                     Label("Share", systemImage: "square.and.arrow.up")
                 }
-                .help("Share or save the image")
+                .help(item.kind == .video ? "Share or save the video" : "Share or save the image")
             }
 
             Button {
@@ -104,7 +105,7 @@ struct OutputPanel: View {
             } label: {
                 Label("Move to Trash", systemImage: "trash")
             }
-            .help("Move the image to the Trash")
+            .help(item?.kind == .video ? "Move the video to the Trash" : "Move the image to the Trash")
             .disabled(item == nil)
         }
     }
@@ -112,23 +113,42 @@ struct OutputPanel: View {
 
 // MARK: - Video
 
-/// A clip from the history, with the system's transport controls.
+/// A clip from the history, with the system's transport controls, sized to the clip so no bars
+/// surround it.
 private struct VideoStage: View {
     let url: URL
-    @State private var player: AVPlayer?
+    let size: PixelSize
 
     var body: some View {
-        Group {
-            if let player {
-                VideoPlayer(player: player)
-            } else {
-                Color.clear
-            }
-        }
-        .padding(28)
-        .task(id: url) {
-            player = AVPlayer(url: url)
-        }
+        PlayerView(url: url)
+            .aspectRatio(CGSize(width: size.width, height: size.height), contentMode: .fit)
+            .padding(28)
+    }
+}
+
+/// AVKit's player view. SwiftUI's `VideoPlayer` is not used: its overlay does not load AVKit
+/// itself, the app only links what it references, and the first clip shown would crash the app.
+private struct PlayerView: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.controlsStyle = .inline
+        view.showsFullScreenToggleButton = true
+        view.videoGravity = .resizeAspect
+        view.player = AVPlayer(url: url)
+        return view
+    }
+
+    func updateNSView(_ view: AVPlayerView, context: Context) {
+        guard (view.player?.currentItem?.asset as? AVURLAsset)?.url != url else { return }
+        view.player?.pause()
+        view.player = AVPlayer(url: url)
+    }
+
+    static func dismantleNSView(_ view: AVPlayerView, coordinator: ()) {
+        view.player?.pause()
+        view.player = nil
     }
 }
 
@@ -197,8 +217,17 @@ private struct ItemInfoBar: View {
                     HStack(spacing: 6) {
                         MetadataChip(systemImage: "cpu", text: shortModelName, help: "\(item.modelName)\n\(item.modelID)")
                         MetadataChip(systemImage: "aspectratio", text: "\(item.size.width)×\(item.size.height)")
+                        if item.kind == .video, let frames = item.request.frames, let fps = item.request.fps, fps > 0 {
+                            MetadataChip(systemImage: "film", text: "\(Format.clipDuration(frames: frames, fps: fps)) · \(fps) fps",
+                                         help: "\(frames) frames at \(fps) fps")
+                        }
+                        if item.request.referenceImage != nil {
+                            MetadataChip(systemImage: "photo", text: "From an image", help: "The clip started from a reference image")
+                        }
                         MetadataChip(systemImage: "stairs", text: "\(item.request.steps) steps")
-                        MetadataChip(systemImage: "dial.medium", text: "CFG \(Format.guidance(item.request.guidance))")
+                        if item.kind == .image {
+                            MetadataChip(systemImage: "dial.medium", text: "CFG \(Format.guidance(item.request.guidance))")
+                        }
                         MetadataChip(systemImage: "dice", text: "\(item.request.seed)", help: "Seed \(item.request.seed)")
                         MetadataChip(systemImage: "timer", text: Format.duration(item.seconds), help: timingHelp)
                         if let peak = item.peakMemory {
@@ -267,16 +296,29 @@ struct HistoryItemMenu: View {
 
     var body: some View {
         Button("Reuse Prompt and Settings") { app.reuse(item) }
+        if app.selectedModel?.family.takesReferenceImage == true {
+            Button("Use as Reference Image") { app.useAsReference(item) }
+        }
         Button("Copy Prompt") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(item.prompt, forType: .string)
         }
-        Button("Copy Image") { NSPasteboard.general.copyImage(at: app.url(for: item)) }
+        Button(item.kind == .video ? "Copy Video" : "Copy Image") { NSPasteboard.general.copyItem(item, at: app.url(for: item)) }
         Divider()
-        Button("Open in Preview") { NSWorkspace.shared.open(app.url(for: item)) }
+        let url = app.url(for: item)
+        Button(Self.openTitle(for: url)) { NSWorkspace.shared.open(url) }
         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([app.url(for: item)]) }
         Divider()
         Button("Move to Trash", role: .destructive) { app.delete([item]) }
+    }
+
+    /// "Open in Preview" for an image, "Open in QuickTime Player" for a clip: the app that opens it.
+    private static func openTitle(for url: URL) -> String {
+        guard let application = NSWorkspace.shared.urlForApplication(toOpen: url), let bundle = Bundle(url: application),
+              let name = (bundle.localizedInfoDictionary?["CFBundleDisplayName"] ?? bundle.infoDictionary?["CFBundleDisplayName"]
+                          ?? bundle.infoDictionary?["CFBundleName"]) as? String
+        else { return "Open" }
+        return "Open in \(name)"
     }
 }
 
@@ -285,6 +327,14 @@ struct HistoryItemMenu: View {
 private struct LiveJobView: View {
     @Environment(AppModel.self) private var app
     let job: GenerationJob
+
+    /// "768 × 512", and the duration for a clip.
+    private var sizeLabel: String {
+        let size = job.request.size
+        let dimensions = "\(size.width) × \(size.height)"
+        guard let frames = job.request.frames, let fps = job.request.fps, fps > 0 else { return dimensions }
+        return "\(dimensions) · \(Format.clipDuration(frames: frames, fps: fps))"
+    }
 
     var body: some View {
         let size = job.request.size
@@ -306,7 +356,7 @@ private struct LiveJobView: View {
                             .font(.callout.weight(.medium))
                             .lineLimit(1)
                             .help(job.model.name)
-                        Text(verbatim: "\(size.width) × \(size.height)")
+                        Text(verbatim: sizeLabel)
                             .font(.caption.monospacedDigit())
                     }
                     .foregroundStyle(.secondary)

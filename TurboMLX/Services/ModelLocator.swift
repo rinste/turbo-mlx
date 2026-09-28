@@ -19,22 +19,47 @@ nonisolated struct ModelLocator: Sendable {
     let hubCache = ModelLocator.huggingFaceHome.appending(path: "hub", directoryHint: .isDirectory)
 
     /// The folder holding a complete copy of the model, or nil if it still has to be downloaded.
+    /// A family with a companion checkpoint (LTX-2's text encoder) needs that one too.
     func installedLocation(of model: ModelDescriptor) -> URL? {
+        if model.family.companion != nil, companionLocation(of: model) == nil { return nil }
         switch model.source {
         case .local(let path):
             let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
             return Self.isComplete(url, family: model.family) ? url : nil
         case .huggingFace(let repo):
-            let snapshots = repoFolder(repo).appending(path: "snapshots")
-            let keys: [URLResourceKey] = [.contentModificationDateKey]
-            guard let entries = try? FileManager.default.contentsOfDirectory(at: snapshots, includingPropertiesForKeys: keys)
-            else { return nil }
-            let newestFirst = entries.sorted {
-                let lhs = (try? $0.resourceValues(forKeys: Set(keys)).contentModificationDate) ?? .distantPast
-                let rhs = (try? $1.resourceValues(forKeys: Set(keys)).contentModificationDate) ?? .distantPast
-                return lhs > rhs
+            return newestSnapshot(of: repo) { Self.isComplete($0, family: model.family) }
+        }
+    }
+
+    /// The companion checkpoint's folder (LTX-2: Gemma 3 12B), when it is complete.
+    func companionLocation(of model: ModelDescriptor) -> URL? {
+        guard let companion = model.family.companion else { return nil }
+        return newestSnapshot(of: companion.repo) { Self.hasFiles(companion.requiredFiles, in: $0) }
+    }
+
+    private func newestSnapshot(of repo: String, where isComplete: (URL) -> Bool) -> URL? {
+        let snapshots = repoFolder(repo).appending(path: "snapshots")
+        let keys: [URLResourceKey] = [.contentModificationDateKey]
+        guard let entries = try? FileManager.default.contentsOfDirectory(at: snapshots, includingPropertiesForKeys: keys)
+        else { return nil }
+        let newestFirst = entries.sorted {
+            let lhs = (try? $0.resourceValues(forKeys: Set(keys)).contentModificationDate) ?? .distantPast
+            let rhs = (try? $1.resourceValues(forKeys: Set(keys)).contentModificationDate) ?? .distantPast
+            return lhs > rhs
+        }
+        return newestFirst.first(where: isComplete)
+    }
+
+    /// Each name present (a `*` matches any run of characters), as a file and not a dangling link.
+    static func hasFiles(_ names: [String], in folder: URL) -> Bool {
+        let fileManager = FileManager.default
+        let files = (try? fileManager.contentsOfDirectory(atPath: folder.path)) ?? []
+        return names.allSatisfy { name in
+            let regex = HubDownloader.regex(fnmatch: name)
+            return files.contains { file in
+                regex.firstMatch(in: file, range: NSRange(file.startIndex..., in: file)) != nil
+                    && fileManager.fileExists(atPath: folder.appending(path: file).path)
             }
-            return newestFirst.first { Self.isComplete($0, family: model.family) }
         }
     }
 
@@ -47,7 +72,10 @@ nonisolated struct ModelLocator: Sendable {
     /// there too: an interrupted download can leave a snapshot with weights but no tokenizer.
     static func isComplete(_ folder: URL, family: ModelFamily) -> Bool {
         let fileManager = FileManager.default
-        guard fileManager.fileExists(atPath: folder.appending(path: family.tokenizerFile).path) else { return false }
+        guard hasFiles(family.requiredFiles, in: folder) else { return false }
+        if let tokenizer = family.tokenizerFile, !fileManager.fileExists(atPath: folder.appending(path: tokenizer).path) {
+            return false
+        }
         return family.components.allSatisfy { component in
             let directory = folder.appending(path: component)
             guard let files = try? fileManager.contentsOfDirectory(atPath: directory.path) else { return false }

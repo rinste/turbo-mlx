@@ -159,9 +159,25 @@ enum Format {
     static func guidance(_ value: Double) -> String {
         value <= 1 ? "Off" : value.formatted(.number.precision(.fractionLength(1)))
     }
+
+    /// "5 s", "2.5 s": a clip's length from its frames.
+    static func clipDuration(frames: Int, fps: Int) -> String {
+        let seconds = Double(frames - 1) / Double(fps)
+        let rounded = (seconds * 10).rounded() / 10
+        return rounded == rounded.rounded()
+            ? "\(Int(rounded)) s"
+            : "\(rounded.formatted(.number.precision(.fractionLength(1)))) s"
+    }
 }
 
 extension NSPasteboard {
+    /// An image as `copyImage` copies it; a clip as its file.
+    func copyItem(_ item: HistoryItem, at url: URL) {
+        guard item.kind == .video else { return copyImage(at: url) }
+        clearContents()
+        writeObjects([url as NSURL])
+    }
+
     /// Copies a PNG so that transparency survives, plus the file itself for Finder.
     func copyImage(at url: URL) {
         guard let data = try? Data(contentsOf: url) else { return }

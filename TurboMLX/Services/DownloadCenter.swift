@@ -26,22 +26,51 @@ final class DownloadCenter {
 
     private var tasks: [String: Task<Void, Never>] = [:]
     private var samples: [String: (date: Date, bytes: Int64)] = [:]
+    /// Companions being fetched. The LTX-2 packs share one: two downloads of a file would write
+    /// into the same partial file, so the second waits and then finds it cached.
+    private var companionsInFlight: Set<String> = []
+
+    private struct Part {
+        let downloader: HubDownloader
+        let patterns: [String]
+        /// The companion's repository, for a part other models share.
+        let companion: String?
+    }
 
     func isDownloading(_ model: ModelDescriptor) -> Bool { active[model.id] != nil }
 
+    /// Downloads the model's repository and, for a family that needs one, its companion (LTX-2's
+    /// text encoder), as one download: the files already in the cache count as done.
     func start(_ model: ModelDescriptor, hubCache: URL) {
         guard let repo = model.repo, tasks[model.id] == nil else { return }
         failures[model.id] = nil
         active[model.id] = Progress(total: model.sizeBytes ?? 0)
-        let downloader = HubDownloader(repo: repo, hubCache: hubCache)
-        let patterns = model.family.downloadPatterns
+        var parts = [Part(downloader: HubDownloader(repo: repo, hubCache: hubCache), patterns: model.family.downloadPatterns,
+                          companion: nil)]
+        if let companion = model.family.companion {
+            parts.append(Part(downloader: HubDownloader(repo: companion.repo, hubCache: hubCache), patterns: companion.patterns,
+                              companion: companion.repo))
+        }
         tasks[model.id] = Task { [weak self] in
             do {
-                let listing = try await downloader.list(matching: patterns)
-                self?.update(model, total: listing.totalBytes)
-                // Its own weak capture: the Sendable closure may not read the task's `self` var.
-                _ = try await downloader.download(listing) { [weak self] bytes in
-                    Task { @MainActor [weak self] in self?.update(model, bytes: bytes) }
+                var listings: [(part: Part, listing: HubDownloader.Listing)] = []
+                for part in parts {
+                    listings.append((part, try await part.downloader.list(matching: part.patterns)))
+                }
+                self?.update(model, total: listings.reduce(0) { $0 + $1.listing.totalBytes })
+                var done: Int64 = 0
+                for (part, listing) in listings {
+                    let base = done
+                    if let companion = part.companion {
+                        while self?.companionsInFlight.contains(companion) == true { try await Task.sleep(for: .seconds(1)) }
+                        self?.companionsInFlight.insert(companion)
+                    }
+                    defer { if let companion = part.companion { self?.companionsInFlight.remove(companion) } }
+                    // Its own weak capture: the Sendable closure may not read the task's `self` var.
+                    _ = try await part.downloader.download(listing) { [weak self] bytes in
+                        Task { @MainActor [weak self] in self?.update(model, bytes: base + bytes) }
+                    }
+                    done += listing.totalBytes
                 }
             } catch {
                 if !Task.isCancelled { self?.failures[model.id] = error.localizedDescription }

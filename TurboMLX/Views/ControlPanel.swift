@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Left column: model, prompt and generation settings.
 struct ControlPanel: View {
@@ -11,8 +12,14 @@ struct ControlPanel: View {
         @Bindable var app = app
         Form {
             if let model = app.selectedModel {
+                if model.family.takesReferenceImage {
+                    ReferenceImageSection(settings: $app.settings)
+                }
                 PromptSection(settings: $app.settings, focus: $focusedBlock)
                 FormatSection(settings: $app.settings)
+                if model.family.media == .video {
+                    ClipSection(settings: $app.settings)
+                }
                 ParametersSection(settings: $app.settings, model: model)
                 AdvancedSection(isExpanded: $showsAdvanced, settings: $app.settings, family: model.family)
             }
@@ -324,6 +331,7 @@ private struct PromptSection: View {
 }
 
 private struct PromptBlockEditor<Reorder: Gesture>: View {
+    @Environment(AppModel.self) private var app
     @Binding var block: PromptBlock
     /// Index in the list, and how many blocks there are: the arrows stop at the ends.
     let position: Int
@@ -417,15 +425,21 @@ private struct PromptBlockEditor<Reorder: Gesture>: View {
     }
 
     private var placeholder: String {
+        let video = app.selectedModel?.family.media == .video
         switch block.name {
         case PromptBlock.subjectName:
-            "What the image shows: who or what, where, doing what. Put any text to render in quotes."
+            return video
+                ? "What happens: who or what, where, what they do, and what we hear."
+                : "What the image shows: who or what, where, doing what. Put any text to render in quotes."
         case PromptBlock.styleName:
-            "How it looks: the medium or style, the light, the colors, the lens."
+            return video
+                ? "How it looks and moves: the style, the light, the camera."
+                : "How it looks: the medium or style, the light, the colors, the lens."
         default:
-            position == 0
-                ? "Describe the image: subject, style, light, colors. Put any text to render in quotes."
-                : "A piece of the prompt: the style, the lighting, a detail. It follows the block above."
+            if position > 0 { return "A piece of the prompt: the style, the lighting, a detail. It follows the block above." }
+            return video
+                ? "Describe the clip: the action, the camera, the light, the sound."
+                : "Describe the image: subject, style, light, colors. Put any text to render in quotes."
         }
     }
 }
@@ -541,6 +555,228 @@ private struct Reordering {
         if index < source, index >= destination { return index + 1 }
         if index > source, index <= destination { return index - 1 }
         return index
+    }
+}
+
+// MARK: - Reference image
+
+/// The image a clip starts from: dropped from Finder or from the history strip, chosen with the
+/// open panel, or picked among the generated images. It becomes the first frame; the prompt says
+/// what happens next.
+private struct ReferenceImageSection: View {
+    @Environment(AppModel.self) private var app
+    @Binding var settings: GenerationSettings
+    @State private var isTargeted = false
+    @State private var showsHistory = false
+    @State private var failure: String?
+
+    var body: some View {
+        Section {
+            HStack(alignment: .center, spacing: 12) {
+                preview
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(settings.referenceImage == nil
+                         ? "Drop an image here, or pick one: the clip starts from it."
+                         : "The clip starts from this image.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 8) {
+                        Button("Choose…") { choose() }
+                            .help("Choose an image file")
+                        Button("From History…") { showsHistory = true }
+                            .help("Pick one of the images generated here, or a clip’s first frame")
+                            .disabled(app.history.items.isEmpty)
+                            .popover(isPresented: $showsHistory, arrowEdge: .trailing) {
+                                HistoryImagePicker { item in
+                                    showsHistory = false
+                                    use(app.url(for: item))
+                                }
+                            }
+                        if settings.referenceImage != nil {
+                            Button("Remove", role: .destructive) {
+                                withAnimation(.snappy) { settings.referenceImage = nil }
+                            }
+                        }
+                    }
+                    .controlSize(.small)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+            .onDrop(of: [.fileURL, .image, .movie], isTargeted: $isTargeted) { providers in accept(providers) }
+            .overlay {
+                if isTargeted {
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color.active, lineWidth: 2)
+                        .padding(-6)
+                }
+            }
+        } header: {
+            Text("Reference Image")
+        } footer: {
+            if let failure {
+                Text(failure).font(.caption).foregroundStyle(.red)
+            } else {
+                Text("Optional. It is fitted to the clip’s size, cropped from the middle.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var preview: some View {
+        let shape = RoundedRectangle(cornerRadius: 6)
+        if let name = settings.referenceImage {
+            FileImage(url: HistoryStore.referenceURL(name), maxPixelSize: 320)
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 96, height: 72)
+                .clipShape(shape)
+                .overlay { shape.strokeBorder(Color.primary.opacity(0.12)) }
+                .help("Drop another image to replace it")
+        } else {
+            shape
+                .strokeBorder(.tertiary, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                .frame(width: 96, height: 72)
+                .overlay {
+                    Image(systemName: "photo.badge.plus")
+                        .font(.title2)
+                        .foregroundStyle(.tertiary)
+                }
+        }
+    }
+
+    private func choose() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the image the clip starts from"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        use(url)
+    }
+
+    private func use(_ url: URL, then cleanUp: (() -> Void)? = nil) {
+        Task {
+            defer { cleanUp?() }
+            await importing { try await HistoryStore.importReference(from: url) }
+        }
+    }
+
+    private func importing(_ load: () async throws -> String) async {
+        do {
+            let name = try await load()
+            failure = nil
+            withAnimation(.snappy) { settings.referenceImage = name }
+        } catch {
+            failure = error.localizedDescription
+        }
+    }
+
+    /// A file from Finder; an image from the history, a browser or Photos; a clip from the history,
+    /// which arrives as a copy that lasts as long as the callback and is moved aside first.
+    private func accept(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+        if provider.canLoadObject(ofClass: URL.self) {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url else { return }
+                Task { @MainActor in use(url) }
+            }
+            return true
+        }
+        if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+            provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
+                guard let data else { return }
+                Task { @MainActor in await importing { try HistoryStore.importReference(data: data) } }
+            }
+            return true
+        }
+        if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
+            _ = provider.loadFileRepresentation(forTypeIdentifier: UTType.movie.identifier) { url, _ in
+                guard let url else { return }
+                let copy = FileManager.default.temporaryDirectory
+                    .appending(path: UUID().uuidString).appendingPathExtension(url.pathExtension)
+                guard (try? FileManager.default.copyItem(at: url, to: copy)) != nil else { return }
+                Task { @MainActor in use(copy) { try? FileManager.default.removeItem(at: copy) } }
+            }
+            return true
+        }
+        return false
+    }
+}
+
+/// The generated images and clips (by their first frame), newest first, to pick a reference from.
+private struct HistoryImagePicker: View {
+    @Environment(AppModel.self) private var app
+    let pick: (HistoryItem) -> Void
+
+    var body: some View {
+        let items = app.history.items
+        let rows = (items.count + 3) / 4
+        ScrollView {
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(88), spacing: 8), count: 4), spacing: 8) {
+                ForEach(items) { item in
+                    Button { pick(item) } label: {
+                        FileImage(url: app.posterURL(for: item), maxPixelSize: 320)
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 88, height: 88)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.1)) }
+                            .overlay(alignment: .bottomLeading) {
+                                if item.kind == .video {
+                                    Image(systemName: "play.fill")
+                                        .font(.caption2)
+                                        .padding(4)
+                                        .background(.black.opacity(0.5), in: Circle())
+                                        .foregroundStyle(.white)
+                                        .padding(5)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(item.prompt)
+                }
+            }
+            .padding(12)
+        }
+        .frame(width: 4 * 88 + 3 * 8 + 24, height: min(360, CGFloat(rows) * 96 - 8 + 24))
+    }
+}
+
+// MARK: - Clip
+
+/// How long the clip runs and at what frame rate (the frames are 8k + 1, nearest the duration).
+private struct ClipSection: View {
+    @Binding var settings: GenerationSettings
+
+    var body: some View {
+        Section("Clip") {
+            LabeledContent {
+                HStack(spacing: 6) {
+                    Slider(value: $settings.videoSeconds, in: GenerationSettings.videoDurations, step: 1)
+                    Text(verbatim: "\(Int(settings.videoSeconds)) s")
+                        .monospacedDigit()
+                        .frame(width: 34, alignment: .trailing)
+                }
+            } label: {
+                Text("Duration")
+                    .help("\(settings.videoFrames) frames. Longer clips take longer and need more memory.")
+            }
+            Picker("Frame rate", selection: $settings.videoFrameRate) {
+                ForEach(GenerationSettings.videoFrameRates, id: \.self) { rate in
+                    Text(verbatim: "\(rate) fps").tag(rate)
+                }
+            }
+            .pickerStyle(.segmented)
+            // Beyond about five seconds at 24 fps and the default resolution (768 × 512 or 832 × 512).
+            if settings.videoSize.megapixels * Double(settings.videoFrames) > 55 {
+                Label("Longer and larger clips take much more time and memory.", systemImage: "tortoise")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
     }
 }
 
@@ -689,7 +925,7 @@ private struct AdvancedSection: View {
             .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
 
             if isExpanded {
-                SizeRows(settings: $settings)
+                SizeRows(settings: $settings, video: family.media == .video)
                 OutputRows(settings: $settings, family: family)
                 MemoryRows(settings: $settings, family: family)
             }
@@ -697,19 +933,21 @@ private struct AdvancedSection: View {
     }
 
     private var summary: String {
-        let size = settings.size
+        let size = settings.size(for: family)
         let dimensions = "\(size.width) × \(size.height) px"
         return settings.randomSeed ? dimensions : "\(dimensions) · seed \(settings.seed)"
     }
 }
 
 /// The image's size: a resolution for the aspect ratio above, or a width and height of its own.
+/// A clip's sides are multiples of 64, from its own, smaller resolutions.
 private struct SizeRows: View {
     @Binding var settings: GenerationSettings
+    let video: Bool
 
     var body: some View {
-        Picker("Resolution", selection: $settings.resolution) {
-            ForEach(GenerationSettings.resolutions, id: \.self) { resolution in
+        Picker("Resolution", selection: video ? $settings.videoResolution : $settings.resolution) {
+            ForEach(video ? GenerationSettings.videoResolutions : GenerationSettings.resolutions, id: \.self) { resolution in
                 Text(verbatim: "\(resolution)").tag(resolution)
             }
         }
@@ -728,12 +966,15 @@ private struct SizeRows: View {
             .labelsHidden()
         }
 
-        let size = settings.size
-        LabeledContent("Image") {
-            Text(verbatim: "\(size.width) × \(size.height) px · \(size.megapixels.formatted(.number.precision(.fractionLength(1)))) MP")
+        let size = video ? settings.videoSize : settings.size
+        LabeledContent(video ? "Clip" : "Image") {
+            Text(verbatim: video
+                ? "\(size.width) × \(size.height) px · \(settings.videoFrames) frames"
+                : "\(size.width) × \(size.height) px · \(size.megapixels.formatted(.number.precision(.fractionLength(1)))) MP")
                 .monospacedDigit()
         }
-        if size.megapixels > 2.5 {
+        // A clip's warning is under its duration, where its frames count too.
+        if !video, size.megapixels > 2.5 {
             Label("High resolutions take much more time and memory.", systemImage: "tortoise")
                 .font(.caption)
                 .foregroundStyle(.orange)
@@ -796,6 +1037,8 @@ private struct MemoryRows: View {
             "Frees the text encoder (about 14 GB) once the prompt is read and decodes the image in tiles. A prompt that was not in the queue yet loads it again."
         case .zImageTurbo, .flux2Klein:
             "Keeps less in memory and, where it doesn’t affect the image, decodes it in tiles."
+        case .ltx2:
+            "Frees Gemma and the text connector (about 14 GB) once the prompt is read, and the transformer before the clip is decoded. A prompt that was not in the queue yet loads them again."
         }
         return base + " On by default below 64 GB of memory."
     }
@@ -905,7 +1148,8 @@ private struct GenerateBar: View {
     private var generateTitle: String {
         let count = app.settings.batchCount
         if app.isBusy { return count > 1 ? "Add \(count) to Queue" : "Add to Queue" }
-        return count > 1 ? "Generate \(count) Images" : "Generate"
+        let things = app.selectedModel?.family.media == .video ? "Clips" : "Images"
+        return count > 1 ? "Generate \(count) \(things)" : "Generate"
     }
 
     private var generateSymbol: String {
@@ -919,8 +1163,8 @@ private struct GenerateBar: View {
         case nil:
             switch app.pendingJobs.count {
             case 0: nil
-            case 1: "Starts when the current image is done"
-            case let ahead: "Starts after the \(ahead) images ahead of it"
+            case 1: "Starts when the one in progress is done"
+            case let ahead: "Starts after the \(ahead) ahead of it in the queue"
             }
         }
     }

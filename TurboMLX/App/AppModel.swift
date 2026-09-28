@@ -128,6 +128,7 @@ final class AppModel {
         guard !started else { return }
         started = true
         history.load()
+        history.pruneReferences(keeping: settings.referenceImage)
         // Local model folders before the engine, which inherits the access they open.
         FolderAccess.restore()
         refreshInstalled()
@@ -224,7 +225,8 @@ final class AppModel {
         guard backend.status == .ready, backend.loadedModelPath != location.path, preloadRequested != location.path
         else { return }
         preloadRequested = location.path
-        try? backend.send(.load(model: model, modelPath: location.path, lowMemory: settings.lowMemory))
+        try? backend.send(.load(model: model, modelPath: location.path, textEncoderPath: locator.companionLocation(of: model)?.path,
+                                lowMemory: settings.lowMemory))
     }
 
     /// Free space on the volume that holds the Hugging Face cache (which may not exist yet).
@@ -286,18 +288,27 @@ final class AppModel {
     func generate() {
         guard blocker == nil, let model = selectedModel else { return }
         preloadDeclined = false
+        let isVideo = model.family.media == .video
+        // A reference image whose file is gone (a history folder emptied by hand) is dropped.
+        let reference = settings.referenceImage.flatMap { name in
+            FileManager.default.fileExists(atPath: HistoryStore.referenceURL(name).path) ? name : nil
+        }
         for seed in settings.nextSeeds() {
             let request = GenerationRequest(
                 prompt: settings.trimmedPrompt,
                 blocks: settings.blocks.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
                 seed: seed,
-                size: settings.size,
+                size: settings.size(for: model.family),
                 steps: min(max(settings.steps, model.stepRange.lowerBound), model.stepRange.upperBound),
                 guidance: settings.guidance,
                 transparentBackground: settings.transparentBackground && model.family.producesAlpha,
-                lowMemory: settings.lowMemory
+                lowMemory: settings.lowMemory,
+                frames: isVideo ? settings.videoFrames : nil,
+                fps: isVideo ? settings.videoFrameRate : nil,
+                referenceImage: isVideo && model.family.takesReferenceImage ? reference : nil
             )
-            queue.append(GenerationJob(model: model, request: request, outputURL: history.newImageURL(seed: seed)))
+            let output = isVideo ? history.newVideoURL(seed: seed) : history.newImageURL(seed: seed)
+            queue.append(GenerationJob(model: model, request: request, outputURL: output))
         }
         viewer = .live
         pump()
@@ -362,6 +373,7 @@ final class AppModel {
                 jobID: job.id,
                 model: job.model,
                 modelPath: location.path,
+                textEncoderPath: locator.companionLocation(of: job.model)?.path,
                 request: job.request,
                 output: job.outputURL,
                 upcomingPrompts: Array(upcoming.prefix(8))
@@ -374,6 +386,9 @@ final class AppModel {
 
     private func handle(_ event: WorkerEvent) {
         guard let job = activeJob, event.id == nil || event.id == job.id.uuidString else { return }
+        if let total = event.total, event.event == "progress" || event.phase == "denoising" {
+            job.reportedTotal = Int(total)
+        }
         switch event.event {
         case "phase":
             switch event.phase {
@@ -438,7 +453,7 @@ final class AppModel {
         activeJob = nil
         queue.removeAll()
         updateDockBadge()
-        alert = AppAlert(title: "The image engine stopped", message: message, offersLog: true)
+        alert = AppAlert(title: "The engine stopped", message: message, offersLog: true)
     }
 
     private func updateDockBadge() {
@@ -497,7 +512,18 @@ final class AppModel {
         } else {
             updated.blocks = PromptBlock.defaults(subject: item.prompt)
         }
-        updated.apply(size: item.size)
+        let isVideo = item.kind == .video
+        updated.apply(size: item.size, video: isVideo)
+        if isVideo, let frames = item.request.frames, let fps = item.request.fps, fps > 0 {
+            updated.videoFrameRate = fps
+            updated.videoSeconds = min(max((Double(frames - 1) / Double(fps)).rounded(), GenerationSettings.videoDurations.lowerBound),
+                                       GenerationSettings.videoDurations.upperBound)
+        }
+        if isVideo {
+            updated.referenceImage = item.request.referenceImage.flatMap { name in
+                FileManager.default.fileExists(atPath: HistoryStore.referenceURL(name).path) ? name : nil
+            }
+        }
         updated.steps = item.request.steps
         updated.guidance = item.request.guidance
         updated.randomSeed = false
@@ -508,6 +534,18 @@ final class AppModel {
             updated.transparentBackground = item.request.transparentBackground
         }
         settings = updated
+    }
+
+    /// Makes a generated image (a clip's first frame) the reference image of the next clip.
+    func useAsReference(_ item: HistoryItem) {
+        let url = url(for: item)
+        Task {
+            do {
+                settings.referenceImage = try await HistoryStore.importReference(from: url)
+            } catch {
+                alert = AppAlert(title: "Couldn’t use the image", message: error.localizedDescription)
+            }
+        }
     }
 
     func url(for item: HistoryItem) -> URL { history.url(for: item) }

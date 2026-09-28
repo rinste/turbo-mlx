@@ -6,6 +6,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     case zImageTurbo = "z-image-turbo"
     case flux2Klein = "flux2-klein"
     case qwenImage = "qwen-image"
+    case ltx2 = "ltx-2"
 
     var displayName: String {
         switch self {
@@ -13,39 +14,79 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .zImageTurbo: "Z-Image Turbo"
         case .flux2Klein: "FLUX.2 Klein"
         case .qwenImage: "Qwen-Image"
+        case .ltx2: "LTX-2"
         }
     }
 
     /// Whether the model outputs RGBA, so a transparent background can be kept.
     var producesAlpha: Bool { self == .ming }
 
-    /// Images for every family so far; a video family will say `.video` and the viewer, the
-    /// history and the request already know the difference.
-    var media: MediaKind { .image }
+    var media: MediaKind { self == .ltx2 ? .video : .image }
+
+    /// Clips can start from a reference image (the first frame).
+    var takesReferenceImage: Bool { self == .ltx2 }
 
     /// Checkpoint sub-folders that must hold complete safetensors shards.
     var components: [String] {
         switch self {
         case .ming: ["mllm", "connector", "mlp", "transformer", "vae"]
         case .zImageTurbo, .flux2Klein, .qwenImage: ["transformer", "text_encoder", "vae"]
+        case .ltx2: []
         }
     }
 
-    var tokenizerFile: String {
+    /// Files a complete checkpoint has at its top level (LTX-2 packs keep one file per component;
+    /// a `*` stands for a version).
+    var requiredFiles: [String] {
+        switch self {
+        case .ltx2:
+            ["embedded_config.json", "transformer-distilled*.safetensors", "connector.safetensors", "vae_decoder.safetensors",
+             "vae_encoder.safetensors", "audio_vae.safetensors", "vocoder.safetensors", "spatial_upscaler_x2_v1_1.safetensors"]
+        default: []
+        }
+    }
+
+    var tokenizerFile: String? {
         switch self {
         case .ming: "mllm/tokenizer.json"
         case .zImageTurbo, .flux2Klein, .qwenImage: "tokenizer/tokenizer.json"
+        case .ltx2: nil // in the text encoder's checkpoint
         }
     }
 
-    /// Hugging Face files to download; mirrors each mflux weight definition.
+    /// Hugging Face files to download; mirrors each mflux weight definition (for LTX-2, the files
+    /// of dgrauet's packs that the distilled pipeline reads).
     var downloadPatterns: [String] {
         let weights = components.flatMap { ["\($0)/*.safetensors", "\($0)/*.json"] }
         switch self {
         case .ming: return weights
         case .zImageTurbo: return weights + ["tokenizer/*"]
         case .flux2Klein, .qwenImage: return weights + ["tokenizer/**", "added_tokens.json", "chat_template.jinja"]
+        case .ltx2:
+            return ["LICENSE", "README.md", "config.json", "embedded_config.json", "quantize_config.json", "split_model.json",
+                    "transformer-distilled-1.1.safetensors", "connector.safetensors", "vae_decoder.safetensors",
+                    "vae_encoder.safetensors", "audio_vae.safetensors", "vocoder.safetensors",
+                    "spatial_upscaler_x2_v1_1.safetensors", "spatial_upscaler_x2_v1_1_config.json"]
         }
+    }
+
+    /// A second checkpoint the family needs, downloaded with the model and shared by every model
+    /// of the family: LTX-2's text encoder, Gemma 3 12B in 4 bits.
+    var companion: Companion? {
+        switch self {
+        // Its model.safetensors.index.json lists the five shards of the bf16 original, not the
+        // two it has (mlx-lm globs the folder instead), so the shards are named here.
+        case .ltx2: Companion(repo: "mlx-community/gemma-3-12b-it-4bit", patterns: ["*.json", "*.safetensors", "tokenizer.model"],
+                              requiredFiles: ["config.json", "tokenizer.json", "model-00001-of-00002.safetensors",
+                                              "model-00002-of-00002.safetensors"])
+        default: nil
+        }
+    }
+
+    nonisolated struct Companion: Sendable, Hashable {
+        let repo: String
+        let patterns: [String]
+        let requiredFiles: [String]
     }
 }
 
@@ -92,17 +133,19 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
     var supportsGuidance: Bool {
         switch family {
         case .ming, .qwenImage: true
-        case .zImageTurbo: false
+        case .zImageTurbo, .ltx2: false
         case .flux2Klein: isKleinBase
         }
     }
 
+    /// LTX-2: the steps of the first stage (three more refine the upscaled clip).
     var defaultSteps: Int {
         switch family {
         case .ming: 12
         case .zImageTurbo: 9
         case .flux2Klein: isKleinBase ? 50 : 4
         case .qwenImage: 20
+        case .ltx2: 8
         }
     }
 
@@ -117,6 +160,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .zImageTurbo: 4...20
         case .flux2Klein: isKleinBase ? 10...60 : 2...12
         case .qwenImage: 10...50
+        case .ltx2: 4...8
         }
     }
 }
@@ -185,6 +229,30 @@ enum ModelCatalog {
             variant: "flux2-klein-4b",
             license: "Apache 2.0",
             recommendedMemoryGB: 24,
+            isBuiltIn: true
+        ),
+        // LTX-2.3 distilled from dgrauet's MLX packs, the files its two-stage pipeline reads (the
+        // transformer, the connector, the video and audio decoders, the image encoder, the ×2
+        // upscaler), plus Gemma 3 12B in 4 bits, shared by both. Measured on an M1 Max: a clip of
+        // 2 s at 768 × 512 in 97 s, peaking at 15 GB with Save memory (4-bit).
+        ModelDescriptor(
+            name: "LTX-2.3 · 32 GB RAM",
+            detail: "Lightricks' video model, with sound: a clip from a prompt, or from an image as its first frame. The 4-bit version.",
+            family: .ltx2,
+            source: .huggingFace(repo: "dgrauet/ltx-2.3-mlx-q4"),
+            sizeBytes: 20_479_335_378 + 8_068_018_787,
+            license: "LTX-2 Community",
+            recommendedMemoryGB: 32,
+            isBuiltIn: true
+        ),
+        ModelDescriptor(
+            name: "LTX-2.3 · 64 GB RAM",
+            detail: "Lightricks' video model, with sound: a clip from a prompt, or from an image as its first frame. The 8-bit version, closer to the original.",
+            family: .ltx2,
+            source: .huggingFace(repo: "dgrauet/ltx-2.3-mlx-q8"),
+            sizeBytes: 29_754_522_642 + 8_068_018_787,
+            license: "LTX-2 Community",
+            recommendedMemoryGB: 64,
             isBuiltIn: true
         ),
         ModelDescriptor(

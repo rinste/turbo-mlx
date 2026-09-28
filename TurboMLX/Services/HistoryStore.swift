@@ -1,6 +1,8 @@
+import AVFoundation
 import AppKit
 import Foundation
 import ImageIO
+import UniformTypeIdentifiers
 import Observation
 
 /// Generated images and their settings, stored as PNGs plus a JSON index in Application Support.
@@ -62,14 +64,107 @@ final class HistoryStore {
     }
 
     /// A fresh file name; queued jobs have not written theirs yet, so names handed out are remembered.
-    func newImageURL(seed: Int) -> URL {
+    func newImageURL(seed: Int) -> URL { newURL(seed: seed, extension: "png") }
+
+    /// A clip's file; the engine writes its poster next to it, with the same name as a PNG.
+    func newVideoURL(seed: Int) -> URL { newURL(seed: seed, extension: "mp4") }
+
+    private func newURL(seed: Int, extension ext: String) -> URL {
         let stamp = Self.fileStamp.string(from: Date())
-        var name = "\(stamp)-\(seed).png"
+        var name = "\(stamp)-\(seed).\(ext)"
         if reservedNames.contains(name) || FileManager.default.fileExists(atPath: Self.directory.appending(path: name).path) {
-            name = "\(stamp)-\(seed)-\(UUID().uuidString.prefix(6)).png"
+            name = "\(stamp)-\(seed)-\(UUID().uuidString.prefix(6)).\(ext)"
         }
         reservedNames.insert(name)
         return Self.directory.appending(path: name)
+    }
+
+    // MARK: Reference images
+
+    /// Images clips start from, copied here so they outlive the file they came from (and so the
+    /// engine, inside the app's sandbox, can read them).
+    nonisolated static let referencesDirectory = BackendController.supportDirectory.appending(path: "References", directoryHint: .isDirectory)
+
+    nonisolated static func referenceURL(_ name: String) -> URL {
+        referencesDirectory.appending(path: name)
+    }
+
+    /// Copies an image into the references folder as a PNG (at most 2048 pixels on the long
+    /// side) and returns its name. A clip stands for its first frame: the poster next to it when it
+    /// is one of ours, read from the video otherwise.
+    static func importReference(from url: URL) async throws -> String {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        if UTType(filenameExtension: url.pathExtension)?.conforms(to: .movie) == true {
+            let poster = url.deletingPathExtension().appendingPathExtension("png")
+            if FileManager.default.isReadableFile(atPath: poster.path),
+               let imageSource = CGImageSourceCreateWithURL(poster as CFURL, nil) {
+                return try importReference(imageSource)
+            }
+            return try importReference(image: await firstFrame(of: url))
+        }
+        guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil) else { throw ReferenceError.unreadable }
+        return try importReference(imageSource)
+    }
+
+    /// The same, for image data (dragged from a browser or Photos).
+    static func importReference(data: Data) throws -> String {
+        guard let imageSource = CGImageSourceCreateWithData(data as CFData, nil) else { throw ReferenceError.unreadable }
+        return try importReference(imageSource)
+    }
+
+    private static func importReference(image: CGImage) throws -> String {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil)
+        else { throw ReferenceError.unreadable }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { throw ReferenceError.unreadable }
+        return try importReference(data: data as Data)
+    }
+
+    private static func firstFrame(of url: URL) async throws -> CGImage {
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+        generator.appliesPreferredTrackTransform = true
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        do {
+            return try await generator.image(at: .zero).image
+        } catch {
+            throw ReferenceError.unreadable
+        }
+    }
+
+    private static func importReference(_ imageSource: CGImageSource) throws -> String {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 2048,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else {
+            throw ReferenceError.unreadable
+        }
+        try FileManager.default.createDirectory(at: referencesDirectory, withIntermediateDirectories: true)
+        let name = "\(UUID().uuidString).png"
+        guard let destination = CGImageDestinationCreateWithURL(referenceURL(name) as CFURL, UTType.png.identifier as CFString, 1, nil)
+        else { throw ReferenceError.unreadable }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { throw ReferenceError.unreadable }
+        return name
+    }
+
+    /// Deletes the reference images that no clip in the history and not `current` start from.
+    func pruneReferences(keeping current: String?) {
+        guard loadError == nil else { return }
+        let used = Set(items.compactMap(\.request.referenceImage) + [current].compactMap { $0 })
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: Self.referencesDirectory.path)) ?? []
+        for name in names where !used.contains(name) {
+            try? FileManager.default.removeItem(at: Self.referenceURL(name))
+        }
+    }
+
+    enum ReferenceError: LocalizedError {
+        case unreadable
+        var errorDescription: String? { "This file is not an image or a clip Turbo MLX can read." }
     }
 
     func add(_ item: HistoryItem) {

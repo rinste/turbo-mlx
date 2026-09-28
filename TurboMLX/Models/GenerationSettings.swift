@@ -6,9 +6,9 @@ nonisolated struct PixelSize: Hashable, Codable, Sendable {
 
     var megapixels: Double { Double(width * height) / 1_000_000 }
 
-    /// Ming-Image (like most DiTs) needs both sides to be multiples of 16.
-    static func snapped(_ value: Double) -> Int {
-        max(256, min(4096, Int((value / 16).rounded()) * 16))
+    /// Ming-Image (like most DiTs) needs both sides to be multiples of 16; LTX-2's two stages, 64.
+    static func snapped(_ value: Double, multiple: Int = 16) -> Int {
+        max(256, min(4096, Int((value / Double(multiple)).rounded()) * multiple))
     }
 }
 
@@ -43,11 +43,11 @@ nonisolated enum AspectRatio: String, CaseIterable, Codable, Identifiable, Senda
     }
 
     /// Keeps roughly `base`² pixels, the way the model's aspect-ratio buckets were built.
-    func size(base: Int) -> PixelSize {
+    func size(base: Int, multiple: Int = 16) -> PixelSize {
         let area = Double(base * base)
         return PixelSize(
-            width: PixelSize.snapped((area * ratio).squareRoot()),
-            height: PixelSize.snapped((area / ratio).squareRoot())
+            width: PixelSize.snapped((area * ratio).squareRoot(), multiple: multiple),
+            height: PixelSize.snapped((area / ratio).squareRoot(), multiple: multiple)
         )
     }
 }
@@ -97,6 +97,10 @@ nonisolated struct PromptBlock: Codable, Hashable, Identifiable, Sendable {
 
 nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     static let resolutions = [512, 768, 1024, 1536, 2048]
+    /// Video: 640 gives 768 × 512 at 3:2 and 768 gives 1024 × 576 at 16:9, the sizes LTX-2 is at ease with.
+    static let videoResolutions = [512, 640, 768]
+    static let videoDurations = 1.0...10.0
+    static let videoFrameRates = [24, 25, 30]
     static let guidanceRange = 1.0...7.0
     static let maxBatch = 8
 
@@ -113,11 +117,32 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     var batchCount = 1
     var transparentBackground = true
     var lowMemory = false
+    var videoResolution = 640
+    var videoSeconds = 5.0
+    var videoFrameRate = 24
+    /// The image a clip starts from: a file in the references folder (`HistoryStore`).
+    var referenceImage: String?
 
     var size: PixelSize {
         usesCustomSize
             ? PixelSize(width: PixelSize.snapped(Double(customWidth)), height: PixelSize.snapped(Double(customHeight)))
             : aspect.size(base: resolution)
+    }
+
+    /// A clip's size: sides multiples of 64.
+    var videoSize: PixelSize {
+        usesCustomSize
+            ? PixelSize(width: PixelSize.snapped(Double(customWidth), multiple: 64), height: PixelSize.snapped(Double(customHeight), multiple: 64))
+            : aspect.size(base: videoResolution, multiple: 64)
+    }
+
+    func size(for family: ModelFamily) -> PixelSize {
+        family.media == .video ? videoSize : size
+    }
+
+    /// The clip's frames: 8k + 1 (LTX-2's latent frames cover eight), nearest to the duration.
+    var videoFrames: Int {
+        Int((videoSeconds * Double(videoFrameRate) / 8).rounded()) * 8 + 1
     }
 
     /// The prompt sent to the model: the blocks joined in order, already trimmed.
@@ -128,7 +153,8 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case blocks, aspect, resolution, usesCustomSize, customWidth, customHeight, steps, guidance,
-             randomSeed, seed, batchCount, transparentBackground, lowMemory
+             randomSeed, seed, batchCount, transparentBackground, lowMemory,
+             videoResolution, videoSeconds, videoFrameRate, referenceImage
     }
 
     /// Settings saved before the prompt had blocks kept a single string.
@@ -156,6 +182,10 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         batchCount = try values.decodeIfPresent(Int.self, forKey: .batchCount) ?? batchCount
         transparentBackground = try values.decodeIfPresent(Bool.self, forKey: .transparentBackground) ?? transparentBackground
         lowMemory = try values.decodeIfPresent(Bool.self, forKey: .lowMemory) ?? lowMemory
+        videoResolution = try values.decodeIfPresent(Int.self, forKey: .videoResolution) ?? videoResolution
+        videoSeconds = try values.decodeIfPresent(Double.self, forKey: .videoSeconds) ?? videoSeconds
+        videoFrameRate = try values.decodeIfPresent(Int.self, forKey: .videoFrameRate) ?? videoFrameRate
+        referenceImage = try values.decodeIfPresent(String.self, forKey: .referenceImage)
     }
 
     /// Seeds for the next batch: consecutive from the fixed seed, or fresh random ones.
@@ -168,11 +198,12 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     }
 
     /// Picks the preset that produced `size`, or switches to a custom size.
-    mutating func apply(size: PixelSize) {
+    mutating func apply(size: PixelSize, video: Bool = false) {
         for aspect in AspectRatio.allCases {
-            for resolution in Self.resolutions where aspect.size(base: resolution) == size {
+            for resolution in video ? Self.videoResolutions : Self.resolutions
+            where aspect.size(base: resolution, multiple: video ? 64 : 16) == size {
                 self.aspect = aspect
-                self.resolution = resolution
+                if video { videoResolution = resolution } else { self.resolution = resolution }
                 usesCustomSize = false
                 return
             }
@@ -198,4 +229,6 @@ nonisolated struct GenerationRequest: Codable, Hashable, Sendable {
     /// Video only: how many frames and at what rate; nil for an image.
     var frames: Int?
     var fps: Int?
+    /// Video only: the image the clip starts from, a file in the references folder.
+    var referenceImage: String?
 }

@@ -30,7 +30,7 @@ struct LogView: View {
         .overlay {
             if log.lines.isEmpty {
                 ContentUnavailableView("The Log Is Empty", systemImage: "text.alignleft",
-                                       description: Text("What the image engine prints appears here."))
+                                       description: Text("What the engine prints appears here."))
             }
         }
         .toolbar {

@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// Owns the image engine: `turbo-engine`, the MLX Swift executable the app ships with, run as a
+/// Owns the engine: `turbo-engine`, the MLX Swift executable the app ships with, run as a
 /// child process that speaks JSON lines and keeps a model loaded between generations.
 @Observable
 final class BackendController {
@@ -16,13 +16,13 @@ final class BackendController {
     enum BackendError: LocalizedError {
         case notRunning
 
-        var errorDescription: String? { "The image engine is not running." }
+        var errorDescription: String? { "The engine is not running." }
     }
 
     /// App data (history), in the app's sandbox container. TURBO_MLX_HOME points it elsewhere in the
     /// container (`~` is the container's home), e.g. to try the first-run experience without
     /// touching the real history.
-    static let supportDirectory: URL = {
+    nonisolated static let supportDirectory: URL = {
         if let custom = ProcessInfo.processInfo.environment["TURBO_MLX_HOME"], !custom.isEmpty {
             return URL(fileURLWithPath: (custom as NSString).expandingTildeInPath, isDirectory: true)
         }
@@ -63,7 +63,7 @@ final class BackendController {
     func startWorker() {
         guard worker == nil else { return }
         guard let engine = Self.engineURL else {
-            status = .failed("The image engine is missing from this copy of Turbo MLX. Install the app again.")
+            status = .failed("The engine is missing from this copy of Turbo MLX. Install the app again.")
             return
         }
         let process = LineProcess(executable: engine, arguments: ["serve"], environment: ProcessInfo.processInfo.environment)
@@ -82,7 +82,7 @@ final class BackendController {
             )
             worker = process
         } catch {
-            status = .failed("Couldn’t start the image engine: \(error.localizedDescription)")
+            status = .failed("Couldn’t start the engine: \(error.localizedDescription)")
         }
     }
 
@@ -142,7 +142,7 @@ final class BackendController {
         worker = nil
         loadedModelPath = nil
         let lastLines = log.tail(3)
-        let message = "The image engine quit unexpectedly (exit code \(code))."
+        let message = "The engine quit unexpectedly (exit code \(code))."
             + (lastLines.isEmpty ? "" : "\n\n\(lastLines)")
         status = .failed(message)
         onCrash?(message)

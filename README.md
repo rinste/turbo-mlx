@@ -1,7 +1,7 @@
 # Turbo MLX
 
-A macOS app (SwiftUI) that generates images on the Mac's GPU with MLX. It is built to be
-distributed: the people who install it never open Terminal and need neither Python nor Xcode. The
+A macOS app (SwiftUI) that generates images, and videos with sound, on the Mac's GPU with MLX.
+It is built to be distributed: the people who install it never open Terminal and need neither Python nor Xcode. The
 engine is part of the app, written in Swift on MLX; on first launch the user picks a model, the
 app downloads it, and that is all the setup there is.
 
@@ -10,11 +10,13 @@ app downloads it, and that is all the setup there is.
 - **Left column:** the prompt as blocks (Subject and Style to start with, each one a piece of the
   final text; renamable, resizable, and put in order by dragging), aspect ratio, steps and
   guidance; under *Advanced*, the resolution or a custom size, seed, number of images, transparent
-  or white background, memory saving. At the bottom, the model (with download and status) above
-  the main button, which does what the current state needs:
+  or white background, memory saving. For a video model, a *Reference Image* above the prompt
+  (dropped from Finder or from the history, chosen from a file or among the generated images: the
+  clip's first frame) and the clip's duration and frame rate. At the bottom, the model (with
+  download and status) above the main button, which does what the current state needs:
   *Download and Generate* → *Generate*.
-- **Right column:** the image (on a checkerboard when transparent) with its prompt (a long one
-  scrolls) and metadata, the running generation with its model, per-step progress and time left,
+- **Right column:** the image (on a checkerboard when transparent) or the clip, with its prompt (a
+  long one scrolls) and metadata, the running generation with its model, per-step progress and time left,
   and the history with the queue. Zoom: pinch, the mouse wheel, double-click, ⌘-scroll, the − % +
   controls or the View menu (⌘+, ⌘-, ⌘0 actual size, ⌘9 fit); two-finger scroll (⌥-wheel with a
   mouse) or drag to move around. Quick Look (space), drag and drop, copy. *Reuse Prompt and Settings* (the
@@ -30,12 +32,17 @@ app downloads it, and that is all the setup there is.
 | [Z-Image Turbo](https://huggingface.co/mflux-community/z-image-turbo-mflux-q8) | 24 GB | 11 GB | ~13.6 GB | the 8-bit version, closer to the original |
 | [FLUX.2 Klein 4B](https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4) | 24 GB | 4.6 GB | 14.1 GB | the fastest: 4 steps · Apache 2.0 |
 | [Qwen-Image 2512](https://huggingface.co/mflux-community/qwen-image-2512-mflux-q4) | 32 GB | 27.6 GB | 21.3 GB | 20B, rich scenes and long text · 4-bit · 20 steps · Apache 2.0 |
+| [LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q4) | 32 GB | 28.5 GB | 17 GB (768 × 512, 5 s) | video with sound, from a prompt or from an image as the first frame · 22B distilled, 4-bit · 8 + 3 steps · LTX-2 Community |
+| [LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q8) | 64 GB | 37.8 GB | 38 GB (768 × 512, 5 s) | the 8-bit version, closer to the original |
 
 Measured on an M1 Max with mflux 0.20, the Python reference the native engine is checked against
 (the 8-bit Z-Image peak adds its larger weights to the measured 4-bit one). A model is listed
 under the smallest common Mac memory size it peaks under 80% of. Times at 1024 × 1024: FLUX.2
 Klein ~30 s, Z-Image Turbo 4-bit ~100 s; Ming-Image takes 76 s at 1024 × 576. The model stays
-loaded between images.
+loaded between images. LTX-2.3 is measured with the native engine against dgrauet's
+[ltx-2-mlx](https://github.com/dgrauet/ltx-2-mlx), with *Save memory*: a 5-second 768 × 512 clip
+with sound takes about 4 minutes (231 s), a 3-second one from an image 137 s; the 8-bit version,
+without *Save memory* as on a 64 GB Mac, takes 5 minutes (294 s) for the same 5 seconds.
 
 Ming-Image comes in one version (te5): at 1024 px its memory peak is set by the DiT, which is the
 same in every conversion, and te6/te8 give the same images as te5 with more memory. Qwen-Image
@@ -139,7 +146,7 @@ with its fixture and `verify` stage (see `Engine/README.md`), and an adapter in 
 `Engine/Reference/turbo_worker.py` to compare real images with mflux.
 
 **Where this is going:** [docs/native-engine.md](docs/native-engine.md) is the case for the
-native engine, what is checked so far, and what comes next: video models (LTX).
+native engine, what is checked so far, and what comes next.
 [docs/generation-performance.md](docs/generation-performance.md) ranks the ways to make generation
 faster, with the measurements that decide each one.
 

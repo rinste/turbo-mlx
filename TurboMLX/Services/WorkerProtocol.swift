@@ -52,15 +52,17 @@ nonisolated struct BackendInfo: Equatable, Sendable {
 nonisolated enum WorkerCommand: Sendable {
     /// `upcomingPrompts` are the distinct prompts of the images queued behind this one: the
     /// worker encodes them while the text encoder is resident, so they will not reload the model.
-    case generate(jobID: UUID, model: ModelDescriptor, modelPath: String, request: GenerationRequest, output: URL, upcomingPrompts: [String])
+    /// `textEncoderPath`: the companion checkpoint of a family that has one (LTX-2's Gemma).
+    case generate(jobID: UUID, model: ModelDescriptor, modelPath: String, textEncoderPath: String?, request: GenerationRequest,
+                  output: URL, upcomingPrompts: [String])
     /// Loads the model ahead of its first image.
-    case load(model: ModelDescriptor, modelPath: String, lowMemory: Bool)
+    case load(model: ModelDescriptor, modelPath: String, textEncoderPath: String?, lowMemory: Bool)
     case cancel(jobID: UUID)
     case unload
     case shutdown
 
-    private static func modelObject(_ model: ModelDescriptor, path: String, lowMemory: Bool) -> [String: Any] {
-        [
+    private static func modelObject(_ model: ModelDescriptor, path: String, textEncoderPath: String?, lowMemory: Bool) -> [String: Any] {
+        var object: [String: Any] = [
             "family": model.family.rawValue,
             "path": path,
             // The engine infers some variants (FLUX.2 Klein 4B/9B) from the model's name, as mflux does.
@@ -68,29 +70,21 @@ nonisolated enum WorkerCommand: Sendable {
             "variant": model.variant ?? "",
             "low_ram": lowMemory,
         ]
+        if let textEncoderPath { object["text_encoder_path"] = textEncoderPath }
+        return object
     }
 
     var jsonLine: String {
         let object: [String: Any] = switch self {
-        case let .generate(jobID, model, modelPath, request, output, upcomingPrompts):
+        case let .generate(jobID, model, modelPath, textEncoderPath, request, output, upcomingPrompts):
             [
                 "cmd": "generate",
                 "id": jobID.uuidString,
-                "model": Self.modelObject(model, path: modelPath, lowMemory: request.lowMemory),
-                "params": [
-                    "prompt": request.prompt,
-                    "seed": request.seed,
-                    "width": request.size.width,
-                    "height": request.size.height,
-                    "steps": request.steps,
-                    "guidance": request.guidance,
-                    "flatten_alpha": !request.transparentBackground,
-                    "output": output.path,
-                    "upcoming_prompts": upcomingPrompts,
-                ] as [String: Any],
+                "model": Self.modelObject(model, path: modelPath, textEncoderPath: textEncoderPath, lowMemory: request.lowMemory),
+                "params": Self.params(request, output: output, upcomingPrompts: upcomingPrompts),
             ]
-        case let .load(model, modelPath, lowMemory):
-            ["cmd": "load", "model": Self.modelObject(model, path: modelPath, lowMemory: lowMemory)]
+        case let .load(model, modelPath, textEncoderPath, lowMemory):
+            ["cmd": "load", "model": Self.modelObject(model, path: modelPath, textEncoderPath: textEncoderPath, lowMemory: lowMemory)]
         case let .cancel(jobID):
             ["cmd": "cancel", "id": jobID.uuidString]
         case .unload:
@@ -100,5 +94,26 @@ nonisolated enum WorkerCommand: Sendable {
         }
         let data = (try? JSONSerialization.data(withJSONObject: object, options: [.withoutEscapingSlashes])) ?? Data()
         return String(decoding: data, as: UTF8.self)
+    }
+
+    private static func params(_ request: GenerationRequest, output: URL, upcomingPrompts: [String]) -> [String: Any] {
+        var params: [String: Any] = [
+            "prompt": request.prompt,
+            "seed": request.seed,
+            "width": request.size.width,
+            "height": request.size.height,
+            "steps": request.steps,
+            "guidance": request.guidance,
+            "flatten_alpha": !request.transparentBackground,
+            "output": output.path,
+            "upcoming_prompts": upcomingPrompts,
+        ]
+        if let frames = request.frames { params["frames"] = frames }
+        if let fps = request.fps { params["fps"] = Double(fps) }
+        if let reference = request.referenceImage {
+            let url = HistoryStore.referenceURL(reference)
+            if FileManager.default.fileExists(atPath: url.path) { params["image"] = url.path }
+        }
+        return params
     }
 }
