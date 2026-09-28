@@ -17,6 +17,27 @@ ARCHIVE="$OUT/TurboMLX.xcarchive"
 
 step() { print -P "%F{cyan}==>%f $*" }
 
+# Sends a file to Apple's notary service and waits; when Apple does not accept it, prints the
+# service's log, which names each file it objects to and why, and stops.
+notarize() {
+  local result id notary_status
+  result=$(xcrun notarytool submit "$1" --keychain-profile "$PROFILE" --wait --output-format json) || true
+  id=$(print -r -- "$result" | plutil -extract id raw -o - - 2>/dev/null) || id=""
+  notary_status=$(print -r -- "$result" | plutil -extract status raw -o - - 2>/dev/null) || notary_status=""
+  print "Notarization of ${1:t}: ${notary_status:-no answer} ${id:+(submission $id)}"
+  if [[ "$notary_status" != Accepted ]]; then
+    [[ -n "$id" ]] && xcrun notarytool log "$id" --keychain-profile "$PROFILE" || print -u2 -r -- "$result"
+    exit 1
+  fi
+}
+
+# The credentials first, so that a missing profile does not stop the script after the build.
+xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null || {
+  print -u2 "No working notarization profile \"$PROFILE\". Store it once with:"
+  print -u2 "  xcrun notarytool store-credentials $PROFILE --apple-id <apple-id> --team-id $TEAM_ID"
+  exit 1
+}
+
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
@@ -49,7 +70,7 @@ codesign -d --entitlements - "$APP/Contents/MacOS/turbo-engine" 2>/dev/null | gr
 
 step "Notarizing (profile $PROFILE)"
 ditto -c -k --keepParent "$APP" "$OUT/notarize.zip"
-xcrun notarytool submit "$OUT/notarize.zip" --keychain-profile "$PROFILE" --wait
+notarize "$OUT/notarize.zip"
 xcrun stapler staple "$APP"
 spctl --assess --type execute --verbose "$APP"
 
@@ -61,7 +82,7 @@ ditto "$APP" "$STAGING/Turbo MLX.app"
 ln -s /Applications "$STAGING/Applications"
 hdiutil create -volname "Turbo MLX" -srcfolder "$STAGING" -ov -format UDZO "$DMG" >/dev/null
 codesign --sign "Developer ID Application" --timestamp "$DMG"
-xcrun notarytool submit "$DMG" --keychain-profile "$PROFILE" --wait
+notarize "$DMG"
 xcrun stapler staple "$DMG"
 
 step "Done: $DMG"
