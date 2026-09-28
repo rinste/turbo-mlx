@@ -388,7 +388,8 @@ private struct ItemInfoBar: View {
                                      help: "\(frames) frames at \(fps) fps")
                     }
                     if item.request.referenceImage != nil {
-                        MetadataChip(systemImage: "photo", text: "From an image", help: "The clip started from a reference image")
+                        MetadataChip(systemImage: "photo", text: "From an image",
+                                     help: item.kind == .video ? "The clip started from a reference image" : "Made from a reference image")
                     }
                     MetadataChip(systemImage: "stairs", text: "\(item.request.steps) steps")
                     if item.kind == .image {

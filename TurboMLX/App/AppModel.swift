@@ -395,7 +395,7 @@ final class AppModel {
                 lowMemory: settings.lowMemory,
                 frames: isVideo ? settings.videoFrames : nil,
                 fps: isVideo ? settings.videoFrameRate : nil,
-                referenceImage: isVideo && model.family.takesReferenceImage ? reference : nil
+                referenceImage: model.family.takesReferenceImage ? reference : nil
             )
             let output = isVideo ? history.newVideoURL(seed: seed) : history.newImageURL(seed: seed)
             let job = GenerationJob(model: model, request: request, outputURL: output)
@@ -689,7 +689,8 @@ final class AppModel {
             updated.videoSeconds = min(max((Double(frames - 1) / Double(fps)).rounded(), GenerationSettings.videoDurations.lowerBound),
                                        GenerationSettings.videoDurations.upperBound)
         }
-        if isVideo {
+        // A model that takes a reference image gets the generation's, or none; the others leave it.
+        if model?.family.takesReferenceImage == true {
             updated.referenceImage = request.referenceImage.flatMap { name in
                 FileManager.default.fileExists(atPath: HistoryStore.referenceURL(name).path) ? name : nil
             }

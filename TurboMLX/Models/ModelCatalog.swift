@@ -23,8 +23,9 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
 
     var media: MediaKind { self == .ltx2 ? .video : .image }
 
-    /// Clips can start from a reference image (the first frame).
-    var takesReferenceImage: Bool { self == .ltx2 }
+    /// A reference image: the first frame of a clip (LTX-2), the picture an image is edited from
+    /// as the prompt says (FLUX.2 Klein).
+    var takesReferenceImage: Bool { self == .ltx2 || self == .flux2Klein }
 
     /// Checkpoint sub-folders that must hold complete safetensors shards.
     var components: [String] {

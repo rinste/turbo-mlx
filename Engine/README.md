@@ -11,7 +11,8 @@ Sources/TurboEngineCore/      protocol, mflux checkpoint loading, PNG output, th
   Families/Family.swift       the FamilyModel protocol the engine drives, and the loader by family
   Families/Shared/            what families share: the Qwen3 prompter, the S3-DiT, the schedules,
                               tiled VAE decoding, mixture-of-experts layers, pixels
-  Families/Klein/             FLUX.2 Klein: Qwen3 text encoder, FLUX.2 transformer, VAE decoder
+  Families/Klein/             FLUX.2 Klein: Qwen3 text encoder, FLUX.2 transformer, VAE decoder,
+                              and the VAE encoder for the pictures an image is edited from
   Families/ZImage/            Z-Image Turbo: the Qwen3 encoder read in float32, the S3-DiT,
                               the 16-channel decoder
   Families/QwenImage/         Qwen-Image 2512: Qwen2.5-VL text encoder, the dual-stream
@@ -42,7 +43,7 @@ every tensor where its key says.
 
 | Family | Text side | Transformer | Decoder | Guidance |
 |---|---|---|---|---|
-| FLUX.2 Klein | Qwen3 (hidden states of layers 9, 18, 27), padded to 512 | FLUX.2 double/single stream | FLUX.2, 32 channels | base checkpoints: negative space |
+| FLUX.2 Klein | Qwen3 (hidden states of layers 9, 18, 27), padded to 512 | FLUX.2 double/single stream; an edit adds the reference picture's tokens after the image's (t = 10), only the image's come out | FLUX.2, 32 channels; the encoder for references, in their own proportions up to ~1 MP | base checkpoints: negative space |
 | Z-Image Turbo | Qwen3 4B in float32, second-to-last state, real tokens only, thinking on | S3-DiT, tokens padded to 32 with learned pad tokens, float32 stream | FLUX.1-style, 16 channels, tiles with Save memory | off |
 | Qwen-Image 2512 | Qwen2.5-VL 7B (bf16, unquantized), the template's 34 tokens dropped | 60 dual-stream blocks, float32 stream, modulation producers at 8 bits | Wan-derived causal 3D, 16 channels, tiles | true CFG, rescaled to the conditional norm; the unconditional pass is skipped at 1 |
 | Ming-Image 0.1 Design | Ling-mini-2.0 MoE (256 experts, 8 routed with group-limited top-k, bf16 router as upstream), Qwen2 connector over 256 query tokens, direct-VLM head | S3-DiT in bf16, no padding, two caption streams | Qwen VAE for RGBA, one scaling factor, tiles | zeroed conditions |
@@ -134,12 +135,14 @@ build/bin/turbo-engine verify /tmp/fixtures/qwen-image
 build/bin/turbo-engine verify /tmp/fixtures/ming
 ```
 
-`verify` reports, stage by stage, the largest difference relative to the reference's scale (and
-the RMS one): the text side, the initial noise for the fixture's seed, one transformer pass (for
-Ming also the unconditional one), the schedule, the whole denoising loop (guided where the family
-uses guidance), and the decode. Anything above 3% fails. Identical math lands well below that; a
-wrong reshape, a swapped rotary pair or a missing cast shows up as a large error at the first
-stage it touches.
+`verify` reports, stage by stage, the largest difference relative to the reference's scale (and the
+RMS one): the text side, the initial noise for the fixture's seed, one transformer pass (for Ming
+also the unconditional one), the schedule, the whole denoising loop (guided where the family uses
+guidance), and the decode; for Klein also an edit from a reference picture (the VAE encoder, the
+picture's tokens and ids, one pass and the loop with them, its decode, and the sizes pictures of
+several shapes are encoded at). Anything above 3% fails. Identical math lands well below that; a
+wrong reshape, a swapped rotary pair or a missing cast shows up as a large error at the first stage
+it touches.
 
 Two things to know when reading the numbers. Klein's text encoder is also run with float32
 activations, and that check decides for it: in bf16 its layers carry the rounding of MLX's
@@ -160,6 +163,14 @@ are flat in the catalog's checkpoints, for one). Start `build/bin/turbo-engine s
 checkpoint, prompt, seed and size, and compare the two PNGs: the same image, with small local
 differences from the two MLX versions' rounding (PSNR 27–35 dB at 512 × 512 for the four
 families).
+
+A Klein edit (`params.image`, the reference picture's path) is compared the same way against
+mflux's `Flux2KleinEdit`, which the Python worker does not run. Give both an sRGB picture: the
+engine draws the reference into sRGB, while mflux takes a Display P3 file's values as they are.
+At 1024 × 640 the two land 25 dB apart. Against mflux run in float32, the engine is 2 dB behind
+mflux in both cases: an edit 25 dB (mflux 27), text-to-image 28.5 dB (mflux 30). An edit carries
+more of the bf16 rounding in both engines, and the engine's encoder is no worse than mflux's:
+both are 3% (RMS) from a float32 encode.
 
 ## Protocol
 

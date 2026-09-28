@@ -11,16 +11,17 @@ app downloads it, and that is all the setup there is.
 ![Turbo MLX: settings on the left, the image with its zoom controls and metadata on the right, the history below](docs/screenshot.webp)
 
 - **Left column:** the prompt as blocks (Subject and Style to start with, each one a piece of the
-  final text; renamable, resizable, and put in order by dragging), aspect ratio, steps and
-  guidance; under *Advanced*, the resolution or a custom size, seed, number of images, transparent
-  or white background, memory saving. For a video model, a *Reference Image* above the prompt
-  (dropped from Finder or from the history, chosen from a file or among the generated images: the
-  clip's first frame) and the clip's duration and frame rate. At the bottom, on a darker tray, the
-  model (image and video models in two groups, with download and status) above the main button,
-  which does what the current state needs: *Download and Generate* → *Generate*, with how long it
-  should take (judged from this Mac's earlier generations with the model, e.g. *Generate (~4 min ·
-  ⌘↩)*). *Reset*, next to the model, goes back to the default model and settings with an empty
-  prompt (⌘Z brings them back). Seeds are random by default, with every model.
+  final text; renamable, resizable, and put in order by dragging), aspect ratio, steps and guidance;
+  under *Advanced*, the resolution or a custom size, seed, number of images, transparent or white
+  background, memory saving. For LTX-2.3 and FLUX.2 Klein, a *Reference Image* above the prompt
+  (dropped from Finder or from the history, chosen from a file or among the generated images): the
+  clip's first frame, or the picture Klein changes as the prompt says ("make it winter"), in its own
+  proportions. For a clip, its duration and frame rate. At the bottom, on a darker tray, the model
+  (image and video models in two groups, with download and status) above the main button, which does
+  what the current state needs: *Download and Generate* → *Generate*, with how long it should take
+  (judged from this Mac's earlier generations with the model, e.g. *Generate (~4 min · ⌘↩)*).
+  *Reset*, next to the model, goes back to the default model and settings with an empty prompt (⌘Z
+  brings them back). Seeds are random by default, with every model.
 - **Right column:** the image (on a checkerboard when transparent) or the clip (playing in a loop
   while the app is in front, with the sound as last set; a click on it or space pauses or plays it,
   the controls under the picture), with its prompt (a long one scrolls) and metadata, the running
@@ -64,19 +65,20 @@ GitHub whether a newer version is out.
 | [Ming-Image 0.1 Design](https://huggingface.co/joeynyc/Ming-Image-0.1-Design-mflux-q8-te5) | 24 GB | 19.3 GB | 14.7 GB | graphic design and typography, PNG with alpha · 12 steps · MIT |
 | [Z-Image Turbo](https://huggingface.co/mflux-community/z-image-turbo-mflux-q4) | 16 GB | 5.9 GB | 8.5 GB | photorealism, text in the image · 4-bit · 9 steps · Apache 2.0 |
 | [Z-Image Turbo](https://huggingface.co/mflux-community/z-image-turbo-mflux-q8) | 24 GB | 11 GB | ~13.6 GB | the 8-bit version, closer to the original |
-| [FLUX.2 Klein 4B](https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4) | 24 GB | 4.6 GB | 14.1 GB | the fastest: 4 steps · Apache 2.0 |
+| [FLUX.2 Klein 4B](https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4) | 24 GB | 4.6 GB | 14.1 GB | the fastest: 4 steps; edits a reference image as the prompt says · Apache 2.0 |
 | [Qwen-Image 2512](https://huggingface.co/mflux-community/qwen-image-2512-mflux-q4) | 32 GB | 27.6 GB | 21.3 GB | 20B, rich scenes and long text · 4-bit · 20 steps · Apache 2.0 |
 | [LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q4) | 32 GB | 28.5 GB | 17 GB (768 × 512, 5 s) | video with sound, from a prompt or from an image as the first frame · 22B distilled, 4-bit · 8 + 3 steps · LTX-2 Community |
 | [LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q8) | 64 GB | 37.8 GB | 38 GB (768 × 512, 5 s) | the 8-bit version, closer to the original |
 
 Measured on an M1 Max with mflux 0.20, the Python reference the native engine is checked against
-(the 8-bit Z-Image peak adds its larger weights to the measured 4-bit one). A model is listed
-under the smallest common Mac memory size it peaks under 80% of. Times at 1024 × 1024: FLUX.2
-Klein ~30 s, Z-Image Turbo 4-bit ~100 s; Ming-Image takes 76 s at 1024 × 576. The model stays
-loaded between images. LTX-2.3 is measured with the native engine against dgrauet's
-[ltx-2-mlx](https://github.com/dgrauet/ltx-2-mlx), with *Save memory*: a 5-second 768 × 512 clip
-with sound takes about 4 minutes (231 s), a 3-second one from an image 137 s; the 8-bit version,
-without *Save memory* as on a 64 GB Mac, takes 5 minutes (294 s) for the same 5 seconds.
+(the 8-bit Z-Image peak adds its larger weights to the measured 4-bit one). A model is listed under
+the smallest common Mac memory size it peaks under 80% of. Times at 1024 × 1024: FLUX.2 Klein ~30 s
+(editing a reference image, about 40 s at 1024 × 640: its tokens join the image's), Z-Image Turbo
+4-bit ~100 s; Ming-Image takes 76 s at 1024 × 576. The model stays loaded between images. LTX-2.3 is
+measured with the native engine against dgrauet's [ltx-2-mlx](https://github.com/dgrauet/ltx-2-mlx),
+with *Save memory*: a 5-second 768 × 512 clip with sound takes about 4 minutes (231 s), a 3-second
+one from an image 137 s; the 8-bit version, without *Save memory* as on a 64 GB Mac, takes 5 minutes
+(294 s) for the same 5 seconds.
 
 Ming-Image comes in one version (te5): at 1024 px its memory peak is set by the DiT, which is the
 same in every conversion, and te6/te8 give the same images as te5 with more memory. Qwen-Image

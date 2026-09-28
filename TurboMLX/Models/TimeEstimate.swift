@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 
 /// How long a generation should take on this Mac, for the Generate button. It follows the finished
 /// generations of the same model in the history; a model not used yet gets the times measured on an
@@ -18,7 +19,8 @@ enum TimeEstimate {
     }
 
     static func plan(model: ModelDescriptor, request: GenerationRequest, history: [HistoryItem], models: [ModelDescriptor]) -> Plan {
-        let work = Work(model: model, size: request.size, steps: request.steps, guidance: request.guidance, frames: request.frames)
+        let work = Work(model: model, size: request.size, steps: request.steps, guidance: request.guidance, frames: request.frames,
+                        reference: request.referenceImage)
         let byID = Dictionary(models.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let (rates, _) = rates(for: model, work: work, lowMemory: request.lowMemory, history: history, models: byID)
         return Plan(steps: work.stepUnits.map { $0 * rates.denoise }, decode: rates.decode * work.decode)
@@ -26,10 +28,10 @@ enum TimeEstimate {
 
     /// `count` generations with these settings, after loading the model if it is not in memory.
     static func estimate(
-        model: ModelDescriptor, size: PixelSize, steps: Int, guidance: Double, frames: Int?, lowMemory: Bool,
+        model: ModelDescriptor, size: PixelSize, steps: Int, guidance: Double, frames: Int?, reference: String?, lowMemory: Bool,
         count: Int, isLoaded: Bool, history: [HistoryItem], models: [ModelDescriptor]
     ) -> Result {
-        let work = Work(model: model, size: size, steps: steps, guidance: guidance, frames: frames)
+        let work = Work(model: model, size: size, steps: steps, guidance: guidance, frames: frames, reference: reference)
         let byID = Dictionary(models.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let (rates, isFromHistory) = rates(for: model, work: work, lowMemory: lowMemory, history: history, models: byID)
         let seconds = (isLoaded ? 0 : rates.load) + Double(max(count, 1)) * rates.seconds(for: work)
@@ -47,7 +49,7 @@ enum TimeEstimate {
 
         var denoise: Double { stepUnits.reduce(0, +) }
 
-        init(model: ModelDescriptor, size: PixelSize, steps: Int, guidance: Double, frames: Int?) {
+        init(model: ModelDescriptor, size: PixelSize, steps: Int, guidance: Double, frames: Int?, reference: String?) {
             let pixels = Double(size.width * size.height)
             cfg = model.supportsGuidance && guidance > 1
             if model.family.media == .video {
@@ -58,8 +60,9 @@ enum TimeEstimate {
                     + Array(repeating: Self.attended(tokens) / 1000, count: 3)
                 decode = pixels / 1_000_000 * Double(frames)
             } else {
-                // 16 × 16 pixels per token.
-                stepUnits = Array(repeating: (cfg ? 2 : 1) * Self.attended(pixels / 256) / 1000, count: max(steps, 0))
+                // 16 × 16 pixels per token; FLUX.2 Klein reads a reference image's tokens in every pass too.
+                let referenceTokens = model.family == .flux2Klein ? TimeEstimate.referenceTokens(reference) : 0
+                stepUnits = Array(repeating: (cfg ? 2 : 1) * Self.attended(pixels / 256 + Double(referenceTokens)) / 1000, count: max(steps, 0))
                 decode = pixels / 1_000_000
             }
         }
@@ -111,7 +114,8 @@ enum TimeEstimate {
         init?(_ item: HistoryItem, model: ModelDescriptor) {
             let request = item.request
             guard let timings = item.timings, let denoise = timings["denoise"], denoise > 0 else { return nil }
-            work = Work(model: model, size: request.size, steps: request.steps, guidance: request.guidance, frames: request.frames)
+            work = Work(model: model, size: request.size, steps: request.steps, guidance: request.guidance, frames: request.frames,
+                        reference: request.referenceImage)
             guard work.denoise > 0, work.decode > 0 else { return nil }
             self.denoise = denoise
             decode = timings["decode"] ?? 0
@@ -169,6 +173,25 @@ enum TimeEstimate {
         let perCore = [1: 1.0, 2: 1.15, 3: 1.3, 4: 1.5][generation] ?? 2.0
         return 1 / (size * perCore)
     }()
+
+    /// The tokens a reference image adds to each of FLUX.2 Klein's passes, as the engine encodes it
+    /// (`KleinReference`): in its own proportions at most about a megapixel, sides cut to multiples of
+    /// 16, a token per 16 × 16 pixels. Read from the file's header once per picture.
+    static func referenceTokens(_ name: String?) -> Int {
+        guard let name else { return 0 }
+        if let known = referenceTokenCounts[name] { return known }
+        var tokens = 0
+        if let source = CGImageSourceCreateWithURL(HistoryStore.referenceURL(name) as CFURL, nil),
+           let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+           let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int {
+            let scale = min(1, (1_048_576 / Double(width * height)).squareRoot())
+            tokens = (Int((Double(width) * scale).rounded()) / 16) * (Int((Double(height) * scale).rounded()) / 16)
+        }
+        referenceTokenCounts[name] = tokens
+        return tokens
+    }
+
+    private static var referenceTokenCounts: [String: Int] = [:]
 
     private static func median(_ values: [Double]) -> Double? {
         guard !values.isEmpty else { return nil }

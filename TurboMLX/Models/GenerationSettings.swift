@@ -120,7 +120,8 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     var videoResolution = 640
     var videoSeconds = 5.0
     var videoFrameRate = 24
-    /// The image a clip starts from: a file in the references folder (`HistoryStore`).
+    /// The image a clip starts from, or an image is made from: a file in the references folder
+    /// (`HistoryStore`).
     var referenceImage: String?
 
     var size: PixelSize {

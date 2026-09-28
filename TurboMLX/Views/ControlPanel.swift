@@ -594,9 +594,9 @@ private struct Reordering {
 
 // MARK: - Reference image
 
-/// The image a clip starts from: dropped from Finder or from the history strip, chosen with the
-/// open panel, or picked among the generated images. It becomes the first frame; the prompt says
-/// what happens next.
+/// The image a clip starts from, or an image is made from: dropped from Finder or from the history
+/// strip, chosen with the open panel, or picked among the generated images. A clip takes it as its
+/// first frame and the prompt says what happens next; FLUX.2 Klein changes it as the prompt says.
 private struct ReferenceImageSection: View {
     @Environment(AppModel.self) private var app
     @Binding var settings: GenerationSettings
@@ -604,14 +604,17 @@ private struct ReferenceImageSection: View {
     @State private var showsHistory = false
     @State private var failure: String?
 
+    private var isVideo: Bool { app.selectedModel?.family.media == .video }
+
     var body: some View {
         Section {
             HStack(alignment: .center, spacing: 12) {
                 preview
                 VStack(alignment: .leading, spacing: 8) {
                     Text(settings.referenceImage == nil
-                         ? "Drop an image here, or pick one: the clip starts from it."
-                         : "The clip starts from this image.")
+                         ? (isVideo ? "Drop an image here, or pick one: the clip starts from it."
+                                    : "Drop an image here, or pick one: the prompt says what to change in it.")
+                         : (isVideo ? "The clip starts from this image." : "The new image is made from this one, as the prompt says."))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -653,7 +656,9 @@ private struct ReferenceImageSection: View {
             if let failure {
                 Text(failure).font(.caption).foregroundStyle(.red)
             } else {
-                Text("Optional. It is fitted to the clip’s size, cropped from the middle.")
+                Text(isVideo
+                     ? "Optional. It is fitted to the clip’s size, cropped from the middle."
+                     : "Optional. It keeps its own proportions, at most about a megapixel; the new image takes the format below.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -1205,6 +1210,7 @@ private struct GenerateBar: View {
             steps: min(max(settings.steps, model.stepRange.lowerBound), model.stepRange.upperBound),
             guidance: settings.guidance,
             frames: model.family.media == .video ? settings.videoFrames : nil,
+            reference: model.family.takesReferenceImage ? settings.referenceImage : nil,
             lowMemory: settings.lowMemory,
             count: settings.batchCount,
             // A model the queue is using will be in memory by then.

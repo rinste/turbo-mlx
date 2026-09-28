@@ -14,9 +14,7 @@ struct LTXReferenceImage {
     let image: CGImage
 
     init(path: String) throws {
-        guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
-        else { throw LTXError.unreadableImage(path) }
+        guard let image = ImagePixels.load(path) else { throw LTXError.unreadableImage(path) }
         self.image = image
     }
 
@@ -36,54 +34,13 @@ struct LTXReferenceImage {
         let scale = max(Double(height) / Double(image.height), Double(width) / Double(image.width))
         let scaledWidth = Int((Double(image.width) * scale).rounded(.up))
         let scaledHeight = Int((Double(image.height) * scale).rounded(.up))
-        let rgba = rgbaBytes(image)
+        let rgba = ImagePixels.rgbaBytes(image)
         let resized = scaledWidth == image.width && scaledHeight == image.height
             ? rgba
-            : resize(rgba, width: image.width, height: image.height, toWidth: scaledWidth, toHeight: scaledHeight)
-        let left = (scaledWidth - width) / 2
-        let top = (scaledHeight - height) / 2
-        var rgb = [UInt8](repeating: 0, count: width * height * 3)
-        for y in 0 ..< height {
-            for x in 0 ..< width {
-                let source = ((top + y) * scaledWidth + (left + x)) * 4
-                let target = (y * width + x) * 3
-                rgb[target] = resized[source]
-                rgb[target + 1] = resized[source + 1]
-                rgb[target + 2] = resized[source + 2]
-            }
-        }
+            : ImagePixels.resize(rgba, width: image.width, height: image.height, toWidth: scaledWidth, toHeight: scaledHeight)
+        let rgb = ImagePixels.crop(resized, rgbaWidth: scaledWidth, left: (scaledWidth - width) / 2, top: (scaledHeight - height) / 2,
+                                   width: width, height: height)
         return MLXArray(rgb, [height, width, 3])
-    }
-
-    /// The image as RGBA bytes on an sRGB canvas, transparency over white.
-    private static func rgbaBytes(_ image: CGImage) -> [UInt8] {
-        let (width, height) = (image.width, image.height)
-        var bytes = [UInt8](repeating: 255, count: width * height * 4)
-        bytes.withUnsafeMutableBytes { buffer in
-            guard let context = CGContext(
-                data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
-                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-            ) else { return }
-            context.setFillColor(CGColor(gray: 1, alpha: 1))
-            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-        }
-        return bytes
-    }
-
-    private static func resize(_ bytes: [UInt8], width: Int, height: Int, toWidth: Int, toHeight: Int) -> [UInt8] {
-        var input = bytes
-        var output = [UInt8](repeating: 0, count: toWidth * toHeight * 4)
-        input.withUnsafeMutableBytes { inBuffer in
-            output.withUnsafeMutableBytes { outBuffer in
-                var source = vImage_Buffer(data: inBuffer.baseAddress, height: vImagePixelCount(height),
-                                           width: vImagePixelCount(width), rowBytes: width * 4)
-                var destination = vImage_Buffer(data: outBuffer.baseAddress, height: vImagePixelCount(toHeight),
-                                                width: vImagePixelCount(toWidth), rowBytes: toWidth * 4)
-                _ = vImageScale_ARGB8888(&source, &destination, nil, vImage_Flags(kvImageHighQualityResampling))
-            }
-        }
-        return output
     }
 }
 

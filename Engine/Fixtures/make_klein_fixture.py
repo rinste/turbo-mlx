@@ -24,6 +24,7 @@ from mflux.models.flux2.model.flux2_text_encoder.prompt_encoder import Flux2Prom
 from mflux.models.flux2.model.flux2_text_encoder.qwen3_text_encoder import Qwen3TextEncoder
 from mflux.models.flux2.model.flux2_transformer.transformer import Flux2Transformer
 from mflux.models.flux2.model.flux2_vae.vae import Flux2VAE
+from mflux.models.flux2.variants.edit.flux2_klein_edit_helpers import _Flux2KleinEditHelpers
 from mflux.models.common.schedulers.flow_match_euler_discrete_scheduler import FlowMatchEulerDiscreteScheduler
 
 BITS = 4  # the catalog's checkpoints are 4-bit
@@ -158,6 +159,47 @@ def main(out: Path) -> None:
     decoded = vae.decode_packed_latents(packed)
     mx.eval(decoded)
 
+    # --- reference: an edit from one picture, as Flux2KleinEdit runs it -------------------------
+    # 96 × 64 pixels: a multiple of 16 under the area cap, so no resize is involved and the port's
+    # encoder, packing and passes are checked on their own. A smooth pattern with some noise.
+    ref_h, ref_w = 64, 96
+    yy = mx.linspace(-1, 1, ref_h).reshape(1, 1, ref_h, 1)
+    xx = mx.linspace(-1, 1, ref_w).reshape(1, 1, 1, ref_w)
+    phase = mx.array([0.0, 2.0, 4.0]).reshape(1, 3, 1, 1)
+    ref_image = mx.clip(0.7 * mx.sin(3 * xx + 2 * yy + phase)
+                        + 0.2 * mx.random.normal((1, 3, ref_h, ref_w), key=mx.random.key(9)), -1, 1).astype(mx.float32)
+    ref_encoded = vae.encode(ref_image)
+    ref_latents = _Flux2KleinEditHelpers.crop_to_even_spatial(ref_encoded)
+    ref_latents = Flux2LatentCreator.patchify_latents(ref_latents)
+    ref_latents = _Flux2KleinEditHelpers.bn_normalize_vae_encoded_latents(ref_latents, vae=vae)
+    ref_tokens = Flux2LatentCreator.pack_latents(ref_latents)
+    ref_ids = Flux2LatentCreator.prepare_grid_ids(ref_latents, t_coord=10)
+    edit_ids = mx.concatenate([latent_ids, ref_ids], axis=1)
+    count = latents.shape[1]
+    # As Flux2KleinEdit._predict: the reference's tokens after the image's, only the image's kept.
+    edit_noise = transformer(
+        hidden_states=mx.concatenate([latents, ref_tokens], axis=1), encoder_hidden_states=prompt_embeds,
+        timestep=timestep, img_ids=edit_ids, txt_ids=text_ids, guidance=None,
+    )[:, :count]
+    x = latents
+    for t in range(cfg["steps"]):
+        pred = transformer(
+            hidden_states=mx.concatenate([x, ref_tokens], axis=1), encoder_hidden_states=prompt_embeds,
+            timestep=timesteps[t], img_ids=edit_ids, txt_ids=text_ids, guidance=None,
+        )[:, :count]
+        x = scheduler.step(noise=pred, timestep=t, latents=x, sigmas=sigmas)
+        mx.eval(x)
+    edit_final_latents = x
+    edit_decoded = vae.decode_packed_latents(
+        edit_final_latents.reshape(1, latent_height, latent_width, edit_final_latents.shape[-1]).transpose(0, 3, 1, 2)
+    )
+    mx.eval(ref_encoded, ref_tokens, ref_ids, edit_noise, edit_decoded)
+    # The sizes references are encoded at, for a few picture sizes: (width, height, width, height).
+    reference_sizes = [
+        [w, h, *_Flux2KleinEditHelpers.reference_dims(w, h)]
+        for w, h in [(1024, 1024), (1000, 700), (2048, 1152), (1152, 2048), (4032, 3024), (1025, 1023), (3000, 17)]
+    ]
+
     # --- save the checkpoint the way mflux does (component folders, shards, metadata) ------------
     for name, module in (("transformer", transformer), ("text_encoder", text_encoder), ("vae", vae)):
         ModelSaver._save_weights(str(out), BITS, module, name)
@@ -176,9 +218,17 @@ def main(out: Path) -> None:
         "timesteps": timesteps,
         "final_latents": final_latents,
         "decoded": decoded,
+        "ref_image": ref_image,
+        "ref_encoded": ref_encoded,
+        "ref_tokens": ref_tokens,
+        "ref_ids": ref_ids,
+        "edit_noise": edit_noise,
+        "edit_final_latents": edit_final_latents,
+        "edit_decoded": edit_decoded,
     })
     with open(out / "fixture.json", "w") as f:
-        json.dump({**cfg, "bits": BITS, "latent_height": latent_height, "latent_width": latent_width}, f, indent=2)
+        json.dump({**cfg, "bits": BITS, "latent_height": latent_height, "latent_width": latent_width,
+                   "reference_sizes": reference_sizes}, f, indent=2)
     total = sum(p.stat().st_size for p in out.rglob("*") if p.is_file())
     print(f"fixture written to {out} ({total / 1e6:.1f} MB)")
     print("sigmas:", [round(float(s), 5) for s in sigmas.tolist()])

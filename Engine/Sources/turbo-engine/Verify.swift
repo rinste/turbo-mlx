@@ -137,6 +137,63 @@ enum VerifyKlein {
         eval(decoded)
         let wanted = try reference("decoded").transposed(0, 2, 3, 1)
         ok = Verify.report("vae decode", got: decoded, want: wanted) && ok
+
+        // 6. An edit from one picture, as Flux2KleinEdit runs it (fixtures made before it have none).
+        if let picture = references["ref_image"] {
+            ok = try verifyEdit(model: model, picture: picture.transposed(0, 2, 3, 1), json: json, reference: reference,
+                                steps: steps, schedule: schedule, latentHeight: initial.latentHeight, latentWidth: initial.latentWidth) && ok
+        }
+        return ok
+    }
+
+    /// The VAE encoder, the picture's tokens and ids, one pass and the whole loop with them, the
+    /// decode; and the sizes pictures are encoded at.
+    static func verifyEdit(
+        model: KleinModel, picture: MLXArray, json: [String: Any], reference: (String) throws -> MLXArray,
+        steps: Int, schedule: FlowMatchSchedule, latentHeight: Int, latentWidth: Int
+    ) throws -> Bool {
+        var ok = true
+        let encoded = model.vae.encode(picture)
+        eval(encoded)
+        ok = Verify.report("vae encode", got: encoded, want: try reference("ref_encoded").transposed(0, 2, 3, 1)) && ok
+        let ref = model.referenceTokens(pixels: picture)
+        ok = Verify.report("reference tokens", got: ref.tokens, want: try reference("ref_tokens")) && ok
+        ok = Verify.report("reference ids", got: ref.ids, want: try reference("ref_ids")) && ok
+
+        // One pass from the reference's own inputs, then the loop from the port's.
+        let count = latentHeight * latentWidth
+        let prompt = try reference("prompt_embeds")
+        let textIds = try reference("text_ids")
+        let ids = concatenated([try reference("latent_ids"), try reference("ref_ids")], axis: 1)
+        let timestep = try reference("timestep").asType(.float32).item(Float.self)
+        let input = concatenated([try reference("latents"), try reference("ref_tokens")], axis: 1)
+        let noise = model.transformer(latents: input, prompt: prompt, timestep: timestep, imageIds: ids, textIds: textIds)[0..., 0 ..< count, 0...]
+        eval(noise)
+        ok = Verify.report("edit pass", got: noise, want: try reference("edit_noise")) && ok
+        var latents = try reference("latents")
+        let portIds = concatenated([KleinModel.initialLatents(width: 16 * latentWidth, height: 16 * latentHeight, seed: 0).ids, ref.ids], axis: 1)
+        for t in 0 ..< steps {
+            let predicted = model.transformer(
+                latents: concatenated([latents, ref.tokens], axis: 1), prompt: prompt, timestep: schedule.timesteps[t],
+                imageIds: portIds, textIds: textIds
+            )[0..., 0 ..< count, 0...]
+            latents = KleinModel.step(latents: latents, noise: predicted, schedule: schedule, index: t)
+            eval(latents)
+        }
+        ok = Verify.report("edit latents", got: latents, want: try reference("edit_final_latents")) && ok
+        let decoded = model.vae.decodePacked(try reference("edit_final_latents").reshaped([1, latentHeight, latentWidth, 128]))
+        eval(decoded)
+        ok = Verify.report("edit decode", got: decoded, want: try reference("edit_decoded").transposed(0, 2, 3, 1)) && ok
+
+        // `reference_dims`: scaled to about a megapixel, rounded half to even, cut to multiples of 16.
+        for case let row as [NSNumber] in json["reference_sizes"] as? [Any] ?? [] where row.count == 4 {
+            let (width, height) = (row[0].intValue, row[1].intValue)
+            let size = KleinReference.sizes(width: width, height: height).encoded
+            let pass = size.width == row[2].intValue && size.height == row[3].intValue
+            print("  \(pass ? "✓" : "✗") reference size    \(width) × \(height) → \(size.width) × \(size.height)"
+                  + (pass ? "" : ", expected \(row[2]) × \(row[3])"))
+            ok = pass && ok
+        }
         return ok
     }
 }

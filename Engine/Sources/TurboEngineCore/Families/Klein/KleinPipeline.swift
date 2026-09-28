@@ -81,12 +81,51 @@ public enum GenerationPhase: String {
 public enum GenerationError: LocalizedError {
     case cancelled
     case sizeTooSmall
+    case unreadableImage(String)
+    case referenceTooSmall
 
     public var errorDescription: String? {
         switch self {
         case .cancelled: "Cancelled"
         case .sizeTooSmall: "The image must be at least 16 × 16 pixels."
+        case .unreadableImage(let path): "Couldn’t read the reference image \((path as NSString).lastPathComponent)."
+        case .referenceTooSmall: "The reference image must be at least 16 × 16 pixels."
         }
+    }
+}
+
+/// A picture an image is edited from, as `_Flux2KleinEditHelpers.prepare_reference_image`
+/// prepares it: in its own proportions whatever the image's size, scaled down to at most about a
+/// megapixel, its sides then cut to a multiple of 16 from the middle.
+public enum KleinReference {
+    /// The most pixels a reference is encoded at, as the diffusers pipeline caps it.
+    static let maxArea = 1024 * 1024
+
+    /// A `width` × `height` picture once scaled to fit `maxArea` (rounded half to even, as Python
+    /// rounds), and the size it is encoded at: that one cut down to multiples of 16.
+    public static func sizes(width: Int, height: Int) -> (scaled: (width: Int, height: Int), encoded: (width: Int, height: Int)) {
+        var scaled = (width: width, height: height)
+        if width * height > maxArea {
+            let scale = (Double(maxArea) / Double(width * height)).squareRoot()
+            scaled = (roundHalfEven(Double(width) * scale), roundHalfEven(Double(height) * scale))
+        }
+        return (scaled, (scaled.width - scaled.width % 16, scaled.height - scaled.height % 16))
+    }
+
+    /// The picture at `path` as the encoder takes it: [1, H, W, 3] in [-1, 1], in float32 as mflux
+    /// hands it over.
+    public static func pixels(path: String) throws -> MLXArray {
+        guard let image = ImagePixels.load(path) else { throw GenerationError.unreadableImage(path) }
+        let (scaled, encoded) = sizes(width: image.width, height: image.height)
+        guard encoded.width > 0, encoded.height > 0 else { throw GenerationError.referenceTooSmall }
+        var rgba = ImagePixels.rgbaBytes(image)
+        if scaled.width != image.width || scaled.height != image.height {
+            rgba = ImagePixels.resize(rgba, width: image.width, height: image.height, toWidth: scaled.width, toHeight: scaled.height)
+        }
+        let rgb = ImagePixels.crop(rgba, rgbaWidth: scaled.width, left: (scaled.width - encoded.width) / 2,
+                                   top: (scaled.height - encoded.height) / 2, width: encoded.width, height: encoded.height)
+        let bytes = MLXArray(rgb, [1, encoded.height, encoded.width, 3])
+        return (bytes.asType(.float32) / Float(255)) * Float(2) - Float(1)
     }
 }
 
@@ -117,7 +156,7 @@ public final class KleinModel: FamilyModel {
         var checkpoint = Checkpoint(root: modelPath)
         try WeightLoading.apply(try checkpoint.loadComponent("text_encoder"), to: textEncoder, ignoring: Qwen3TextEncoder.ignoresKey)
         try WeightLoading.apply(try checkpoint.loadComponent("transformer"), to: transformer)
-        try WeightLoading.apply(try checkpoint.loadComponent("vae"), to: vae, ignoring: Flux2VAE.ignoresKey)
+        try WeightLoading.apply(try checkpoint.loadComponent("vae"), to: vae)
         bits = checkpoint.bits
         if loadTokenizer {
             prompter = try Qwen3Prompter(modelPath: modelPath, maxLength: config.maxSequenceLength, enableThinking: false)
@@ -165,16 +204,25 @@ public final class KleinModel: FamilyModel {
         return (packed, imageIds(height: latentHeight, width: latentWidth), latentHeight, latentWidth)
     }
 
-    /// [1, h·w, 4] rows of (0, y, x, 0), row-major like the packed latents.
-    static func imageIds(height: Int, width: Int) -> MLXArray {
+    /// [1, h·w, 4] rows of (t, y, x, 0), row-major like the packed latents: t is 0 for the image,
+    /// 10, 20… for the pictures it is edited from.
+    static func imageIds(height: Int, width: Int, t: Int32 = 0) -> MLXArray {
         var values: [Int32] = []
         values.reserveCapacity(height * width * 4)
         for y in 0 ..< height {
             for x in 0 ..< width {
-                values.append(contentsOf: [0, Int32(y), Int32(x), 0])
+                values.append(contentsOf: [t, Int32(y), Int32(x), 0])
             }
         }
         return MLXArray(values, [1, height * width, 4])
+    }
+
+    /// A reference picture ([1, H, W, 3] in [-1, 1], see `KleinReference`) as the tokens that
+    /// follow the image's in every pass, and their ids: the `index`-th picture sits at t = 10 + 10·index.
+    public func referenceTokens(pixels: MLXArray, index: Int = 0) -> (tokens: MLXArray, ids: MLXArray) {
+        let encoded = vae.encodePacked(pixels)
+        eval(encoded.tokens)
+        return (encoded.tokens, Self.imageIds(height: encoded.height, width: encoded.width, t: Int32(10 + 10 * index)))
     }
 
     /// [1, count, 4] rows of (0, 0, 0, token index).
@@ -201,15 +249,18 @@ public final class KleinModel: FamilyModel {
         let guidance = config.isBase ? request.guidance : 1
         return try generate(
             prompt: request.prompt, seed: request.seed, width: request.width, height: request.height,
-            steps: request.steps, guidance: guidance, phase: phase, progress: progress, isCancelled: isCancelled
+            steps: request.steps, guidance: guidance, referencePath: request.imagePath,
+            phase: phase, progress: progress, isCancelled: isCancelled
         )
     }
 
     /// Runs the whole pipeline for a prompt. `progress` gets each finished step; `isCancelled`
     /// is consulted between steps. A `guidance` above 1 runs mflux's classifier-free guidance
-    /// against an encoded space, as its base checkpoints do.
+    /// against an encoded space, as its base checkpoints do. With `referencePath`, the image is
+    /// edited from that picture, as `Flux2KleinEdit` does: its tokens follow the image's in every
+    /// pass, and only the image's come out.
     public func generate(
-        prompt: String, seed: Int, width: Int, height: Int, steps: Int, guidance: Double = 1,
+        prompt: String, seed: Int, width: Int, height: Int, steps: Int, guidance: Double = 1, referencePath: String? = nil,
         phase: (GenerationPhase) -> Void,
         progress: (Int, Int) -> Void,
         isCancelled: () -> Bool
@@ -221,18 +272,23 @@ public final class KleinModel: FamilyModel {
         phase(.encoding)
         let encoded = try encodePrompt(prompt)
         let negative = guidance > 1 ? try encodePrompt(Self.negativePrompt) : nil
+        let reference = try referencePath.map { referenceTokens(pixels: try KleinReference.pixels(path: $0)) }
         if isCancelled() { throw GenerationError.cancelled }
 
         phase(.denoising)
         let initial = Self.initialLatents(width: width, height: height, seed: seed)
-        let schedule = FlowMatchSchedule(steps: steps, imageSeqLen: initial.latentHeight * initial.latentWidth)
+        let imageTokens = initial.latentHeight * initial.latentWidth
+        let schedule = FlowMatchSchedule(steps: steps, imageSeqLen: imageTokens)
+        let ids = reference.map { concatenated([initial.ids, $0.ids], axis: 1) } ?? initial.ids
         var latents = initial.latents
         for t in 0 ..< steps {
-            var noise = transformer(latents: latents, prompt: encoded.embeds, timestep: schedule.timesteps[t], imageIds: initial.ids, textIds: encoded.ids)
+            let input = reference.map { concatenated([latents, $0.tokens], axis: 1) } ?? latents
+            var noise = transformer(latents: input, prompt: encoded.embeds, timestep: schedule.timesteps[t], imageIds: ids, textIds: encoded.ids)
             if let negative {
-                let negativeNoise = transformer(latents: latents, prompt: negative.embeds, timestep: schedule.timesteps[t], imageIds: initial.ids, textIds: negative.ids)
+                let negativeNoise = transformer(latents: input, prompt: negative.embeds, timestep: schedule.timesteps[t], imageIds: ids, textIds: negative.ids)
                 noise = negativeNoise + Float(guidance) * (noise - negativeNoise)
             }
+            if reference != nil { noise = noise[0..., 0 ..< imageTokens, 0...] }
             latents = Self.step(latents: latents, noise: noise, schedule: schedule, index: t)
             eval(latents)
             progress(t + 1, steps)
