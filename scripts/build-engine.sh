@@ -2,7 +2,7 @@
 # Builds the engine (Engine/Package.swift) in Release with xcodebuild, which compiles mlx-swift's
 # Metal shaders (`swift build` does not on macOS), and copies the binary with its resource bundles.
 # The app's build runs this (scripts/embed-engine.sh) to embed the engine in the bundle; by hand it
-# gives a binary for `turbo-engine verify`, or for the app's TURBO_ENGINE.
+# gives a binary for `turbo-engine verify`.
 #
 # Usage: scripts/build-engine.sh                 -> build/bin/turbo-engine
 #        scripts/build-engine.sh path/to/bin      -> that directory instead
@@ -40,5 +40,5 @@ for lib in "$DERIVED"/Build/Products/Release/*.bundle(N); do
 done
 print "Installed: $DEST/turbo-engine"
 if [[ $# -eq 0 ]]; then
-  print "Check a port with $DEST/turbo-engine verify <fixture>, or run the app on it with TURBO_ENGINE=$PWD/$DEST/turbo-engine."
+  print "Check a port with $DEST/turbo-engine verify <fixture> (Engine/README.md)."
 fi

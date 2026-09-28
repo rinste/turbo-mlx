@@ -110,6 +110,8 @@ struct AddModelSheet: View {
 
     private func add() {
         guard let source else { return }
+        // The sandbox forgets a folder chosen in the panel when the app quits; a bookmark keeps it.
+        if origin == .folder, let folder { FolderAccess.remember(folder) }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         app.addCustomModel(ModelDescriptor(
             name: trimmedName.isEmpty ? suggestedName : trimmedName,

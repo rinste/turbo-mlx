@@ -41,7 +41,7 @@ final class AppModel {
 
     private(set) var models: [ModelDescriptor]
     private(set) var installed: [String: URL] = [:]
-    private(set) var locator = ModelLocator(environment: ProcessInfo.processInfo.environment)
+    let locator = ModelLocator()
 
     var selectedModelID: String {
         didSet {
@@ -128,8 +128,8 @@ final class AppModel {
         guard !started else { return }
         started = true
         history.load()
-        await backend.prepare()
-        locator = ModelLocator(environment: backend.environment)
+        // Local model folders before the engine, which inherits the access they open.
+        FolderAccess.restore()
         refreshInstalled()
         backend.ensureWorker()
     }
@@ -168,7 +168,7 @@ final class AppModel {
             )
             return
         }
-        downloads.start(model, hubCache: locator.hubCache, environment: backend.environment)
+        downloads.start(model, hubCache: locator.hubCache)
     }
 
     /// Downloads the selected model, then generates with the current prompt.
@@ -246,12 +246,16 @@ final class AppModel {
         models.append(model)
         saveCustomModels()
         refreshInstalled()
+        // A folder picked just now: the running engine started before its access was opened.
+        // Restarted first, so the model is preloaded once, when the new engine is ready.
+        if case .local = model.source, backend.isRunning, !isBusy { backend.restartWorker() }
         selectedModelID = model.id
     }
 
     func removeCustomModel(_ model: ModelDescriptor) {
         guard !model.isBuiltIn else { return }
         cancelDownload(model)
+        if case .local(let path) = model.source { FolderAccess.forget(path) }
         models.removeAll { $0.id == model.id }
         saveCustomModels()
         if selectedModelID == model.id { selectedModelID = ModelCatalog.defaultModelID }

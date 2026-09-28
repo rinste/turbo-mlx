@@ -3,18 +3,20 @@ import Foundation
 /// Finds model weights on disk: Hugging Face repos in the hub cache (where mflux looks for them)
 /// and local folders.
 nonisolated struct ModelLocator: Sendable {
-    let hubCache: URL
+    /// `~/.cache/huggingface`, the folder the huggingface CLI, mflux and other tools share. The
+    /// app's sandbox reaches it through an entitlement for this one path (TurboMLX.entitlements),
+    /// and the engine, which inherits the sandbox, reads the models there too.
+    static let huggingFaceHome = realHome.appending(path: ".cache/huggingface", directoryHint: .isDirectory)
 
-    init(environment: [String: String]) {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        if let cache = environment["HF_HUB_CACHE"], !cache.isEmpty {
-            hubCache = URL(fileURLWithPath: (cache as NSString).expandingTildeInPath)
-        } else if let hfHome = environment["HF_HOME"], !hfHome.isEmpty {
-            hubCache = URL(fileURLWithPath: (hfHome as NSString).expandingTildeInPath).appending(path: "hub")
-        } else {
-            hubCache = home.appending(path: ".cache/huggingface/hub")
+    /// The user's home folder: in the sandbox, FileManager's is the app's container.
+    private static var realHome: URL {
+        if let entry = getpwuid(getuid()), let directory = entry.pointee.pw_dir {
+            return URL(fileURLWithPath: String(cString: directory), isDirectory: true)
         }
+        return FileManager.default.homeDirectoryForCurrentUser
     }
+
+    let hubCache = ModelLocator.huggingFaceHome.appending(path: "hub", directoryHint: .isDirectory)
 
     /// The folder holding a complete copy of the model, or nil if it still has to be downloaded.
     func installedLocation(of model: ModelDescriptor) -> URL? {

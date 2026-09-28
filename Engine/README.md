@@ -52,19 +52,20 @@ Requires Xcode 26 (mlx-swift 0.31.6 asks for a Swift 6.3 toolchain) and a Mac wi
 The app's build does it: its *Embed turbo-engine* phase runs `scripts/embed-engine.sh`, which
 builds the engine in Release (`scripts/build-engine.sh`, derived data in `build/engine`) and puts
 it in the bundle, `turbo-engine` in `Contents/MacOS` and the resource bundles it loads
-(mlx-swift's Metal library among them) in `Contents/Resources`, signed like the app. Start the
-app: the engine status shows "turbo-engine 0.2" and every model runs on it. The engine is rebuilt
-only when `Engine/` changed; when it fails to build, so does the app.
+(mlx-swift's Metal library among them) in `Contents/Resources`, signed like the app and with
+`turbo-engine.entitlements`, which make it inherit the app's sandbox (a sandboxed app can start
+no other helper, and none from outside its bundle). Start the app: the engine status shows
+"turbo-engine 0.2" and every model runs on it. The engine is rebuilt only when `Engine/`
+changed; when it fails to build, so does the app.
 
-For the checks below, or to run the app on another build of the engine:
+For the checks below:
 
 ```bash
 scripts/build-engine.sh            # builds Release into build/bin/turbo-engine
 ```
 
-The app runs the engine `TURBO_ENGINE` names before its own (`open --env
-TURBO_ENGINE=$PWD/build/bin/turbo-engine "path/to/Turbo MLX.app"`). To work on the engine in
-Xcode, open `Engine/Package.swift` and run the `turbo-engine` scheme with the arguments below.
+To work on the engine in Xcode, open `Engine/Package.swift` and run the `turbo-engine` scheme
+with the arguments below.
 
 ## Checking a port against mflux
 

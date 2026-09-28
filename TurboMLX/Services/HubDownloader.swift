@@ -28,7 +28,7 @@ nonisolated final class HubDownloader: Sendable {
         var errorDescription: String? {
             switch self {
             case .http(401, let repo), .http(403, let repo):
-                "\(repo) needs a Hugging Face token: the repository is gated or private. Put the token in HF_TOKEN or sign in with the huggingface CLI."
+                "\(repo) needs a Hugging Face token: the repository is gated or private. Sign in with the Hugging Face CLI (hf auth login): Turbo MLX uses the token it saves."
             case .http(404, let repo):
                 "\(repo) was not found on Hugging Face."
             case .http(let status, let repo):
@@ -49,11 +49,11 @@ nonisolated final class HubDownloader: Sendable {
     /// Files fetched at the same time: the hub's CDN gives several connections more than one.
     private let parallelism = 4
 
-    init(repo: String, hubCache: URL, environment: [String: String], revision: String = "main") {
+    init(repo: String, hubCache: URL, revision: String = "main") {
         self.repo = repo
         self.revision = revision
         self.hubCache = hubCache
-        token = Self.token(in: environment)
+        token = Self.storedToken
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 60
         configuration.timeoutIntervalForResource = 60 * 60 * 24
@@ -61,13 +61,12 @@ nonisolated final class HubDownloader: Sendable {
         session = URLSession(configuration: configuration)
     }
 
-    /// `HF_TOKEN` from the environment, or the token the huggingface CLI stored.
-    private static func token(in environment: [String: String]) -> String? {
+    /// `HF_TOKEN` when the app was started with one, or the token the huggingface CLI saved in
+    /// the Hugging Face folder.
+    private static var storedToken: String? {
+        let environment = ProcessInfo.processInfo.environment
         if let token = environment["HF_TOKEN"] ?? environment["HUGGING_FACE_HUB_TOKEN"], !token.isEmpty { return token }
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let hfHome = environment["HF_HOME"].map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
-            ?? home.appending(path: ".cache/huggingface")
-        let stored = try? String(contentsOf: hfHome.appending(path: "token"), encoding: .utf8)
+        let stored = try? String(contentsOf: ModelLocator.huggingFaceHome.appending(path: "token"), encoding: .utf8)
         let trimmed = stored?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
     }

@@ -29,11 +29,11 @@ final class DownloadCenter {
 
     func isDownloading(_ model: ModelDescriptor) -> Bool { active[model.id] != nil }
 
-    func start(_ model: ModelDescriptor, hubCache: URL, environment: [String: String]) {
+    func start(_ model: ModelDescriptor, hubCache: URL) {
         guard let repo = model.repo, tasks[model.id] == nil else { return }
         failures[model.id] = nil
         active[model.id] = Progress(total: model.sizeBytes ?? 0)
-        let downloader = HubDownloader(repo: repo, hubCache: hubCache, environment: environment)
+        let downloader = HubDownloader(repo: repo, hubCache: hubCache)
         let patterns = model.family.downloadPatterns
         tasks[model.id] = Task { [weak self] in
             do {

@@ -58,11 +58,18 @@ Then ⌘R in Xcode. The app's build also builds the native engine from `Engine/`
 (the *Embed turbo-engine* phase, `scripts/embed-engine.sh`): the first build takes a few minutes
 for MLX's C++ core and Metal kernels, the next ones seconds, since the engine is only rebuilt when
 `Engine/` changed. The app cannot generate without it, so when the engine does not build, neither
-does the app. To try the first-run experience without touching your real installation, point the
-app at an empty data folder:
+does the app.
+
+Builds are signed with the team's Developer ID certificate, local ones too: the sandbox ties the
+app's container to its signature, and an ad hoc one changes with every build. Without the
+certificate, override `CODE_SIGN_IDENTITY=-`, knowing macOS may then keep a new build out of the
+data an older one left.
+
+To try the first-run experience without touching your real history, point the app at an empty
+data folder in its container (`~` is the container's home there, hence the quotes):
 
 ```bash
-open -n --env TURBO_MLX_HOME=/tmp/turbo-first-run "path/to/Turbo MLX.app"
+open -n --env TURBO_MLX_HOME='~/first-run' "path/to/Turbo MLX.app"
 ```
 
 ## How it works
@@ -92,13 +99,21 @@ SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo-engine serve ──▶ 
   whose tiles would show seams), and keeps MLX's buffer cache small.
 - **Downloads.** The app downloads models itself (`Services/HubDownloader.swift`) into the
   Hugging Face cache, in the same layout huggingface_hub uses, so mflux and other tools share
-  them; an interrupted download resumes. No engine is needed to download.
-- The app reads the login shell's environment for Hugging Face (`HF_HOME`, `HF_HUB_CACHE`,
-  `HF_TOKEN`), so its models go where the user's other tools keep them.
+  them; an interrupted download resumes. No engine is needed to download. A gated or private
+  repository uses the token the Hugging Face CLI saved (`hf auth login`).
+- **Sandbox.** The app runs in the App Sandbox (`TurboMLX.entitlements`): its history and
+  settings live in its container, and outside it the app reaches only `~/.cache/huggingface`,
+  the folder the Hugging Face CLI and mflux use by default, through an entitlement for that path
+  (an `HF_HOME` elsewhere is not followed). The engine inherits the sandbox. A folder picked for
+  a local model is kept with a security-scoped bookmark (`Services/FolderAccess.swift`), opened
+  before the engine starts so it can read it too. The first sandboxed launch moved the history
+  and the settings from their old places into the container
+  (`Resources/container-migration.plist`). Direct distribution only: the entitlement for
+  `~/.cache/huggingface` is a temporary exception, which the Mac App Store does not accept.
 
 | What | Where |
 |---|---|
-| History (PNGs + `history.json`) | `~/Library/Application Support/TurboMLX/History` |
+| History (PNGs + `history.json`) | `~/Library/Containers/com.stefanorinaldo.TurboMLX/Data/Library/Application Support/TurboMLX/History` |
 | Models | `~/.cache/huggingface/hub` |
 
 ```
@@ -110,6 +125,7 @@ TurboMLX/
 Engine/       the engine (Swift package: turbo-engine, TurboEngineCore), its fixtures and the
               mflux reference worker
 scripts/      release.sh, embed-engine.sh, build-engine.sh, ExportOptions.plist
+TurboMLX.entitlements   the app's sandbox (the engine's: Engine/turbo-engine.entitlements)
 ```
 
 The project uses Xcode's synchronized folders: files added under `TurboMLX/` join the target on
@@ -121,8 +137,7 @@ with its fixture and `verify` stage (see `Engine/README.md`), and an adapter in 
 `Engine/Reference/turbo_worker.py` to compare real images with mflux.
 
 **Where this is going:** [docs/native-engine.md](docs/native-engine.md) is the case for the
-native engine, what is checked so far, and what comes next: the App Sandbox, and video models
-(LTX).
+native engine, what is checked so far, and what comes next: video models (LTX).
 [docs/generation-performance.md](docs/generation-performance.md) ranks the ways to make generation
 faster, with the measurements that decide each one.
 
@@ -146,7 +161,8 @@ scripts/release.sh
 ```
 
 The DMG ends up in `build/release/`. The script checks that the exported app carries
-`turbo-engine`, signed with the Developer ID: without it the app cannot generate.
+`turbo-engine`, signed with the Developer ID and allowed to inherit the app's sandbox: without it
+the app cannot generate.
 
 ## Troubleshooting
 

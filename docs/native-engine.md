@@ -62,9 +62,20 @@ first half of Phase 3: `uv`, `setup_backend.sh`, the install UI and the Python s
 the build fails without the engine, and the app went from 77 to 41 MB. `turbo_worker.py` moved to
 `Engine/Reference/`, outside the app, as the reference real images are compared with (the check
 that found the flat VAE norms), next to the fixture generators; the mflux revision both run with
-is in `Engine/Fixtures/requirements.txt`. `ShellEnvironment`'s shell probe stays for now: it
-reads `HF_HOME` and `HF_TOKEN` for the model cache and the downloads, so it goes with the App
-Sandbox, which, with the Mac App Store question, is what remains of Phase 3.
+is in `Engine/Fixtures/requirements.txt`.
+
+The second half followed the same day: no Mac App Store, and the App Sandbox on, with the shared
+hub cache. The app reaches `~/.cache/huggingface` through a temporary-exception entitlement for
+that path, which the App Store would refuse but which needs no prompt and works where the folder
+does not exist yet; the engine is signed to inherit the sandbox, so it reads the models there
+too. Local model folders are kept with security-scoped bookmarks, opened before the engine
+starts. `ShellEnvironment`'s shell probe is gone: an `HF_HOME` elsewhere is no longer followed,
+and the token comes from the file the Hugging Face CLI saves. A container migration manifest
+moved the history and the settings into the container on the first sandboxed launch (checked:
+the 42 images and the selected model came along, and the engine loaded Ming-Image from the
+shared cache with no sandbox denial). Builds are signed with the Developer ID certificate, local
+ones too, so the container keeps recognizing the app from one build to the next. Phase 3 is
+done.
 
 ## The question
 

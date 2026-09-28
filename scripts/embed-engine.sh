@@ -2,7 +2,9 @@
 # Run by the app's "Embed turbo-engine" build phase: builds the engine (scripts/build-engine.sh)
 # and puts it in the app bundle, signed like the app. The binary goes to Contents/MacOS, where the
 # app looks for an auxiliary executable, and its resource bundles (mlx-swift's Metal library) to
-# Contents/Resources, where MLX finds them from inside an app.
+# Contents/Resources, where MLX finds them from inside an app. The engine is signed with
+# Engine/turbo-engine.entitlements, which make it inherit the app's sandbox: a sandboxed app
+# can only start a helper that does.
 #
 # The app cannot generate images without it, so a failure here fails the build. The engine is
 # rebuilt only when Engine/ changed since the copy in the bundle; the first build takes a few
@@ -13,8 +15,9 @@ cd "$SRCROOT"
 BIN_DIR="$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH"
 RES_DIR="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
 ENGINE="$BIN_DIR/turbo-engine"
+ENTITLEMENTS="$SRCROOT/Engine/turbo-engine.entitlements"
 
-if [[ -x "$ENGINE" && -z "$(find Engine/Package.swift Engine/Sources -newer "$ENGINE" | head -1)" ]]; then
+if [[ -x "$ENGINE" && -z "$(find Engine/Package.swift Engine/Sources "$ENTITLEMENTS" -newer "$ENGINE" | head -1)" ]]; then
   print "turbo-engine is up to date in $WRAPPER_NAME"
   exit 0
 fi
@@ -36,7 +39,9 @@ if [[ "${CODE_SIGNING_ALLOWED:-NO}" == YES && -n "${EXPANDED_CODE_SIGN_IDENTITY:
   [[ "${ENABLE_HARDENED_RUNTIME:-NO}" == YES ]] && flags+=(--options runtime)
   [[ -n "${OTHER_CODE_SIGN_FLAGS:-}" ]] && flags+=(${=OTHER_CODE_SIGN_FLAGS})
   for item in "$RES_DIR"/*.bundle(N) "$ENGINE"; do
-    codesign "${flags[@]}" "$item" || {
+    extra=()
+    [[ "$item" == "$ENGINE" ]] && extra=(--entitlements "$ENTITLEMENTS")
+    codesign "${flags[@]}" "${extra[@]}" "$item" || {
       print "error: could not sign ${item:t}"
       rm -f "$ENGINE"
       exit 1

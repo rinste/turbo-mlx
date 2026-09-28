@@ -41,6 +41,11 @@ codesign --verify --deep --strict --verbose=2 "$APP"
   exit 1
 }
 codesign -dvv "$APP/Contents/MacOS/turbo-engine" 2>&1 | grep -E "Authority=Developer ID|flags"
+# The app is sandboxed: it can start the engine only if the engine inherits its sandbox.
+codesign -d --entitlements - "$APP/Contents/MacOS/turbo-engine" 2>/dev/null | grep -q "com.apple.security.inherit" || {
+  print -u2 "turbo-engine is not signed with Engine/turbo-engine.entitlements: the sandboxed app could not start it"
+  exit 1
+}
 
 step "Notarizing (profile $PROFILE)"
 ditto -c -k --keepParent "$APP" "$OUT/notarize.zip"

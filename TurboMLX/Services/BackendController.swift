@@ -19,8 +19,9 @@ final class BackendController {
         var errorDescription: String? { "The image engine is not running." }
     }
 
-    /// App data (history). TURBO_MLX_HOME points it elsewhere, e.g. to try the first-run experience
-    /// without touching the real installation.
+    /// App data (history), in the app's sandbox container. TURBO_MLX_HOME points it elsewhere in the
+    /// container (`~` is the container's home), e.g. to try the first-run experience without
+    /// touching the real history.
     static let supportDirectory: URL = {
         if let custom = ProcessInfo.processInfo.environment["TURBO_MLX_HOME"], !custom.isEmpty {
             return URL(fileURLWithPath: (custom as NSString).expandingTildeInPath, isDirectory: true)
@@ -28,22 +29,17 @@ final class BackendController {
         return URL.applicationSupportDirectory.appending(path: "TurboMLX", directoryHint: .isDirectory)
     }()
 
-    /// The engine: `TURBO_ENGINE` (a development build) or the one in the app bundle, put there by
-    /// the "Embed turbo-engine" build phase (`scripts/embed-engine.sh`).
+    /// The engine in the app bundle, put there by the "Embed turbo-engine" build phase
+    /// (`scripts/embed-engine.sh`): the only one a sandboxed app may start.
     static var engineURL: URL? {
-        var candidates: [URL] = []
-        if let custom = ProcessInfo.processInfo.environment["TURBO_ENGINE"], !custom.isEmpty {
-            candidates.append(URL(fileURLWithPath: (custom as NSString).expandingTildeInPath))
-        }
-        if let bundled = Bundle.main.url(forAuxiliaryExecutable: "turbo-engine") { candidates.append(bundled) }
-        return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }
+        Bundle.main.url(forAuxiliaryExecutable: "turbo-engine")
+            .flatMap { FileManager.default.isExecutableFile(atPath: $0.path) ? $0 : nil }
     }
 
     private(set) var status = Status.checking
     private(set) var info: BackendInfo?
     /// Model path currently held in memory by the engine.
     private(set) var loadedModelPath: String?
-    private(set) var environment = ProcessInfo.processInfo.environment
     let log = LogBuffer()
 
     /// Job events (phases, progress, results) are forwarded here.
@@ -56,13 +52,6 @@ final class BackendController {
     private var worker: LineProcess?
 
     var isRunning: Bool { worker != nil }
-
-    /// Resolves the login shell's environment (`HF_HOME`, `HF_TOKEN`), which the model cache and
-    /// the downloads follow. The engine is started by `ensureWorker()`.
-    func prepare() async {
-        environment = await ShellEnvironment.resolve()
-        status = .stopped
-    }
 
     /// Starts the engine unless it is running.
     func ensureWorker() {
@@ -77,7 +66,7 @@ final class BackendController {
             status = .failed("The image engine is missing from this copy of Turbo MLX. Install the app again.")
             return
         }
-        let process = LineProcess(executable: engine, arguments: ["serve"], environment: environment)
+        let process = LineProcess(executable: engine, arguments: ["serve"], environment: ProcessInfo.processInfo.environment)
         status = .starting
         info = nil
         loadedModelPath = nil
