@@ -7,8 +7,9 @@
 # can only start a helper that does.
 #
 # The app cannot generate images without it, so a failure here fails the build. The engine is
-# rebuilt only when Engine/ changed since the copy in the bundle; the first build takes a few
-# minutes (MLX's C++ core and Metal kernels), the next ones seconds.
+# rebuilt only when Engine/ (its dependencies included) or build-engine.sh changed since the copy
+# in the bundle; the first build takes a few minutes (MLX's C++ core and Metal kernels), the next
+# ones seconds.
 set -uo pipefail
 
 cd "$SRCROOT"
@@ -17,7 +18,10 @@ RES_DIR="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
 ENGINE="$BIN_DIR/turbo-engine"
 ENTITLEMENTS="$SRCROOT/Engine/turbo-engine.entitlements"
 
-if [[ -x "$ENGINE" && -z "$(find Engine/Package.swift Engine/Sources "$ENTITLEMENTS" -newer "$ENGINE" | head -1)" ]]; then
+# Its sources, the resolved dependencies (a new mlx-swift must not ship an old engine) and how it
+# is built.
+if [[ -x "$ENGINE" && -z "$(find Engine/Package.swift Engine/Package.resolved Engine/Sources "$ENTITLEMENTS" \
+      scripts/build-engine.sh -newer "$ENGINE" | head -1)" ]]; then
   print "turbo-engine is up to date in $WRAPPER_NAME"
   exit 0
 fi
