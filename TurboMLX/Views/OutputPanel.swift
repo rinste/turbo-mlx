@@ -14,7 +14,7 @@ struct OutputPanel: View {
         VStack(spacing: 0) {
             stage
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if let item = app.displayedItem, !app.showsLiveJob {
+            if let item = app.displayedItem {
                 Divider()
                 ItemInfoBar(item: item)
             }
@@ -39,7 +39,7 @@ struct OutputPanel: View {
             }
         }
         .onKeyPress(.space) {
-            guard let item = app.displayedItem, !app.showsLiveJob else { return .ignored }
+            guard let item = app.displayedItem else { return .ignored }
             quickLookURL = quickLookURL == nil ? app.url(for: item) : nil
             return .handled
         }
@@ -53,8 +53,8 @@ struct OutputPanel: View {
 
     @ViewBuilder
     private var stage: some View {
-        if app.showsLiveJob, let job = app.activeJob {
-            LiveJobView(job: job)
+        if let job = app.displayedJob {
+            JobView(job: job)
         } else if app.showsDraft {
             DraftView()
         } else if let item = app.displayedItem, item.kind == .video {
@@ -82,7 +82,7 @@ struct OutputPanel: View {
             BackendStatusButton()
         }
         ToolbarItemGroup(placement: .primaryAction) {
-            let item = app.showsLiveJob ? nil : app.displayedItem
+            let item = app.displayedItem
             Button {
                 if let item { NSPasteboard.general.copyItem(item, at: app.url(for: item)) }
             } label: {
@@ -573,26 +573,36 @@ private struct DraftView: View {
     }
 }
 
-private struct LiveJobView: View {
+/// A job running, with its progress, or waiting in the queue, with when it starts.
+private struct JobView: View {
     @Environment(AppModel.self) private var app
     let job: GenerationJob
 
     var body: some View {
+        let isQueued = job.phase == .queued
         VStack(spacing: 22) {
             GenerationFrame(model: job.model, size: job.request.size, frames: job.request.frames, fps: job.request.fps,
-                            isPulsing: !job.isCancelling)
+                            isPulsing: !isQueued && !job.isCancelling)
 
             VStack(spacing: 10) {
                 HStack {
                     Text(job.statusLabel).font(.headline)
                     Spacer()
-                    TimeLeft(job: job)
-                        .foregroundStyle(.secondary)
+                    Group {
+                        if isQueued {
+                            Text(turn)
+                        } else {
+                            TimeLeft(job: job)
+                        }
+                    }
+                    .foregroundStyle(.secondary)
                 }
-                if let fraction = job.fraction {
-                    ProgressView(value: fraction)
-                } else {
-                    ProgressView().progressViewStyle(.linear)
+                if !isQueued {
+                    if let fraction = job.fraction {
+                        ProgressView(value: fraction)
+                    } else {
+                        ProgressView().progressViewStyle(.linear)
+                    }
                 }
                 HStack(alignment: .top) {
                     Text(job.request.prompt)
@@ -600,7 +610,7 @@ private struct LiveJobView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                     Spacer(minLength: 16)
-                    Button(job.isCancelling ? "Force Stop" : "Stop", role: .cancel) {
+                    Button(isQueued ? "Remove from Queue" : job.isCancelling ? "Force Stop" : "Stop", role: .cancel) {
                         app.cancel(job)
                     }
                 }
@@ -614,5 +624,14 @@ private struct LiveJobView: View {
         }
         .padding(28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// A queued job's turn, as the Generate button counts it.
+    private var turn: String {
+        switch app.pendingJobs.firstIndex(where: { $0 === job }) ?? 0 {
+        case 0: "Starts when the engine is ready"
+        case 1: "Starts when the one in progress is done"
+        case let ahead: "Starts after the \(ahead) ahead of it"
+        }
     }
 }

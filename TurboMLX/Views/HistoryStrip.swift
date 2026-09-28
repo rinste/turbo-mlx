@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Film strip of past images and clips in the order they were made, the newest on the right, then
-/// the running and queued jobs and a "+" that sets up the next one. A click shows an item and puts
-/// its settings on the left.
+/// the running and queued jobs and a "+" that sets up the next one. A click shows an item or a job
+/// and puts its settings on the left.
 struct HistoryStrip: View {
     @Environment(AppModel.self) private var app
     @State private var confirmsClear = false
@@ -51,7 +51,8 @@ struct HistoryStrip: View {
                         }
                         // The running job next to the images it will join, then the queue.
                         ForEach(app.pendingJobs) { job in
-                            JobThumbnail(job: job, height: thumbnailHeight)
+                            JobThumbnail(job: job, height: thumbnailHeight, isSelected: app.isSelected(job))
+                                .id(job.id)
                         }
                         if app.history.items.isEmpty && app.pendingJobs.isEmpty {
                             Text("Generated images will appear here.")
@@ -67,7 +68,7 @@ struct HistoryStrip: View {
                 }
                 .scrollIndicators(.automatic)
                 .scrollPosition($position)
-                .onChange(of: app.displayedItem?.id) { _, id in
+                .onChange(of: app.displayedItem?.id ?? app.displayedJob?.id) { _, id in
                     guard let id else { return }
                     withAnimation(.snappy) { proxy.scrollTo(id, anchor: .center) }
                 }
@@ -171,42 +172,52 @@ private struct HistoryThumbnail: View {
     }
 }
 
+/// A button, as the "+" is: a tap gesture would miss the click that brings the window forward.
 private struct JobThumbnail: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.undoManager) private var undoManager
     let job: GenerationJob
     let height: CGFloat
+    let isSelected: Bool
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 6)
-            .fill(.quaternary.opacity(0.6))
-            .overlay {
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(.tertiary, style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
-            }
-            .overlay {
-                VStack(spacing: 6) {
-                    if job.phase == .queued {
-                        Image(systemName: "clock")
-                            .foregroundStyle(.secondary)
-                        Text("Queued").font(.caption2).foregroundStyle(.secondary)
-                    } else if let fraction = job.fraction {
-                        ProgressView(value: fraction)
-                            .progressViewStyle(.circular)
-                            .controlSize(.small)
-                        Text("\(job.step)/\(job.totalSteps)")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.secondary)
+        Button { app.select(job, undoManager: undoManager) } label: {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(.quaternary.opacity(0.6))
+                .overlay {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 6).strokeBorder(Color.active, lineWidth: 3)
                     } else {
-                        ProgressView().controlSize(.small)
+                        RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(.tertiary, style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
                     }
                 }
-            }
-            .frame(width: thumbnailWidth(for: job.request.size, height: height), height: height)
-            .contentShape(Rectangle())
-            .onTapGesture { app.viewer = .live }
-            .contextMenu {
-                Button(job.phase == .queued ? "Remove from Queue" : "Stop") { app.cancel(job) }
-            }
-            .help(job.request.prompt)
+                .overlay {
+                    VStack(spacing: 6) {
+                        if job.phase == .queued {
+                            Image(systemName: "clock")
+                                .foregroundStyle(.secondary)
+                            Text("Queued").font(.caption2).foregroundStyle(.secondary)
+                        } else if let fraction = job.fraction {
+                            ProgressView(value: fraction)
+                                .progressViewStyle(.circular)
+                                .controlSize(.small)
+                            Text("\(job.step)/\(job.totalSteps)")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ProgressView().controlSize(.small)
+                        }
+                    }
+                }
+                .frame(width: thumbnailWidth(for: job.request.size, height: height), height: height)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button(job.phase == .queued ? "Remove from Queue" : "Stop") { app.cancel(job) }
+        }
+        .help(job.request.prompt)
+        .accessibilityLabel(job.statusLabel)
     }
 }

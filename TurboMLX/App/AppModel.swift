@@ -12,11 +12,12 @@ struct AppAlert: Identifiable {
 /// App-wide state: model catalog, generation settings, the job queue and the history.
 @Observable
 final class AppModel {
-    /// What the image viewer shows: the job in progress / latest result, a picked history item, or
-    /// the frame of the next generation (the "+" after the history).
+    /// What the image viewer shows: the job in progress / latest result, a picked history item, a
+    /// picked job (running or queued), or the frame of the next generation (the "+" after the history).
     enum ViewerSelection: Hashable {
         case live
         case item(HistoryItem.ID)
+        case job(GenerationJob.ID)
         case draft
     }
 
@@ -543,8 +544,9 @@ final class AppModel {
         if let width = event.width, let height = event.height {
             request.size = PixelSize(width: width, height: height)
         }
+        // The job's ID, so that a job being looked at stays in view as its image or clip.
         history.add(HistoryItem(
-            id: UUID(),
+            id: job.id,
             createdAt: Date(),
             fileName: job.outputURL.lastPathComponent,
             media: job.model.family.media,
@@ -556,6 +558,7 @@ final class AppModel {
             peakMemory: event.peakMemory,
             timings: event.timings
         ))
+        if viewer == .job(job.id) { viewer = .item(job.id) }
         activeJob = nil
         if queue.isEmpty, !NSApp.isActive {
             NSApp.requestUserAttention(.informationalRequest)
@@ -571,25 +574,38 @@ final class AppModel {
         alert = AppAlert(title: "The engine stopped", message: message, offersLog: true)
     }
 
-    /// The Dock badge counts what is left, and the Mac stays awake until it is done.
+    /// The Dock badge counts what is left, and the Mac stays awake until it is done. A job being
+    /// looked at that was stopped, removed or dropped gives way to the live view.
     private func queueChanged() {
         let count = pendingJobs.count
         NSApp?.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
         awake.isOn = count > 0
+        if case .job(let id) = viewer, job(withID: id) == nil { viewer = .live }
+    }
+
+    private func job(withID id: GenerationJob.ID) -> GenerationJob? {
+        pendingJobs.first { $0.id == id }
     }
 
     // MARK: History
 
+    /// The history item the viewer shows, if it shows one.
     var displayedItem: HistoryItem? {
         switch viewer {
         case .item(let id): history.item(withID: id) ?? history.items.first
-        case .live: history.items.first
-        case .draft: nil
+        case .live: activeJob == nil ? history.items.first : nil
+        case .job, .draft: nil
         }
     }
 
-    /// The live viewer shows the running job instead of the last image.
-    var showsLiveJob: Bool { viewer == .live && activeJob != nil }
+    /// The job the viewer shows instead: one picked in the strip, or the running one live.
+    var displayedJob: GenerationJob? {
+        switch viewer {
+        case .job(let id): job(withID: id)
+        case .live: activeJob
+        case .item, .draft: nil
+        }
+    }
 
     /// Shows a history item and puts its prompt, model and settings in the controls on the left.
     /// `undoManager` is the window's, where ⌘Z finds what they replaced.
@@ -600,23 +616,39 @@ final class AppModel {
                         source: .item, actionName: "Load Settings", undoManager: undoManager)
     }
 
-    func isSelected(_ item: HistoryItem) -> Bool {
-        !showsLiveJob && displayedItem?.id == item.id
+    /// The same for a job running or waiting in the queue: once done, its image or clip stays in view.
+    func select(_ job: GenerationJob, undoManager: UndoManager? = nil) {
+        let controls = controls(from: job.request, modelID: job.model.id, media: job.model.family.media)
+        replaceControls(with: controls.settings, modelID: controls.modelID, viewer: .job(job.id),
+                        source: .item, actionName: "Load Settings", undoManager: undoManager)
     }
 
-    /// Moves through the history, loading each item's settings as a click would; `offset` -1 is
-    /// newer (to the right in the strip), +1 is older.
+    func isSelected(_ item: HistoryItem) -> Bool {
+        displayedItem?.id == item.id
+    }
+
+    func isSelected(_ job: GenerationJob) -> Bool {
+        displayedJob === job
+    }
+
+    /// Moves through the strip, loading each item's or job's settings as a click would; `offset` -1
+    /// is newer (to the right), +1 is older.
     func moveSelection(by offset: Int, undoManager: UndoManager? = nil) {
-        let items = history.items
-        guard !items.isEmpty else { return }
-        // The draft sits after the newest: left of it is the newest, right of it nothing.
-        if viewer == .draft {
-            if offset > 0 { select(items[0], undoManager: undoManager) }
-            return
+        // Left to right, as in the strip: the history from the oldest, then the running and queued jobs.
+        let entries: [ViewerSelection] = history.items.reversed().map { .item($0.id) } + pendingJobs.map { .job($0.id) }
+        guard !entries.isEmpty else { return }
+        // The draft sits after them all: left of it is the last one, right of it nothing.
+        if viewer == .draft, offset < 0 { return }
+        let shown = displayedJob.map { ViewerSelection.job($0.id) } ?? displayedItem.map { .item($0.id) }
+        let current = viewer == .draft ? entries.count : shown.flatMap { entries.firstIndex(of: $0) } ?? entries.count
+        switch entries[min(max(current - offset, 0), entries.count - 1)] {
+        case .item(let id):
+            if let item = history.item(withID: id) { select(item, undoManager: undoManager) }
+        case .job(let id):
+            if let job = job(withID: id) { select(job, undoManager: undoManager) }
+        case .live, .draft:
+            break
         }
-        let current = displayedItem.flatMap { item in items.firstIndex { $0.id == item.id } } ?? 0
-        let next = min(max(current + offset, 0), items.count - 1)
-        select(items[next], undoManager: undoManager)
     }
 
     func delete(_ items: [HistoryItem]) {
@@ -695,7 +727,11 @@ final class AppModel {
         source newSource: ControlsSource? = nil, actionName: String, undoManager: UndoManager?
     ) {
         let previous = (settings: settings, modelID: selectedModelID, viewer: viewer, source: controlsSource)
-        let shown = newViewer ?? viewer
+        var shown = newViewer ?? viewer
+        // A job brought back by ⌘Z may have finished since (its image has its ID) or been stopped.
+        if case .job(let id) = shown, job(withID: id) == nil {
+            shown = history.item(withID: id) == nil ? .live : .item(id)
+        }
         let source = newSource ?? controlsSource
         guard new != previous.settings || modelID != previous.modelID || shown != previous.viewer || source != previous.source
         else { return }

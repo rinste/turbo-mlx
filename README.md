@@ -28,11 +28,13 @@ app downloads it, and that is all the setup there is.
   history: the oldest on the left and the newest on the right, then the queue and a *+*, the draft
   of the next generation: its settings on the left (the last generation's, the first time), its
   frame on the right, for Generate to start. What is changed there stays, even across launches,
-  while you look through the history. A click on an image or clip (or ← →, ⌘[ ⌘]) shows it and
-  puts its prompt, in its blocks, its model and its settings in the left column, with a random
-  seed; ⌘Z brings back what was there. Zoom: pinch, the mouse wheel, double-click, ⌘-scroll, the − % +
-  controls or the View menu (⌘+, ⌘-, ⌘0 actual size, ⌘9 fit); two-finger scroll (⌥-wheel with a
-  mouse) or drag to move around. Quick Look (space), drag and drop, copy.
+  while you look through the history. A click on an image or clip, or on a generation running or
+  waiting in the queue (or ← →, ⌘[ ⌘]), shows it and puts its prompt, in its blocks, its model and
+  its settings in the left column, with a random seed; ⌘Z brings back what was there. A queued one
+  says when it starts, and a running one stays in view as its result once done. Zoom: pinch, the
+  mouse wheel, double-click, ⌘-scroll, the − % + controls or the View menu (⌘+, ⌘-, ⌘0 actual
+  size, ⌘9 fit); two-finger scroll (⌥-wheel with a mouse) or drag to move around. Quick Look
+  (space), drag and drop, copy.
 
 ## Install
 
