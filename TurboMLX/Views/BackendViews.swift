@@ -47,6 +47,40 @@ struct ModelDownloadCard: View {
     }
 }
 
+/// Asks before moving a model's download to the Trash, saying how much goes and what else loses it.
+private struct TrashModelConfirmation: ViewModifier {
+    @Environment(AppModel.self) private var app
+    @Binding var model: ModelDescriptor?
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            model.map { "Move \($0.name) to the Trash?" } ?? "",
+            isPresented: Binding(get: { model != nil }, set: { if !$0 { model = nil } }),
+            presenting: model
+        ) { model in
+            Button("Move to Trash", role: .destructive) { app.trashDownload(of: model) }
+        } message: { model in
+            Text(message(for: model))
+        }
+    }
+
+    private func message(for model: ModelDescriptor) -> String {
+        guard let files = app.downloadFiles(of: model) else { return "" }
+        var text = "Its \(Format.bytes(files.bytes)) go to the Trash: empty it to free the space."
+        if files.repos.count > 1, let companion = model.family.companion {
+            text += " \(companion.name), the text encoder downloaded with it, goes too: no other downloaded model uses it."
+        }
+        return text + " The model stays in the list, to be downloaded again. Other apps that use the Hugging Face cache, such as mflux, lose it too."
+    }
+}
+
+extension View {
+    /// Shows the confirmation while `model` is set.
+    func confirmsTrashing(_ model: Binding<ModelDescriptor?>) -> some View {
+        modifier(TrashModelConfirmation(model: model))
+    }
+}
+
 /// Toolbar indicator with the engine's state; the popover has details and controls.
 struct BackendStatusButton: View {
     @Environment(AppModel.self) private var app

@@ -62,6 +62,7 @@ private struct EngineSettings: View {
 
 private struct ModelsSettings: View {
     @Environment(AppModel.self) private var app
+    @State private var modelToTrash: ModelDescriptor?
 
     var body: some View {
         Form {
@@ -76,7 +77,18 @@ private struct ModelsSettings: View {
                             } else if let location = app.installed[model.id] {
                                 Button("Show") { NSWorkspace.shared.activateFileViewerSelecting([location]) }
                             } else if model.repo != nil {
+                                // Also what resumes a download stopped halfway.
                                 Button("Download") { app.download(model) }
+                            }
+                            if app.downloadFiles(of: model) != nil {
+                                Button {
+                                    modelToTrash = model
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.borderless)
+                                .disabled(!app.canTrash(model))
+                                .help("Move the downloaded files to the Trash")
                             }
                             if !model.isBuiltIn {
                                 Button {
@@ -99,10 +111,17 @@ private struct ModelsSettings: View {
             }
         }
         .formStyle(.grouped)
+        .confirmsTrashing($modelToTrash)
     }
 
     private func subtitle(for model: ModelDescriptor) -> String {
-        let state = app.isInstalled(model) ? "Downloaded" : "Not downloaded"
+        let state = if app.isInstalled(model) {
+            "Downloaded"
+        } else if let files = app.downloadFiles(of: model), !app.downloads.isDownloading(model) {
+            "Partly downloaded (\(Format.bytes(files.bytes)))"
+        } else {
+            "Not downloaded"
+        }
         let size = model.sizeBytes.map { " · \(Format.bytes($0))" } ?? ""
         return "\(state)\(size) · \(model.id)"
     }
@@ -115,12 +134,12 @@ private struct HistorySettings: View {
     var body: some View {
         Form {
             Section {
-                LabeledContent("Images", value: "\(app.history.items.count)")
+                LabeledContent("Images and clips", value: "\(app.history.items.count)")
                 LabeledContent("Folder") {
                     Button("Show in Finder") { NSWorkspace.shared.open(HistoryStore.directory) }
                 }
             } footer: {
-                Text("Each image is a PNG with its generation metadata embedded; the history index is history.json in the same folder.")
+                Text("Each image is a PNG with its generation metadata embedded, each clip an MP4 next to a PNG of its first frame; the history index is history.json in the same folder.")
                     .foregroundStyle(.secondary)
             }
             Section {
@@ -130,34 +149,84 @@ private struct HistorySettings: View {
         }
         .formStyle(.grouped)
         .confirmationDialog("Clear the history?", isPresented: $confirmsClear) {
-            Button("Move \(app.history.items.count) Images to the Trash", role: .destructive) { app.clearHistory() }
+            Button("Move \(app.history.items.count) Items to the Trash", role: .destructive) { app.clearHistory() }
         } message: {
-            Text("The images go to the Trash, so you can still recover them from Finder.")
+            Text("The images and clips go to the Trash, so you can still recover them from Finder.")
         }
     }
 }
 
 private struct AboutSettings: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        @Bindable var updates = app.updates
         Form {
             Section {
-                LabeledContent("Turbo MLX", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
-                Text("Generates images on your Mac’s GPU with MLX. Models download from Hugging Face and stay on your computer: prompts and images never leave your Mac.")
+                LabeledContent("Turbo MLX", value: UpdateChecker.currentVersion)
+                Text("Generates images, and videos with sound, on your Mac’s GPU with MLX. Models download from Hugging Face and stay on your computer: prompts, images and videos never leave your Mac.")
+                    .foregroundStyle(.secondary)
+            }
+            Section {
+                Toggle("Check for updates automatically", isOn: $updates.checksAutomatically)
+                HStack {
+                    if let newer = updates.newer {
+                        Text("Version \(newer.version) is available.")
+                        Link("Download", destination: newer.page)
+                    }
+                    Spacer()
+                    Button("Check Now") { app.checkForUpdates() }
+                }
+            } footer: {
+                Text("Once a day at launch, the app asks GitHub for the latest release, and nothing else.")
                     .foregroundStyle(.secondary)
             }
             Section("Components") {
                 LabeledContent("MLX Swift", value: "MIT · Apple")
                 LabeledContent("swift-transformers", value: "Apache 2.0 · Hugging Face")
-                LabeledContent("mflux", value: "MIT · mflux-community · the models’ reference implementation")
+                LabeledContent("mflux, ltx-2-mlx", value: "MIT · the references the engine follows")
+                Button("Acknowledgements…") { openWindow(id: WindowID.acknowledgements) }
             }
-            Section("Models") {
+            Section {
                 ForEach(app.models.filter(\.isBuiltIn)) { model in
-                    LabeledContent(model.name, value: model.license ?? "—")
+                    LabeledContent(model.name) { license(model.license ?? "—", model.webURL) }
                 }
+                if let companion = ModelFamily.ltx2.companion {
+                    LabeledContent("\(companion.name), LTX-2.3’s text encoder") {
+                        license(companion.license, URL(string: "https://ai.google.dev/gemma/terms"))
+                    }
+                }
+            } header: {
+                Text("Models")
+            } footer: {
+                Text("Each model comes from Hugging Face under its own license, whose page the link opens.")
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+    }
+
+    @ViewBuilder
+    private func license(_ name: String, _ url: URL?) -> some View {
+        if let url { Link(name, destination: url) } else { Text(name) }
+    }
+}
+
+/// The licenses of the code in the app, in a window of its own (Settings → About):
+/// Resources/Acknowledgements.txt, written by scripts/make-acknowledgements.swift.
+struct AcknowledgementsView: View {
+    private let text = Bundle.main.url(forResource: "Acknowledgements", withExtension: "txt")
+        .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+        ?? "The acknowledgements are missing from this copy of Turbo MLX."
+
+    var body: some View {
+        ScrollView {
+            Text(text)
+                .font(.system(size: 11, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(20)
+        }
     }
 }

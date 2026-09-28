@@ -53,6 +53,9 @@ started without it. Checked on the M1 Max on 28 September:
   Qwen-Image, 27 dB for Klein. Native against mflux: Z-Image 22.6 s against 24.4 s, Qwen-Image
   121 s against 121 s, Ming 43.6 s against 37.8 s, Klein 15.0 s against 10.7 s; peaks within
   1.5 GB of mflux's, lower for Ming and Qwen-Image.
+- **Z-Image Turbo 4-bit**, the catalog's model for 16 GB Macs, checked later that day (at the
+  commit the catalog now names): the same prompt and seed at 1024 × 1024 with Save memory give the
+  same image as mflux, PSNR 30.1 dB, in 92 s against 106 s, peaking at 8.2 GB against 7.8 GB.
 - **Save memory at 1024 × 1024**, native: Ming-Image peaks at 12.5 GB (151 s), Qwen-Image at
   16.4 GB (589 s), against the 14.7 and 21.3 GB measured with mflux; no seams between the tiles.
 

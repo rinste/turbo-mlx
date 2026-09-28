@@ -7,6 +7,16 @@ struct AppAlert: Identifiable {
     var title: String
     var message: String
     var offersLog = false
+    /// A button that opens a web page, such as a new release's.
+    var link: (title: String, url: URL)?
+
+    static func update(_ release: UpdateChecker.Release) -> AppAlert {
+        AppAlert(
+            title: "Turbo MLX \(release.version) is available",
+            message: "You have version \(UpdateChecker.currentVersion). Download the new one from its release page and put it in Applications in place of this one: images, settings and models stay.",
+            link: ("Download", release.page)
+        )
+    }
 }
 
 /// App-wide state: model catalog, generation settings, the job queue and the history.
@@ -40,9 +50,13 @@ final class AppModel {
     let backend = BackendController()
     let downloads = DownloadCenter()
     let history = HistoryStore()
+    let updates = UpdateChecker()
 
     private(set) var models: [ModelDescriptor]
     private(set) var installed: [String: URL] = [:]
+    /// Bytes each Hugging Face repository of the list (companions too) takes in the cache, partial
+    /// downloads included: what moving a model to the Trash frees. Measured with `installed`.
+    private(set) var bytesOnDisk: [String: Int64] = [:]
     let locator = ModelLocator()
 
     var selectedModelID: String {
@@ -106,6 +120,8 @@ final class AppModel {
     /// Model to generate with as soon as its download completes ("Download and Generate").
     private(set) var generateAfterDownload: String?
     @ObservationIgnored private var started = false
+    /// A queue left running when the user walks away finishes instead of waiting for the Mac to wake.
+    @ObservationIgnored private let awake = KeepAwake(reason: "Generating images and videos")
 
     private enum Keys {
         static let settings = "generationSettings"
@@ -159,6 +175,7 @@ final class AppModel {
         FolderAccess.restore()
         refreshInstalled()
         backend.ensureWorker()
+        checkForUpdatesInBackground()
     }
 
     func shutdown() {
@@ -193,21 +210,20 @@ final class AppModel {
 
     func refreshInstalled() {
         var found: [String: URL] = [:]
+        var bytes: [String: Int64] = [:]
         for model in models {
             if let url = locator.installedLocation(of: model) { found[model.id] = url }
+            for repo in [model.repo, model.family.companion?.repo].compactMap(\.self) where bytes[repo] == nil {
+                bytes[repo] = locator.bytesOnDisk(of: repo)
+            }
         }
         installed = found
+        bytesOnDisk = bytes
     }
 
+    /// Downloads the model (checking the disk has room for what is still missing first).
     func download(_ model: ModelDescriptor) {
-        if let size = model.sizeBytes, let free = freeDiskSpace(), free < size + (2 << 30) {
-            alert = AppAlert(
-                title: "Not enough disk space",
-                message: "\(model.name) needs \(Format.bytes(size)), but only \(Format.bytes(free)) are free. Free up some space and try again."
-            )
-            return
-        }
-        downloads.start(model, hubCache: locator.hubCache)
+        downloads.start(model, locator: locator)
     }
 
     /// Downloads the selected model, then generates with the current prompt.
@@ -221,6 +237,8 @@ final class AppModel {
     func cancelDownload(_ model: ModelDescriptor) {
         if generateAfterDownload == model.id { generateAfterDownload = nil }
         downloads.cancel(model)
+        // What arrived stays, to resume from or to move to the Trash.
+        refreshInstalled()
     }
 
     private func downloadFinished(_ model: ModelDescriptor) {
@@ -280,14 +298,73 @@ final class AppModel {
                                 lowMemory: settings.lowMemory))
     }
 
-    /// Free space on the volume that holds the Hugging Face cache (which may not exist yet).
-    private func freeDiskSpace() -> Int64? {
-        var url = locator.hubCache
-        while !FileManager.default.fileExists(atPath: url.path), url.pathComponents.count > 1 {
-            url.deleteLastPathComponent()
+    /// What moving a model to the Trash takes away: its repository in the Hugging Face cache and,
+    /// when no other downloaded model needs it, its companion. Nil for a local folder, or when
+    /// nothing of the model is on disk (a download stopped halfway counts).
+    func downloadFiles(of model: ModelDescriptor) -> (repos: [String], bytes: Int64)? {
+        guard let repo = model.repo, bytesOnDisk[repo, default: 0] > 0 else { return nil }
+        var repos = [repo]
+        if let companion = model.family.companion,
+           !models.contains(where: { $0.id != model.id && $0.family.companion?.repo == companion.repo && isInstalled($0) }) {
+            repos.append(companion.repo)
         }
-        return (try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
-            .volumeAvailableCapacityForImportantUsage
+        return (repos, repos.reduce(0) { $0 + bytesOnDisk[$1, default: 0] })
+    }
+
+    /// Not while the model is downloading or has images waiting to be generated.
+    func canTrash(_ model: ModelDescriptor) -> Bool {
+        !downloads.isDownloading(model) && !pendingJobs.contains { $0.model.id == model.id } && downloadFiles(of: model) != nil
+    }
+
+    /// Moves the model's files to the Trash, where they can still be put back until it is
+    /// emptied; the model stays in the list, to be downloaded again.
+    func trashDownload(of model: ModelDescriptor) {
+        guard canTrash(model), let files = downloadFiles(of: model) else { return }
+        if isLoaded(model) || loadingModel?.id == model.id {
+            preloadRequested = nil
+            backend.unloadModel()
+        }
+        var failure: String?
+        for repo in files.repos {
+            do {
+                try FileManager.default.trashItem(at: locator.repoFolder(repo), resultingItemURL: nil)
+            } catch {
+                failure = failure ?? error.localizedDescription
+            }
+        }
+        downloads.clearFailure(model)
+        refreshInstalled()
+        if let failure {
+            alert = AppAlert(title: "Couldn’t move \(model.name) to the Trash", message: failure)
+        }
+    }
+
+    // MARK: Updates
+
+    /// Turbo MLX → Check for Updates: says what it found, "up to date" and failures included.
+    func checkForUpdates() {
+        Task {
+            do {
+                if let release = try await updates.check() {
+                    alert = .update(release)
+                } else {
+                    alert = AppAlert(title: "Turbo MLX is up to date",
+                                     message: "Version \(UpdateChecker.currentVersion) is the latest.")
+                }
+            } catch {
+                alert = AppAlert(title: "Couldn’t check for updates", message: error.localizedDescription)
+            }
+        }
+    }
+
+    /// At launch, at most once a day: a newer version is announced once, and not over another
+    /// alert; a failed check stays quiet.
+    private func checkForUpdatesInBackground() {
+        guard updates.isDue else { return }
+        Task {
+            guard let release = try? await updates.check(), alert == nil, updates.announcesOnce(release) else { return }
+            alert = .update(release)
+        }
     }
 
     func addCustomModel(_ model: ModelDescriptor) {
@@ -390,7 +467,7 @@ final class AppModel {
     func cancel(_ job: GenerationJob) {
         if let index = queue.firstIndex(where: { $0 === job }) {
             queue.remove(at: index)
-            updateDockBadge()
+            queueChanged()
             return
         }
         guard job === activeJob else { return }
@@ -399,7 +476,7 @@ final class AppModel {
             // prompt encoding, decoding). Restart it; the model will be reloaded next time.
             activeJob = nil
             backend.restartWorker()
-            updateDockBadge()
+            queueChanged()
         } else {
             job.isCancelling = true
             try? backend.send(.cancel(jobID: job.id))
@@ -409,11 +486,11 @@ final class AppModel {
     func cancelAll() {
         queue.removeAll()
         if let activeJob { cancel(activeJob) }
-        updateDockBadge()
+        queueChanged()
     }
 
     private func pump() {
-        defer { updateDockBadge() }
+        defer { queueChanged() }
         guard activeJob == nil, let job = queue.first else { return }
         switch backend.status {
         case .ready:
@@ -494,7 +571,7 @@ final class AppModel {
                     + (dropped > 0 ? "\n\nThe \(dropped) queued images were cancelled." : ""),
                 offersLog: true
             )
-            updateDockBadge()
+            queueChanged()
         default:
             break
         }
@@ -529,13 +606,15 @@ final class AppModel {
         guard isBusy else { return }
         activeJob = nil
         queue.removeAll()
-        updateDockBadge()
+        queueChanged()
         alert = AppAlert(title: "The engine stopped", message: message, offersLog: true)
     }
 
-    private func updateDockBadge() {
+    /// The Dock badge counts what is left, and the Mac stays awake until it is done.
+    private func queueChanged() {
         let count = pendingJobs.count
         NSApp?.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
+        awake.isOn = count > 0
     }
 
     // MARK: History

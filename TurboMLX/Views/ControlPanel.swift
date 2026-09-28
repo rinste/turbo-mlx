@@ -217,6 +217,7 @@ private struct DownloadProgressView: View {
 private struct ModelMenu: View {
     @Environment(AppModel.self) private var app
     @Binding var showsAddModel: Bool
+    @State private var modelToTrash: ModelDescriptor?
 
     var body: some View {
         Menu {
@@ -228,6 +229,10 @@ private struct ModelMenu: View {
                     Button("Show in Finder") {
                         NSWorkspace.shared.activateFileViewerSelecting([location])
                     }
+                }
+                if app.downloadFiles(of: model) != nil {
+                    Button("Move to Trash…") { modelToTrash = model }
+                        .disabled(!app.canTrash(model))
                 }
                 if !model.isBuiltIn {
                     Button("Remove from List", role: .destructive) {
@@ -245,6 +250,7 @@ private struct ModelMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .textCase(nil)
+        .confirmsTrashing($modelToTrash)
     }
 }
 

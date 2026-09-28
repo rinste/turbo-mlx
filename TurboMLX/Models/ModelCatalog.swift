@@ -76,17 +76,23 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         switch self {
         // Its model.safetensors.index.json lists the five shards of the bf16 original, not the
         // two it has (mlx-lm globs the folder instead), so the shards are named here.
-        case .ltx2: Companion(repo: "mlx-community/gemma-3-12b-it-4bit", patterns: ["*.json", "*.safetensors", "tokenizer.model"],
+        case .ltx2: Companion(repo: "mlx-community/gemma-3-12b-it-4bit", revision: "86cc6a8dedbc456dd0e4af01a9d09f396f77e558",
+                              patterns: ["*.json", "*.safetensors", "tokenizer.model"],
                               requiredFiles: ["config.json", "tokenizer.json", "model-00001-of-00002.safetensors",
-                                              "model-00002-of-00002.safetensors"])
+                                              "model-00002-of-00002.safetensors"],
+                              name: "Gemma 3 12B", license: "Gemma Terms of Use")
         default: nil
         }
     }
 
     nonisolated struct Companion: Sendable, Hashable {
         let repo: String
+        /// The commit the family was checked with, as for the catalog's models.
+        let revision: String
         let patterns: [String]
         let requiredFiles: [String]
+        let name: String
+        let license: String
     }
 }
 
@@ -100,6 +106,9 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
     var detail: String
     var family: ModelFamily
     var source: Source
+    /// The commit a catalog model was checked with: its download fetches exactly that one, so a
+    /// change upstream never reaches the app untested. Nil (a model added by hand) follows `main`.
+    var revision: String?
     var sizeBytes: Int64?
     /// mflux registry entry (e.g. "flux2-klein-9b") when the name alone does not identify it.
     var variant: String?
@@ -179,6 +188,9 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
 /// at 1024 px and is the same in every conversion (te4 is merely less faithful, te6/te8 match te5
 /// with more memory), and FLUX.2 Klein 8-bit would need 24 GB like the 4-bit one. Those can still
 /// be added from "Add Model…".
+///
+/// Each entry downloads the commit it was checked with (`revision`, and the companion's): move one
+/// forward only after generating with the model at the new commit.
 enum ModelCatalog {
     static let mingID = "joeynyc/Ming-Image-0.1-Design-mflux-q8-te5"
     static let lightID = "mflux-community/z-image-turbo-mflux-q4"
@@ -194,6 +206,7 @@ enum ModelCatalog {
             detail: "Graphic design and typography with a transparent background: posters, cards, UI, logos.",
             family: .ming,
             source: .huggingFace(repo: mingID),
+            revision: "3adb8aaef779f9b3fa4621acebeba97bb4010d42",
             sizeBytes: 19_249_150_027,
             license: "MIT",
             recommendedMemoryGB: 24,
@@ -205,6 +218,7 @@ enum ModelCatalog {
             detail: "Photorealistic images with legible text, in 9 steps. The lighter 4-bit version.",
             family: .zImageTurbo,
             source: .huggingFace(repo: lightID),
+            revision: "f427e257d8e6ffa03edd4d9ac554a05809da456c",
             sizeBytes: 5_902_983_962,
             license: "Apache 2.0",
             recommendedMemoryGB: 16,
@@ -215,6 +229,7 @@ enum ModelCatalog {
             detail: "Photorealistic images with legible text, in 9 steps. The 8-bit version, closer to the original.",
             family: .zImageTurbo,
             source: .huggingFace(repo: "mflux-community/z-image-turbo-mflux-q8"),
+            revision: "4ccff28917346aa9daae49cd3c477cf5260a242c",
             sizeBytes: 10_992_100_817,
             license: "Apache 2.0",
             recommendedMemoryGB: 24,
@@ -225,6 +240,7 @@ enum ModelCatalog {
             detail: "Black Forest Labs' distilled model: an image in 4 steps, the fastest here.",
             family: .flux2Klein,
             source: .huggingFace(repo: "mflux-community/flux2-klein-4b-mflux-q4"),
+            revision: "794cd159538149ad9830848508c31f0ea7088e58",
             sizeBytes: 4_619_699_678,
             variant: "flux2-klein-4b",
             license: "Apache 2.0",
@@ -240,6 +256,7 @@ enum ModelCatalog {
             detail: "Lightricks' video model, with sound: a clip from a prompt, or from an image as its first frame. The 4-bit version.",
             family: .ltx2,
             source: .huggingFace(repo: "dgrauet/ltx-2.3-mlx-q4"),
+            revision: "56a5866d638ecfe37c54d348e88938235185c2d4",
             sizeBytes: 20_479_335_378 + 8_068_018_787,
             license: "LTX-2 Community",
             recommendedMemoryGB: 32,
@@ -250,6 +267,7 @@ enum ModelCatalog {
             detail: "Lightricks' video model, with sound: a clip from a prompt, or from an image as its first frame. The 8-bit version, closer to the original.",
             family: .ltx2,
             source: .huggingFace(repo: "dgrauet/ltx-2.3-mlx-q8"),
+            revision: "6671a7572a530862d1d60ce393b5d93491e3f76b",
             sizeBytes: 29_754_522_642 + 8_068_018_787,
             license: "LTX-2 Community",
             recommendedMemoryGB: 64,
@@ -260,6 +278,7 @@ enum ModelCatalog {
             detail: "Alibaba's 20B model: rich scenes and long text inside the image. Thorough but slow: 20 steps.",
             family: .qwenImage,
             source: .huggingFace(repo: "mflux-community/qwen-image-2512-mflux-q4"),
+            revision: "ec35d366eeb701838007c1720c3d80f2f7fbf9f4",
             sizeBytes: 27_605_801_473,
             license: "Apache 2.0",
             recommendedMemoryGB: 32,

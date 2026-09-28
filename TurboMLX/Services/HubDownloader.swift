@@ -2,9 +2,10 @@ import Foundation
 
 /// Downloads a Hugging Face repository into the hub cache, in the layout `huggingface_hub` uses:
 /// `models--org--name/blobs/<etag>`, `snapshots/<commit>/<path>` linking into the blobs, and
-/// `refs/main`. The files it fetches are therefore the ones mflux, `ModelLocator` and other tools
-/// already see, and files they fetched are reused here. Interrupted downloads resume from the bytes
-/// on disk.
+/// `refs/main` for a branch. The files it fetches are therefore the ones mflux, `ModelLocator` and
+/// other tools already see, and files they fetched are reused here. Interrupted downloads resume
+/// from the bytes on disk, and a transfer cut off by the network (a dropped connection, a Mac waking
+/// up) is tried again on its own for a couple of minutes before the download fails.
 nonisolated final class HubDownloader: Sendable {
     nonisolated struct RemoteFile: Sendable, Hashable {
         let path: String
@@ -42,12 +43,15 @@ nonisolated final class HubDownloader: Sendable {
     }
 
     let repo: String
+    /// A branch, or the commit a catalog model was checked with.
     let revision: String
     let hubCache: URL
     private let token: String?
     private let session: URLSession
     /// Files fetched at the same time: the hub's CDN gives several connections more than one.
     private let parallelism = 4
+    /// The waits before each new attempt after a transient failure: about two minutes in all.
+    private static let retryDelays: [Duration] = [.seconds(2), .seconds(5), .seconds(10), .seconds(20), .seconds(30), .seconds(60)]
 
     init(repo: String, hubCache: URL, revision: String = "main") {
         self.repo = repo
@@ -89,12 +93,26 @@ nonisolated final class HubDownloader: Sendable {
         return values?.fileSize.map { Int64($0) == file.size } ?? false
     }
 
+    /// The bytes still to fetch: the files not cached, less what an earlier attempt left of them.
+    func bytesMissing(from listing: Listing) -> Int64 {
+        listing.files.filter { !isCached($0) }.reduce(0) { total, file in
+            let partial = blobs.appending(path: file.etag + ".incomplete")
+            let kept = Int64((try? partial.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+            // A partial file as long as the whole one is fetched again (see `fetchOnce`).
+            return total + file.size - (kept < file.size ? kept : 0)
+        }
+    }
+
     // MARK: Listing
 
     /// The repository's files matching `patterns` (fnmatch style, as huggingface_hub reads them:
     /// `*` also matches `/`), and the commit they belong to.
     func list(matching patterns: [String]) async throws -> Listing {
-        let info = try await json(from: "https://huggingface.co/api/models/\(repo)?revision=\(revision)")
+        try await retrying { try await self.listOnce(matching: patterns) }
+    }
+
+    private func listOnce(matching patterns: [String]) async throws -> Listing {
+        let info = try await json(from: "https://huggingface.co/api/models/\(repo)/revision/\(revision)")
         guard let commit = info["sha"] as? String else { throw DownloadError.malformedListing }
         let regexes = patterns.map(Self.regex(fnmatch:))
         var files: [RemoteFile] = []
@@ -178,7 +196,7 @@ nonisolated final class HubDownloader: Sendable {
                 let file = pending[next]
                 next += 1
                 running += 1
-                group.addTask { try await self.fetch(file, counter: counter) }
+                group.addTask { try await self.fetch(file, commit: listing.commit, counter: counter) }
             }
             while running > 0 {
                 try await group.next()
@@ -187,20 +205,28 @@ nonisolated final class HubDownloader: Sendable {
                     let file = pending[next]
                     next += 1
                     running += 1
-                    group.addTask { try await self.fetch(file, counter: counter) }
+                    group.addTask { try await self.fetch(file, commit: listing.commit, counter: counter) }
                 }
             }
         }
 
         for file in listing.files { try link(file, in: snapshot) }
-        let refs = repoFolder.appending(path: "refs", directoryHint: .isDirectory)
-        try fileManager.createDirectory(at: refs, withIntermediateDirectories: true)
-        try listing.commit.write(to: refs.appending(path: revision), atomically: true, encoding: .utf8)
+        // A branch points at its commit, as huggingface_hub records it; a commit needs no ref.
+        if revision != listing.commit {
+            let refs = repoFolder.appending(path: "refs", directoryHint: .isDirectory)
+            try fileManager.createDirectory(at: refs, withIntermediateDirectories: true)
+            try listing.commit.write(to: refs.appending(path: revision), atomically: true, encoding: .utf8)
+        }
         return snapshot
     }
 
-    /// Fetches one file into `blobs/<etag>`, resuming the `.incomplete` file of an earlier attempt.
-    private func fetch(_ file: RemoteFile, counter: ByteCounter) async throws {
+    /// Fetches one file of `commit` into `blobs/<etag>`, trying again after a transient failure.
+    private func fetch(_ file: RemoteFile, commit: String, counter: ByteCounter) async throws {
+        try await retrying { try await self.fetchOnce(file, commit: commit, counter: counter) }
+    }
+
+    /// One attempt, resuming the `.incomplete` file an earlier one left.
+    private func fetchOnce(_ file: RemoteFile, commit: String, counter: ByteCounter) async throws {
         let fileManager = FileManager.default
         let destination = blobs.appending(path: file.etag)
         let partial = blobs.appending(path: file.etag + ".incomplete")
@@ -215,7 +241,7 @@ nonisolated final class HubDownloader: Sendable {
         }
 
         let escaped = file.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? file.path
-        var request = request("https://huggingface.co/\(repo)/resolve/\(revision)/\(escaped)")
+        var request = request("https://huggingface.co/\(repo)/resolve/\(commit)/\(escaped)")
         if offset > 0 { request.setValue("bytes=\(offset)-", forHTTPHeaderField: "Range") }
 
         let handle = try FileHandle(forWritingTo: partial)
@@ -223,18 +249,52 @@ nonisolated final class HubDownloader: Sendable {
         try handle.seekToEnd()
         counter.add(offset)
         let download = ChunkedDownload(handle: handle, resumingFrom: offset) { counter.add($0) }
-        let response = try await download.run(request, in: session)
-        if let response, !(200..<300).contains(response.statusCode) {
-            throw DownloadError.http(response.statusCode, repo)
-        }
-        try handle.close()
-
-        let written = download.written
-        guard written == file.size else {
-            throw DownloadError.truncated(file.path, expected: file.size, got: written)
+        do {
+            let response = try await download.run(request, in: session)
+            if let response, !(200..<300).contains(response.statusCode) {
+                throw DownloadError.http(response.statusCode, repo)
+            }
+            try handle.close()
+            guard download.written == file.size else {
+                throw DownloadError.truncated(file.path, expected: file.size, got: download.written)
+            }
+        } catch {
+            // The bytes counted here are on disk, and the next attempt counts them from the file.
+            counter.add(-download.written)
+            throw error
         }
         if fileManager.fileExists(atPath: destination.path) { try fileManager.removeItem(at: destination) }
         try fileManager.moveItem(at: partial, to: destination)
+    }
+
+    /// Runs `attempt` again after a failure of the network or the server, waiting longer each
+    /// time; any other error, and cancellation, ends it at once.
+    private func retrying<T>(_ attempt: () async throws -> T) async throws -> T {
+        for delay in Self.retryDelays {
+            do {
+                return try await attempt()
+            } catch let error where Self.isTransient(error) {
+                try await Task.sleep(for: delay)
+            }
+        }
+        return try await attempt()
+    }
+
+    /// What another attempt can fix: a connection that dropped or timed out, no network for a
+    /// moment, a server that is busy or restarting. Not a missing file, a refused token or a full disk.
+    static func isTransient(_ error: any Error) -> Bool {
+        switch error {
+        case let error as URLError:
+            [.timedOut, .networkConnectionLost, .notConnectedToInternet, .cannotConnectToHost, .cannotFindHost,
+             .dnsLookupFailed, .secureConnectionFailed, .dataNotAllowed, .internationalRoamingOff, .callIsActive]
+                .contains(error.code)
+        case DownloadError.http(let status, _):
+            status == 408 || status == 429 || (500...599).contains(status)
+        case DownloadError.truncated:
+            true
+        default:
+            false
+        }
     }
 
     /// `snapshots/<commit>/<path>` → `../../blobs/<etag>`, relative like huggingface_hub's links.

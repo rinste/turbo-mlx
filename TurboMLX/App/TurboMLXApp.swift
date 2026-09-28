@@ -4,6 +4,7 @@ import SwiftUI
 enum WindowID {
     static let main = "main"
     static let log = "log"
+    static let acknowledgements = "acknowledgements"
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -62,6 +63,12 @@ struct TurboMLXApp: App {
         .defaultSize(width: 780, height: 480)
         .keyboardShortcut("l", modifiers: [.command, .option])
 
+        Window("Acknowledgements", id: WindowID.acknowledgements) {
+            AcknowledgementsView()
+                .frame(minWidth: 480, minHeight: 320)
+        }
+        .defaultSize(width: 640, height: 640)
+
         Settings {
             SettingsView()
                 .environment(delegate.model)
@@ -73,6 +80,9 @@ private struct GenerationCommands: Commands {
     let model: AppModel
 
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") { model.checkForUpdates() }
+        }
         CommandGroup(replacing: .newItem) {}
 
         CommandMenu("Generate") {

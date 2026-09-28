@@ -27,18 +27,24 @@ nonisolated struct ModelLocator: Sendable {
             let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
             return Self.isComplete(url, family: model.family) ? url : nil
         case .huggingFace(let repo):
-            return newestSnapshot(of: repo) { Self.isComplete($0, family: model.family) }
+            return snapshot(of: repo, preferring: model.revision) { Self.isComplete($0, family: model.family) }
         }
     }
 
     /// The companion checkpoint's folder (LTX-2: Gemma 3 12B), when it is complete.
     func companionLocation(of model: ModelDescriptor) -> URL? {
         guard let companion = model.family.companion else { return nil }
-        return newestSnapshot(of: companion.repo) { Self.hasFiles(companion.requiredFiles, in: $0) }
+        return snapshot(of: companion.repo, preferring: companion.revision) { Self.hasFiles(companion.requiredFiles, in: $0) }
     }
 
-    private func newestSnapshot(of repo: String, where isComplete: (URL) -> Bool) -> URL? {
+    /// The complete snapshot of the commit the catalog checked, or else the newest complete one
+    /// (downloaded before the catalog named a commit, or by another tool).
+    private func snapshot(of repo: String, preferring revision: String?, where isComplete: (URL) -> Bool) -> URL? {
         let snapshots = repoFolder(repo).appending(path: "snapshots")
+        if let revision {
+            let pinned = snapshots.appending(path: revision, directoryHint: .isDirectory)
+            if isComplete(pinned) { return pinned }
+        }
         let keys: [URLResourceKey] = [.contentModificationDateKey]
         guard let entries = try? FileManager.default.contentsOfDirectory(at: snapshots, includingPropertiesForKeys: keys)
         else { return nil }
@@ -48,6 +54,19 @@ nonisolated struct ModelLocator: Sendable {
             return lhs > rhs
         }
         return newestFirst.first(where: isComplete)
+    }
+
+    /// Bytes a repository takes in the cache (its blobs, partial downloads included), 0 when it
+    /// has none.
+    func bytesOnDisk(of repo: String) -> Int64 {
+        let blobs = repoFolder(repo).appending(path: "blobs")
+        let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .isRegularFileKey]
+        let files = (try? FileManager.default.contentsOfDirectory(at: blobs, includingPropertiesForKeys: Array(keys))) ?? []
+        return files.reduce(0) { total, file in
+            let values = try? file.resourceValues(forKeys: keys)
+            guard values?.isRegularFile == true else { return total }
+            return total + Int64(values?.totalFileAllocatedSize ?? 0)
+        }
     }
 
     /// Each name present (a `*` matches any run of characters), as a file and not a dangling link.
