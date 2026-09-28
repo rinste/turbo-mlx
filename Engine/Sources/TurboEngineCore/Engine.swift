@@ -51,6 +51,8 @@ public final class Engine {
             _ = try ensureModel(spec, jobID: nil)
         } catch {
             emitter.log("[turbo] could not load the model in advance: \(error.localizedDescription)")
+            // So that the app stops showing the load as under way.
+            emitter.emit("load_failed", ["path": spec.path, "message": error.localizedDescription])
         }
     }
 

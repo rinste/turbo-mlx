@@ -18,13 +18,15 @@ app downloads it, and that is all the setup there is.
   should take (judged from this Mac's earlier generations with the model, e.g. *Generate (~4 min ·
   ⌘↩)*). *Reset*, next to the model, goes back to the default model and settings with an empty
   prompt (⌘Z brings them back). Seeds are random by default, with every model.
-- **Right column:** the image (on a checkerboard when transparent) or the clip (its controls under
-  the picture, a click on it to play or pause), with its prompt (a long one scrolls) and metadata,
-  the running generation with its model, progress and time left (for a clip too, counted by its
-  steps' expected time), and the history: the oldest on the left and the newest on the right, then
-  the queue and a *+* that sets up a new one, the last generation's settings on the left and its
-  frame on the right, for Generate to start. A click on an image or clip (or ← →, ⌘[ ⌘]) shows it
-  and puts its prompt, in its blocks, its model and its settings in the left column, with a random
+- **Right column:** the image (on a checkerboard when transparent) or the clip (playing silently
+  while the pointer is over it; a click plays or pauses it with its sound, the controls under the
+  picture), with its prompt (a long one scrolls) and metadata, the running generation with its
+  model, progress and time left (for a clip too, counted by its steps' expected time), and the
+  history: the oldest on the left and the newest on the right, then the queue and a *+*, the draft
+  of the next generation: its settings on the left (the last generation's, the first time), its
+  frame on the right, for Generate to start. What is changed there stays, even across launches,
+  while you look through the history. A click on an image or clip (or ← →, ⌘[ ⌘]) shows it and
+  puts its prompt, in its blocks, its model and its settings in the left column, with a random
   seed; ⌘Z brings back what was there. Zoom: pinch, the mouse wheel, double-click, ⌘-scroll, the − % +
   controls or the View menu (⌘+, ⌘-, ⌘0 actual size, ⌘9 fit); two-finger scroll (⌥-wheel with a
   mouse) or drag to move around. Quick Look (space), drag and drop, copy.

@@ -48,6 +48,7 @@ final class AppModel {
     var selectedModelID: String {
         didSet {
             UserDefaults.standard.set(selectedModelID, forKey: Keys.selectedModel)
+            if controlsSource == .draft { storeDraft() }
             if selectedModelID != oldValue {
                 preloadDeclined = false
                 preloadIfUseful()
@@ -68,12 +69,32 @@ final class AppModel {
             if let data = try? JSONEncoder().encode(settings) {
                 UserDefaults.standard.set(data, forKey: Keys.settings)
             }
+            if controlsSource == .draft { storeDraft() }
             preloadIfUseful()
         }
     }
 
+    /// Where the controls' settings come from: the draft behind the "+", which keeps every change
+    /// made to it, or a history item being looked at, whose settings are only shown.
+    enum ControlsSource: Equatable {
+        case draft
+        case item
+    }
+
+    private(set) var controlsSource = ControlsSource.draft
+
+    /// The settings and model the "+" brings back, as last changed there (saved across launches).
+    @ObservationIgnored private var draft: (settings: GenerationSettings, modelID: String)?
+
+    private func storeDraft() {
+        draft = (settings, selectedModelID)
+        let defaults = UserDefaults.standard
+        if let data = try? JSONEncoder().encode(settings) { defaults.set(data, forKey: Keys.draftSettings) }
+        defaults.set(selectedModelID, forKey: Keys.draftModel)
+    }
+
     /// Model path the worker was asked to load ahead of time, so the request is not repeated.
-    @ObservationIgnored private var preloadRequested: String?
+    private var preloadRequested: String?
     /// Set when the user frees the memory: no preloading until the model changes or an image runs.
     @ObservationIgnored private var preloadDeclined = false
     @ObservationIgnored private var preloadScheduled = false
@@ -90,6 +111,8 @@ final class AppModel {
         static let settings = "generationSettings"
         static let selectedModel = "selectedModelID"
         static let customModels = "customModels"
+        static let draftSettings = "draftSettings"
+        static let draftModel = "draftModelID"
     }
 
     init() {
@@ -107,6 +130,14 @@ final class AppModel {
         } else {
             settings = Self.initialSettings(for: catalog.first { $0.id == selectedID })
         }
+        // The controls open on the draft, as the "+" left it.
+        if let data = defaults.data(forKey: Keys.draftSettings),
+           let saved = try? JSONDecoder().decode(GenerationSettings.self, from: data),
+           let modelID = defaults.string(forKey: Keys.draftModel), catalog.contains(where: { $0.id == modelID }) {
+            settings = saved
+            selectedModelID = modelID
+        }
+        draft = (settings, selectedModelID)
 
         backend.onReady = { [weak self] in
             self?.preloadRequested = nil
@@ -142,6 +173,18 @@ final class AppModel {
     }
 
     func isInstalled(_ model: ModelDescriptor) -> Bool { installed[model.id] != nil }
+
+    /// The model the engine holds in memory, if it is one of the catalog's.
+    var loadedModel: ModelDescriptor? {
+        guard let path = backend.loadedModelPath else { return nil }
+        return models.first { installed[$0.id]?.path == path }
+    }
+
+    /// The model being loaded ahead of time, until it is in memory (or the load fails).
+    var loadingModel: ModelDescriptor? {
+        guard let path = preloadRequested, path != backend.loadedModelPath else { return nil }
+        return models.first { installed[$0.id]?.path == path }
+    }
 
     func isLoaded(_ model: ModelDescriptor) -> Bool {
         guard let path = backend.loadedModelPath else { return false }
@@ -331,15 +374,14 @@ final class AppModel {
         return (model, item.request)
     }
 
-    /// The "+": the last generation's settings on the left and the frame of the next one on the
-    /// right, for Generate to start.
+    /// The "+": the draft on the left, as last changed there, and the frame of the next generation
+    /// on the right, for Generate to start. Without a draft yet, the last generation's settings.
     func startDraft(undoManager: UndoManager? = nil) {
-        guard let (model, request) = lastGeneration else {
-            viewer = .draft
-            return
+        var target = draft ?? (settings, selectedModelID)
+        if draft == nil, let (model, request) = lastGeneration {
+            target = controls(from: request, modelID: model.id, media: model.family.media)
         }
-        let controls = controls(from: request, modelID: model.id, media: model.family.media)
-        replaceControls(with: controls.settings, modelID: controls.modelID, viewer: .draft, actionName: "New",
+        replaceControls(with: target.settings, modelID: target.modelID, viewer: .draft, source: .draft, actionName: "New",
                         undoManager: undoManager)
     }
 
@@ -416,6 +458,10 @@ final class AppModel {
     }
 
     private func handle(_ event: WorkerEvent) {
+        if event.event == "load_failed" {
+            preloadRequested = nil
+            return
+        }
         guard let job = activeJob, event.id == nil || event.id == job.id.uuidString else { return }
         if let total = event.total, event.event == "progress" || event.phase == "denoising" {
             job.reportedTotal = Int(total)
@@ -511,7 +557,7 @@ final class AppModel {
         let controls = controls(from: item.request, modelID: item.modelID, media: item.kind)
         replaceControls(with: controls.settings, modelID: controls.modelID,
                         viewer: item.id == history.items.first?.id && activeJob == nil ? .live : .item(item.id),
-                        actionName: "Load Settings", undoManager: undoManager)
+                        source: .item, actionName: "Load Settings", undoManager: undoManager)
     }
 
     func isSelected(_ item: HistoryItem) -> Bool {
@@ -580,11 +626,11 @@ final class AppModel {
         return (updated, model?.id ?? selectedModelID)
     }
 
-    /// Reset: the model and settings of a first launch, with an empty prompt.
+    /// Reset: the model and settings of a first launch, with an empty prompt, as a new draft.
     func resetControls(undoManager: UndoManager? = nil) {
         let model = models.first { $0.id == ModelCatalog.defaultModelID } ?? models.first
-        replaceControls(with: Self.initialSettings(for: model), modelID: model?.id ?? selectedModelID, actionName: "Reset",
-                        undoManager: undoManager)
+        replaceControls(with: Self.initialSettings(for: model), modelID: model?.id ?? selectedModelID, viewer: .draft,
+                        source: .draft, actionName: "Reset", undoManager: undoManager)
     }
 
     /// Settings for a first launch: the model's steps and guidance, Save memory below 64 GB.
@@ -605,22 +651,26 @@ final class AppModel {
     /// does not lose a prompt being written. Without the view's undo manager (a menu command), the
     /// main window's, which exists while the app is active.
     private func replaceControls(
-        with new: GenerationSettings, modelID: String, viewer newViewer: ViewerSelection? = nil, actionName: String,
-        undoManager: UndoManager?
+        with new: GenerationSettings, modelID: String, viewer newViewer: ViewerSelection? = nil,
+        source newSource: ControlsSource? = nil, actionName: String, undoManager: UndoManager?
     ) {
-        let previous = (settings: settings, modelID: selectedModelID, viewer: viewer)
+        let previous = (settings: settings, modelID: selectedModelID, viewer: viewer, source: controlsSource)
         let shown = newViewer ?? viewer
-        guard new != previous.settings || modelID != previous.modelID || shown != previous.viewer else { return }
+        let source = newSource ?? controlsSource
+        guard new != previous.settings || modelID != previous.modelID || shown != previous.viewer || source != previous.source
+        else { return }
         if let undoManager = undoManager ?? NSApp.mainWindow?.undoManager {
             undoManager.registerUndo(withTarget: self) { model in
                 MainActor.assumeIsolated {
                     model.replaceControls(with: previous.settings, modelID: previous.modelID, viewer: previous.viewer,
-                                          actionName: actionName, undoManager: undoManager)
+                                          source: previous.source, actionName: actionName, undoManager: undoManager)
                 }
             }
             undoManager.setActionName(actionName)
         }
-        // The model first: switching family resets steps and guidance, which `new` then sets.
+        // The source first, so that a history item's settings do not land in the draft; then the
+        // model: switching family resets steps and guidance, which `new` then sets.
+        controlsSource = source
         selectedModelID = modelID
         settings = new
         viewer = shown

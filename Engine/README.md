@@ -163,4 +163,4 @@ families).
 Commands on stdin, one JSON object per line: `generate` (id, model, params), `load` (model),
 `cancel` (id), `unload`, `shutdown`. Events on stdout: `ready`, `phase`, `progress`, `done`
 (path, seed, size, seconds, peak_memory, timings per phase), `failed`, `cancelled`,
-`model_loaded`, `unloaded`. Everything else goes to stderr, which the app shows as the engine log.
+`model_loaded`, `load_failed` (a `load` that did not), `unloaded`. Everything else goes to stderr, which the app shows as the engine log.

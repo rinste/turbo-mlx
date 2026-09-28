@@ -65,7 +65,7 @@ struct BackendStatusButton: View {
             }
             .padding(.horizontal, 4)
         }
-        .help("Image engine status")
+        .help("The engine, and the model it holds in memory")
         .popover(isPresented: $showsDetails, arrowEdge: .bottom) {
             BackendDetails()
         }
@@ -73,20 +73,25 @@ struct BackendStatusButton: View {
 
     private var color: Color {
         switch app.backend.status {
-        case .ready: .green
+        case .ready: app.loadingModel == nil ? .green : .yellow
         case .starting, .checking: .yellow
         case .stopped: .gray
         case .failed: .red
         }
     }
 
+    /// Which model is in memory, by name: the one selected may be another, loading or not.
     private var title: String {
         switch app.backend.status {
-        case .checking: "Starting…"
-        case .starting: "Starting the engine…"
-        case .ready: app.backend.loadedModelPath == nil ? "Ready" : "Ready · model in memory"
-        case .stopped: "Engine stopped"
-        case .failed: "Engine error"
+        case .checking: return "Starting…"
+        case .starting: return "Starting the engine…"
+        case .ready:
+            if let job = app.activeJob { return "Generating · \(job.model.family.displayName)" }
+            if let loading = app.loadingModel { return "Loading \(loading.family.displayName)…" }
+            if let loaded = app.loadedModel { return "Ready · \(loaded.family.displayName) in memory" }
+            return app.backend.loadedModelPath == nil ? "Ready" : "Ready · model in memory"
+        case .stopped: return "Engine stopped"
+        case .failed: return "Engine error"
         }
     }
 }
@@ -98,7 +103,7 @@ struct BackendDetails: View {
     var body: some View {
         let backend = app.backend
         VStack(alignment: .leading, spacing: 12) {
-            Text("Image Engine").font(.headline)
+            Text("Engine").font(.headline)
             if let info = backend.info {
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
                     GridRow { Text("Mac").foregroundStyle(.secondary); Text("\(info.device) · \(Format.memory(info.memory))") }

@@ -22,6 +22,9 @@ struct OutputPanel: View {
             HistoryStrip()
         }
         .background(stageBackground)
+        // No band behind the toolbar: without a scroll view under it (a clip, the draft, a running
+        // job) it would otherwise draw one.
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .quickLookPreview($quickLookURL)
         .toolbar { toolbarContent }
         .focusable()
@@ -117,7 +120,8 @@ struct OutputPanel: View {
 // MARK: - Video
 
 /// A clip from the history, its controls under the picture: AVKit's own lay a dark veil over it
-/// while they show. A click on the picture plays or pauses.
+/// while they show. The pointer over the picture plays it silently, over and over; a click plays
+/// or pauses it for real, with the sound as set.
 private struct VideoStage: View {
     let url: URL
     let size: PixelSize
@@ -128,6 +132,7 @@ private struct VideoStage: View {
             PlayerSurface(player: player.player)
                 .aspectRatio(CGSize(width: size.width, height: size.height), contentMode: .fit)
                 .contentShape(Rectangle())
+                .onHover { player.preview($0) }
                 .onTapGesture { player.togglePlayback() }
             TransportBar(player: player)
                 .frame(maxWidth: 560)
@@ -143,11 +148,16 @@ private struct VideoStage: View {
 private final class ClipPlayer {
     let player = AVPlayer()
     private(set) var isPlaying = false
+    /// Playing only because the pointer is over the picture: silent, and looping.
+    private(set) var isPreviewing = false
     private(set) var duration: Double = 0
     private(set) var currentTime: Double = 0
+    /// The sound as the user set it, for playing for real.
     var isMuted = false {
-        didSet { player.isMuted = isMuted }
+        didSet { applySound() }
     }
+
+    var isSilent: Bool { isPreviewing || isMuted }
     @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var endObserver: NSObjectProtocol?
     @ObservationIgnored private var isScrubbing = false
@@ -171,16 +181,50 @@ private final class ClipPlayer {
         endObserver = NotificationCenter.default.addObserver(
             forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.isPlaying = false }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if self.isPreviewing {
+                    self.player.seek(to: .zero)
+                    self.player.play()
+                } else {
+                    self.isPlaying = false
+                }
+            }
+        }
+    }
+
+    /// The pointer entered or left the picture: a silent preview while it is there, unless the
+    /// clip is already playing for real.
+    func preview(_ hovering: Bool) {
+        if hovering {
+            guard !isPlaying else { return }
+            isPreviewing = true
+            applySound()
+            play()
+        } else if isPreviewing {
+            isPreviewing = false
+            player.pause()
+            isPlaying = false
+            applySound()
         }
     }
 
     func togglePlayback() {
+        // A click during the preview plays it for real from where it is.
+        if isPreviewing {
+            isPreviewing = false
+            applySound()
+            return
+        }
         if isPlaying {
             player.pause()
             isPlaying = false
-            return
+        } else {
+            play()
         }
+    }
+
+    private func play() {
         // From the start again once it has played to the end.
         if duration > 0, currentTime >= duration - 0.05 {
             currentTime = 0
@@ -188,6 +232,10 @@ private final class ClipPlayer {
         }
         player.play()
         isPlaying = true
+    }
+
+    private func applySound() {
+        player.isMuted = isSilent
     }
 
     func scrub(to seconds: Double) {
@@ -275,7 +323,7 @@ private struct TransportBar: View {
             Button {
                 player.isMuted.toggle()
             } label: {
-                Image(systemName: player.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                Image(systemName: player.isSilent ? "speaker.slash.fill" : "speaker.wave.2.fill")
                     .frame(width: 20)
             }
             .buttonStyle(.borderless)
@@ -512,7 +560,7 @@ private struct DraftView: View {
                 )
                 VStack(spacing: 6) {
                     Text(video ? "New Clip" : "New Image").font(.headline)
-                    Text("The last one’s settings are on the left: change them, then Generate (⌘↩).")
+                    Text("Set it up on the left, then Generate (⌘↩). What you change here stays for the next time you come back to +.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
