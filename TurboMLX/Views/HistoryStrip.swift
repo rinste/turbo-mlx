@@ -185,7 +185,6 @@ private struct HistoryThumbnail: View {
             // The file, for Finder, other apps and the reference image; and the item itself, which
             // only this strip reads, to move it.
             .onDrag {
-                app.draggedHistoryItem = item.id
                 let provider = NSItemProvider(contentsOf: url) ?? NSItemProvider()
                 provider.registerDataRepresentation(for: .historyItem, visibility: .all) { completion in
                     completion(Data(item.id.uuidString.utf8), nil)
@@ -200,18 +199,28 @@ private struct HistoryThumbnail: View {
 }
 
 /// Moves the dragged item into place as it passes over the others, so the strip shows where it
-/// will land; the drop only ends the drag.
+/// will land; the drop only ends the drag. Which item it is comes with the drag itself: SwiftUI
+/// does not run `onDrag` again for a view dragged before, so nothing set there can be relied on.
+/// The item's id travels as `UTType.historyItem`; failing that, its file's name (unique in the
+/// history) names it.
 private struct HistoryMoveDelegate: DropDelegate {
     let target: HistoryItem.ID
     let app: AppModel
 
     func validateDrop(info: DropInfo) -> Bool {
-        app.draggedHistoryItem != nil
+        info.hasItemsConforming(to: [.historyItem]) || namedItem(info) != nil
     }
 
     func dropEntered(info: DropInfo) {
-        guard let dragged = app.draggedHistoryItem, dragged != target else { return }
-        withAnimation(.snappy) { app.moveHistoryItem(dragged, to: target) }
+        let (target, app) = (target, app)
+        if let provider = info.itemProviders(for: [.historyItem]).first {
+            _ = provider.loadDataRepresentation(for: .historyItem) { data, _ in
+                guard let data, let dragged = UUID(uuidString: String(decoding: data, as: UTF8.self)) else { return }
+                Task { @MainActor in move(dragged, to: target, app: app) }
+            }
+        } else if let dragged = namedItem(info) {
+            move(dragged, to: target, app: app)
+        }
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
@@ -219,8 +228,22 @@ private struct HistoryMoveDelegate: DropDelegate {
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        app.draggedHistoryItem = nil
-        return true
+        true
+    }
+
+    /// The history item whose file the drag carries, by name.
+    private func namedItem(_ info: DropInfo) -> HistoryItem.ID? {
+        let names = Set(info.itemProviders(for: [.item]).compactMap(\.suggestedName))
+        guard !names.isEmpty else { return nil }
+        return app.history.items.first { item in
+            names.contains(item.fileName) || names.contains((item.fileName as NSString).deletingPathExtension)
+        }?.id
+    }
+
+    @MainActor
+    private func move(_ dragged: HistoryItem.ID, to target: HistoryItem.ID, app: AppModel) {
+        guard dragged != target else { return }
+        withAnimation(.snappy) { app.moveHistoryItem(dragged, to: target) }
     }
 }
 

@@ -66,14 +66,12 @@ private struct ModelSelection: View {
             HStack(spacing: 8) {
                 Text("Model:")
                 // Images, then videos; within each, the names say the family and the memory.
-                Picker("Model", selection: $app.selectedModelID) {
-                    section("Image", media: .image)
-                    section("Video", media: .video)
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
+                ModelPopUp(
+                    sections: [section("Image", media: .image), section("Video", media: .video)].filter { !$0.entries.isEmpty },
+                    selection: $app.selectedModelID,
+                    help: "A picture: the model also takes a reference image. Lines: it works from the prompt alone. A small arrow: not downloaded yet."
+                )
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .help("A picture: the model also takes a reference image. Lines: it works from the prompt alone. A small arrow: not downloaded yet.")
                 ResetButton()
                 ModelMenu(showsAddModel: $showsAddModel)
             }
@@ -95,28 +93,123 @@ private struct ModelSelection: View {
         }
     }
 
-    @ViewBuilder
-    private func section(_ title: String, media: MediaKind) -> some View {
-        let models = app.models.filter { $0.family.media == media }
-        if !models.isEmpty {
-            Section(title) {
-                ForEach(models) { model in
-                    Label {
-                        // The memory as a small dark badge after the name, where a name has it.
-                        if model.shortName != model.name, let memory = model.memoryLabel {
-                            // Lowered from the baseline, where a picture in a text sits, to the
-                            // middle of the name.
-                            Text("\(model.shortName)  \(Text(Image(nsImage: MemoryBadge.image(memory))).baselineOffset(MemoryBadge.baselineOffset))")
-                        } else {
-                            Text(model.name)
-                        }
-                    } icon: {
-                        Image(nsImage: ModelIcon.image(takesPicture: model.family.takesReferenceImage, installed: app.isInstalled(model)))
-                    }
-                    .tag(model.id)
-                }
+    private func section(_ title: String, media: MediaKind) -> ModelPopUp.Section {
+        let entries = app.models.filter { $0.family.media == media }.map { model in
+            ModelPopUp.Entry(
+                id: model.id, name: model.shortName != model.name ? model.shortName : model.name,
+                badge: model.shortName != model.name ? model.memoryLabel : nil,
+                icon: ModelIcon.image(takesPicture: model.family.takesReferenceImage, installed: app.isInstalled(model))
+            )
+        }
+        return ModelPopUp.Section(title: title, entries: entries)
+    }
+}
+
+/// The model picker: a pop-up button whose menu opens whole above it, out of the tray at the bottom
+/// of the window. A standard pop-up would center the chosen model on the button, and on a short
+/// screen the models below it then went off the edge, behind a scroll arrow. Each model shows its
+/// icon, its name and its memory on a badge centered on the name.
+private struct ModelPopUp: NSViewRepresentable {
+    struct Entry {
+        let id: String
+        let name: String
+        let badge: String?
+        let icon: NSImage
+    }
+
+    struct Section {
+        let title: String
+        let entries: [Entry]
+    }
+
+    let sections: [Section]
+    @Binding var selection: String
+    let help: String
+
+    func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
+
+    func makeNSView(context: Context) -> UpwardPopUpButton {
+        let button = UpwardPopUpButton(frame: .zero, pullsDown: false)
+        button.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        button.lineBreakMode = .byTruncatingTail
+        button.setAccessibilityLabel("Model")
+        return button
+    }
+
+    func updateNSView(_ button: UpwardPopUpButton, context: Context) {
+        context.coordinator.selection = $selection
+        let font = NSFont.menuFont(ofSize: NSFont.systemFontSize)
+        let menu = NSMenu()
+        menu.font = font
+        var chosen: NSMenuItem?
+        for (index, section) in sections.enumerated() {
+            if index > 0 { menu.addItem(.separator()) }
+            menu.addItem(.sectionHeader(title: section.title))
+            for entry in section.entries {
+                let item = NSMenuItem(title: entry.name, action: #selector(Coordinator.choose(_:)), keyEquivalent: "")
+                item.target = context.coordinator
+                item.representedObject = entry.id
+                item.image = entry.icon
+                if let badge = entry.badge { item.attributedTitle = Self.title(entry.name, badge: badge, font: font) }
+                menu.addItem(item)
+                if entry.id == selection { chosen = item }
             }
         }
+        button.menu = menu
+        if let chosen { button.select(chosen) }
+        button.toolTip = help
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: UpwardPopUpButton, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? nsView.intrinsicContentSize.width, height: nsView.intrinsicContentSize.height)
+    }
+
+    /// The name, then the badge, lowered from the baseline (where a picture in a text stands) so
+    /// its middle meets the middle of the capitals.
+    static func title(_ name: String, badge: String, font: NSFont) -> NSAttributedString {
+        let text = NSMutableAttributedString(string: name + "  ", attributes: [.font: font])
+        let image = MemoryBadge.image(badge)
+        let attachment = NSTextAttachment()
+        attachment.image = image
+        attachment.bounds = CGRect(x: 0, y: ((font.capHeight - image.size.height) / 2).rounded(), width: image.size.width, height: image.size.height)
+        text.append(NSAttributedString(attachment: attachment))
+        return text
+    }
+
+    final class Coordinator: NSObject {
+        var selection: Binding<String>
+
+        init(selection: Binding<String>) {
+            self.selection = selection
+        }
+
+        @objc func choose(_ item: NSMenuItem) {
+            if let id = item.representedObject as? String { selection.wrappedValue = id }
+        }
+    }
+}
+
+/// A pop-up button that opens its menu above itself, whole, at least as wide as the button.
+final class UpwardPopUpButton: NSPopUpButton {
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled, let menu else { return super.mouseDown(with: event) }
+        popUpAbove(menu)
+    }
+
+    override func performClick(_ sender: Any?) {
+        guard isEnabled, let menu else { return super.performClick(sender) }
+        popUpAbove(menu)
+    }
+
+    private func popUpAbove(_ menu: NSMenu) {
+        menu.minimumWidth = bounds.width
+        // The menu's top left corner, in this view's coordinates: its whole height above the button.
+        let gap: CGFloat = 4
+        let top = isFlipped ? -(menu.size.height + gap) : bounds.height + menu.size.height + gap
+        highlight(true)
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: top), in: self)
+        highlight(false)
     }
 }
 
@@ -162,10 +255,6 @@ private enum ModelIcon {
 private enum MemoryBadge {
     private static var cache: [String: NSImage] = [:]
     private static let height: CGFloat = 15
-
-    /// A picture in a text stands on the baseline: this brings the pill's middle down to the middle
-    /// of the name's capitals (13-point text, capitals about 9.4 points tall).
-    static let baselineOffset: CGFloat = -3
 
     static func image(_ text: String) -> NSImage {
         if let cached = cache[text] { return cached }

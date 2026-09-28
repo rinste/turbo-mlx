@@ -130,9 +130,6 @@ final class AppModel {
         didSet { UserDefaults.standard.set(historyOrder.rawValue, forKey: Keys.historyOrder) }
     }
 
-    /// The history item being dragged in the strip, to move it where it is dropped.
-    @ObservationIgnored var draggedHistoryItem: HistoryItem.ID?
-
     /// The history left to right, as the strip shows it and ⌘[ ⌘] walk it.
     var arrangedHistory: [HistoryItem] {
         history.arranged(historyOrder)
