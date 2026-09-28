@@ -12,6 +12,8 @@ struct ContentView: View {
             OutputPanel()
         }
         .navigationTitle("Turbo MLX")
+        // The name stays the window's (Window menu, Mission Control) but not in the toolbar.
+        .toolbar(removing: .title)
         .alert(
             app.alert?.title ?? "",
             isPresented: Binding(get: { app.alert != nil }, set: { if !$0 { app.alert = nil } }),

@@ -10,6 +10,20 @@ enum TimeEstimate {
         var isFromHistory: Bool
     }
 
+    /// A job's expected seconds, step by step and for the decode, to count down from while it
+    /// runs: a clip's refining steps cost several times its first ones.
+    struct Plan {
+        var steps: [Double]
+        var decode: Double
+    }
+
+    static func plan(model: ModelDescriptor, request: GenerationRequest, history: [HistoryItem], models: [ModelDescriptor]) -> Plan {
+        let work = Work(model: model, size: request.size, steps: request.steps, guidance: request.guidance, frames: request.frames)
+        let byID = Dictionary(models.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let (rates, _) = rates(for: model, work: work, lowMemory: request.lowMemory, history: history, models: byID)
+        return Plan(steps: work.stepUnits.map { $0 * rates.denoise }, decode: rates.decode * work.decode)
+    }
+
     /// `count` generations with these settings, after loading the model if it is not in memory.
     static func estimate(
         model: ModelDescriptor, size: PixelSize, steps: Int, guidance: Double, frames: Int?, lowMemory: Bool,
@@ -24,13 +38,14 @@ enum TimeEstimate {
 
     /// What a generation's time grows with.
     private struct Work {
-        /// Thousands of tokens per step, weighted by attention and summed over the steps (twice
-        /// with CFG). A clip's first stage runs at half size, a quarter of its tokens, then three
-        /// steps refine it at full size.
-        var denoise: Double
+        /// Each step's thousands of tokens, weighted by attention (twice with CFG). A clip's first
+        /// stage runs at half size, a quarter of its tokens, then three steps refine it at full size.
+        var stepUnits: [Double]
         /// Megapixels, × frames for a clip.
         var decode: Double
         var cfg: Bool
+
+        var denoise: Double { stepUnits.reduce(0, +) }
 
         init(model: ModelDescriptor, size: PixelSize, steps: Int, guidance: Double, frames: Int?) {
             let pixels = Double(size.width * size.height)
@@ -39,11 +54,12 @@ enum TimeEstimate {
                 let frames = frames ?? 121
                 // 32 × 32 pixels and 8 frames per token (the first frame alone).
                 let tokens = pixels / 1024 * Double((frames - 1) / 8 + 1)
-                denoise = (Double(steps) * Self.attended(tokens / 4) + 3 * Self.attended(tokens)) / 1000
+                stepUnits = Array(repeating: Self.attended(tokens / 4) / 1000, count: max(steps, 0))
+                    + Array(repeating: Self.attended(tokens) / 1000, count: 3)
                 decode = pixels / 1_000_000 * Double(frames)
             } else {
                 // 16 × 16 pixels per token.
-                denoise = Double(steps) * (cfg ? 2 : 1) * Self.attended(pixels / 256) / 1000
+                stepUnits = Array(repeating: (cfg ? 2 : 1) * Self.attended(pixels / 256) / 1000, count: max(steps, 0))
                 decode = pixels / 1_000_000
             }
         }

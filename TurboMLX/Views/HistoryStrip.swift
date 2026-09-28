@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Film strip of past images and clips in the order they were made, the newest on the right, then
-/// the running and queued jobs and a "+" for one more like the last. A click shows an item and puts
+/// the running and queued jobs and a "+" that sets up the next one. A click shows an item and puts
 /// its settings on the left.
 struct HistoryStrip: View {
     @Environment(AppModel.self) private var app
@@ -59,7 +59,7 @@ struct HistoryStrip: View {
                                 .foregroundStyle(.tertiary)
                                 .frame(height: thumbnailHeight)
                         } else {
-                            AgainTile(height: thumbnailHeight)
+                            NewTile(height: thumbnailHeight)
                         }
                     }
                     .padding(.horizontal, 14)
@@ -92,48 +92,39 @@ struct HistoryStrip: View {
     }
 }
 
-/// After the last generation: one more like it, with a new seed.
-private struct AgainTile: View {
+/// After the last generation: the next one, set up with its settings on the left and its frame on
+/// the right, for Generate to start.
+private struct NewTile: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.undoManager) private var undoManager
     let height: CGFloat
     @State private var isHovered = false
 
     var body: some View {
-        let last = app.lastGeneration
-        let enabled = last.map { app.isInstalled($0.model) } ?? false
-        Button { app.generateAgain() } label: {
+        let isSelected = app.showsDraft
+        Button { app.startDraft(undoManager: undoManager) } label: {
             RoundedRectangle(cornerRadius: 6)
-                .fill(isHovered && enabled ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear))
+                .fill(isHovered || isSelected ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(.tertiary, style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 6).strokeBorder(Color.active, lineWidth: 3)
+                    } else {
+                        RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(.tertiary, style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                    }
                 }
                 .overlay {
                     Image(systemName: "plus")
                         .font(.title2.weight(.medium))
-                        .foregroundStyle(enabled ? .secondary : .tertiary)
+                        .foregroundStyle(.secondary)
                 }
                 .frame(width: height * 0.7, height: height)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(!enabled)
         .onHover { isHovered = $0 }
-        .help(help(for: last))
-        .accessibilityLabel("One more like the last")
-    }
-
-    private func help(for last: (model: ModelDescriptor, request: GenerationRequest)?) -> String {
-        guard let last else { return "" }
-        let request = last.request
-        let estimate = TimeEstimate.estimate(
-            model: last.model, size: request.size, steps: request.steps, guidance: request.guidance, frames: request.frames,
-            lowMemory: app.settings.lowMemory, count: 1,
-            isLoaded: app.isLoaded(last.model) || (app.queue.last ?? app.activeJob)?.model.id == last.model.id,
-            history: app.history.items, models: app.models
-        )
-        let thing = last.model.family.media == .video ? "clip" : "image"
-        return "One more \(thing) like the last, with a new seed (\(Format.estimate(estimate.seconds)))"
+        .help("New: the last one’s settings on the left, ready to change and generate")
+        .accessibilityLabel("New")
     }
 }
 

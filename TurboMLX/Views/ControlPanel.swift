@@ -12,11 +12,10 @@ struct ControlPanel: View {
         @Bindable var app = app
         Form {
             if let model = app.selectedModel {
-                // Reset sits at the top right, in the first section's header.
                 if model.family.takesReferenceImage {
                     ReferenceImageSection(settings: $app.settings)
                 }
-                PromptSection(settings: $app.settings, focus: $focusedBlock, showsReset: !model.family.takesReferenceImage)
+                PromptSection(settings: $app.settings, focus: $focusedBlock)
                 FormatSection(settings: $app.settings)
                 if model.family.media == .video {
                     ClipSection(settings: $app.settings)
@@ -40,20 +39,16 @@ struct ControlPanel: View {
 // MARK: - Reset
 
 /// Back to the model and settings of a first launch, with an empty prompt; ⌘Z brings them back.
+/// Next to the model, in the tray.
 private struct ResetButton: View {
     @Environment(AppModel.self) private var app
     @Environment(\.undoManager) private var undoManager
 
     var body: some View {
-        Button {
+        Button("Reset") {
             app.resetControls(undoManager: undoManager)
-        } label: {
-            Image(systemName: "arrow.counterclockwise")
-                .font(.body.weight(.medium))
         }
-        .buttonStyle(.borderless)
         .help("Reset the prompt, the model and the settings to their defaults (⌘Z undoes it)")
-        .accessibilityLabel("Reset")
     }
 }
 
@@ -77,6 +72,7 @@ private struct ModelSelection: View {
                 .labelsHidden()
                 .pickerStyle(.menu)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                ResetButton()
                 ModelMenu(showsAddModel: $showsAddModel)
             }
 
@@ -259,7 +255,6 @@ private struct ModelMenu: View {
 private struct PromptSection: View {
     @Binding var settings: GenerationSettings
     var focus: FocusState<PromptBlock.ID?>.Binding
-    let showsReset: Bool
 
     /// The block being dragged; back to nil when it's let go, or when the drag is cancelled.
     @GestureState(resetTransaction: Transaction(animation: .snappy)) private var drag: BlockDrag? = nil
@@ -303,13 +298,7 @@ private struct PromptSection: View {
             }
             .coordinateSpace(Self.space)
         } header: {
-            HStack {
-                Text("Prompt")
-                if showsReset {
-                    Spacer()
-                    ResetButton()
-                }
-            }
+            Text("Prompt")
         } footer: {
             VStack(alignment: .leading, spacing: 8) {
                 Button("Add Prompt Block", systemImage: "plus") { addBlock() }
@@ -653,11 +642,7 @@ private struct ReferenceImageSection: View {
                 }
             }
         } header: {
-            HStack {
-                Text("Reference Image")
-                Spacer()
-                ResetButton()
-            }
+            Text("Reference Image")
         } footer: {
             if let failure {
                 Text(failure).font(.caption).foregroundStyle(.red)
@@ -1122,9 +1107,8 @@ private struct GenerateBar: View {
                         HStack {
                             Text(job.statusLabel)
                             Spacer()
-                            if let remaining = job.estimatedSecondsRemaining {
-                                Text(Format.remaining(remaining)).foregroundStyle(.secondary)
-                            }
+                            TimeLeft(job: job)
+                                .foregroundStyle(.secondary)
                         }
                         .font(.caption.monospacedDigit())
                         if let fraction = job.fraction {

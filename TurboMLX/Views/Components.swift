@@ -130,6 +130,20 @@ struct AspectGlyph: View {
     }
 }
 
+/// "about 2 min 05 s left", counting down each second while a job runs.
+struct TimeLeft: View {
+    let job: GenerationJob
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            if let remaining = job.secondsRemaining(at: context.date) {
+                Text(Format.remaining(remaining))
+                    .monospacedDigit()
+            }
+        }
+    }
+}
+
 enum Format {
     static func bytes(_ value: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: value, countStyle: .file)

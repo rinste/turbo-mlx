@@ -33,14 +33,22 @@ final class GenerationJob: Identifiable {
     let request: GenerationRequest
     let outputURL: URL
 
-    var phase = Phase.queued
+    var phase = Phase.queued {
+        didSet { if phase == .decoding, oldValue != .decoding { decodeStartedAt = Date() } }
+    }
     var step = 0
     /// The steps the engine says it will count (LTX-2 adds its refining steps to the ones asked).
     var reportedTotal: Int?
     var startedAt: Date?
     var isCancelling = false
+    /// Its expected seconds step by step (TimeEstimate), set when it is queued.
+    var plan: TimeEstimate.Plan?
     private(set) var denoiseStartedAt: Date?
+    private(set) var lastStepAt: Date?
+    private(set) var decodeStartedAt: Date?
     private(set) var secondsPerStep: Double?
+    /// This run's time against the plan's, from the steps done so far.
+    private(set) var pace = 1.0
 
     init(model: ModelDescriptor, request: GenerationRequest, outputURL: URL) {
         self.model = model
@@ -56,32 +64,58 @@ final class GenerationJob: Identifiable {
         return phase.label(video: model.family.media == .video)
     }
 
-    /// Progress in 0...1, or nil while the current phase cannot be measured.
+    /// Progress in 0...1, or nil while the current phase cannot be measured. Steps count by their
+    /// expected time where there is a plan: a clip's last three take most of it.
     var fraction: Double? {
         switch phase {
-        case .denoising: Double(step) / Double(max(totalSteps, 1))
-        case .decoding, .encodingVideo, .saving: 1
-        default: nil
+        case .denoising:
+            if let plan, plan.steps.count == totalSteps, case let total = plan.steps.reduce(0, +), total > 0 {
+                return plan.steps.prefix(step).reduce(0, +) / total
+            }
+            return Double(step) / Double(max(totalSteps, 1))
+        case .decoding, .encodingVideo, .saving: return 1
+        default: return nil
         }
     }
 
-    /// None for a clip: its refining steps cost several times the first ones, and the decode after
-    /// them is long, so a per-step average would promise too little.
-    var estimatedSecondsRemaining: Double? {
-        guard phase == .denoising, model.family.media == .image, let secondsPerStep else { return nil }
-        return Double(totalSteps - step) * secondsPerStep
+    /// Seconds left at `now`: the plan's steps and decode at this run's pace, counting down within
+    /// a step and through the decode. Without a plan, an image's average step.
+    func secondsRemaining(at now: Date = Date()) -> Double? {
+        switch phase {
+        case .denoising:
+            guard let plan, plan.steps.count == totalSteps else {
+                guard model.family.media == .image, let secondsPerStep else { return nil }
+                return Double(totalSteps - step) * secondsPerStep
+            }
+            let current = step < plan.steps.count ? plan.steps[step] * pace : 0
+            let sinceStep = now.timeIntervalSince(lastStepAt ?? denoiseStartedAt ?? now)
+            let after = plan.steps.dropFirst(step + 1).reduce(0, +) + plan.decode
+            return max(current - sinceStep, 0) + after * pace
+        case .decoding:
+            guard let plan, let decodeStartedAt else { return nil }
+            return max(plan.decode * pace - now.timeIntervalSince(decodeStartedAt), 0)
+        default:
+            return nil
+        }
     }
 
     func beginDenoising() {
         phase = .denoising
         step = 0
         denoiseStartedAt = Date()
+        lastStepAt = nil
     }
 
     func advance(to step: Int) {
+        let now = Date()
         self.step = step
-        if let denoiseStartedAt, step > 0 {
-            secondsPerStep = Date().timeIntervalSince(denoiseStartedAt) / Double(step)
+        lastStepAt = now
+        guard let denoiseStartedAt, step > 0 else { return }
+        let elapsed = now.timeIntervalSince(denoiseStartedAt)
+        secondsPerStep = elapsed / Double(step)
+        // After two steps the pace means something (the first one also warms up).
+        if step >= 2, let plan, case let planned = plan.steps.prefix(step).reduce(0, +), planned > 0 {
+            pace = min(max(elapsed / planned, 0.5), 3)
         }
     }
 }

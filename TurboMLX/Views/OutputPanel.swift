@@ -1,4 +1,4 @@
-import AVKit
+import AVFoundation
 import QuickLook
 import SwiftUI
 
@@ -52,6 +52,8 @@ struct OutputPanel: View {
     private var stage: some View {
         if app.showsLiveJob, let job = app.activeJob {
             LiveJobView(job: job)
+        } else if app.showsDraft {
+            DraftView()
         } else if let item = app.displayedItem, item.kind == .video {
             VideoStage(url: app.url(for: item), size: item.size)
                 .id(item.id)
@@ -114,42 +116,178 @@ struct OutputPanel: View {
 
 // MARK: - Video
 
-/// A clip from the history, with the system's transport controls, sized to the clip so no bars
-/// surround it.
+/// A clip from the history, its controls under the picture: AVKit's own lay a dark veil over it
+/// while they show. A click on the picture plays or pauses.
 private struct VideoStage: View {
     let url: URL
     let size: PixelSize
+    @State private var player = ClipPlayer()
 
     var body: some View {
-        PlayerView(url: url)
-            .aspectRatio(CGSize(width: size.width, height: size.height), contentMode: .fit)
-            .padding(28)
+        VStack(spacing: 12) {
+            PlayerSurface(player: player.player)
+                .aspectRatio(CGSize(width: size.width, height: size.height), contentMode: .fit)
+                .contentShape(Rectangle())
+                .onTapGesture { player.togglePlayback() }
+            TransportBar(player: player)
+                .frame(maxWidth: 560)
+        }
+        .padding(28)
+        .onAppear { player.load(url) }
+        .onDisappear { player.stop() }
     }
 }
 
-/// AVKit's player view. SwiftUI's `VideoPlayer` is not used: its overlay does not load AVKit
-/// itself, the app only links what it references, and the first clip shown would crash the app.
-private struct PlayerView: NSViewRepresentable {
-    let url: URL
+/// An AVPlayer and what the controls show of it.
+@Observable
+private final class ClipPlayer {
+    let player = AVPlayer()
+    private(set) var isPlaying = false
+    private(set) var duration: Double = 0
+    private(set) var currentTime: Double = 0
+    var isMuted = false {
+        didSet { player.isMuted = isMuted }
+    }
+    @ObservationIgnored private var timeObserver: Any?
+    @ObservationIgnored private var endObserver: NSObjectProtocol?
+    @ObservationIgnored private var isScrubbing = false
 
-    func makeNSView(context: Context) -> AVPlayerView {
-        let view = AVPlayerView()
-        view.controlsStyle = .inline
-        view.showsFullScreenToggleButton = true
-        view.videoGravity = .resizeAspect
-        view.player = AVPlayer(url: url)
+    func load(_ url: URL) {
+        stop()
+        let item = AVPlayerItem(url: url)
+        player.replaceCurrentItem(with: item)
+        player.actionAtItemEnd = .pause
+        currentTime = 0
+        Task { [weak self] in
+            let duration = (try? await item.asset.load(.duration))?.seconds ?? 0
+            self?.duration = duration.isFinite ? duration : 0
+        }
+        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 30), queue: .main) { [weak self] time in
+            MainActor.assumeIsolated {
+                guard let self, !self.isScrubbing else { return }
+                self.currentTime = time.seconds
+            }
+        }
+        endObserver = NotificationCenter.default.addObserver(
+            forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.isPlaying = false }
+        }
+    }
+
+    func togglePlayback() {
+        if isPlaying {
+            player.pause()
+            isPlaying = false
+            return
+        }
+        // From the start again once it has played to the end.
+        if duration > 0, currentTime >= duration - 0.05 {
+            currentTime = 0
+            player.seek(to: .zero)
+        }
+        player.play()
+        isPlaying = true
+    }
+
+    func scrub(to seconds: Double) {
+        currentTime = seconds
+        player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    func setScrubbing(_ scrubbing: Bool) {
+        isScrubbing = scrubbing
+    }
+
+    func stop() {
+        player.pause()
+        isPlaying = false
+        if let timeObserver { player.removeTimeObserver(timeObserver) }
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+        timeObserver = nil
+        endObserver = nil
+    }
+}
+
+/// The picture alone, in a layer. Clicks go through to SwiftUI.
+private struct PlayerSurface: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> PlayerLayerView {
+        let view = PlayerLayerView()
+        view.playerLayer.player = player
         return view
     }
 
-    func updateNSView(_ view: AVPlayerView, context: Context) {
-        guard (view.player?.currentItem?.asset as? AVURLAsset)?.url != url else { return }
-        view.player?.pause()
-        view.player = AVPlayer(url: url)
+    func updateNSView(_ view: PlayerLayerView, context: Context) {
+        if view.playerLayer.player !== player { view.playerLayer.player = player }
     }
 
-    static func dismantleNSView(_ view: AVPlayerView, coordinator: ()) {
-        view.player?.pause()
-        view.player = nil
+    static func dismantleNSView(_ view: PlayerLayerView, coordinator: ()) {
+        view.playerLayer.player = nil
+    }
+}
+
+private final class PlayerLayerView: NSView {
+    let playerLayer = AVPlayerLayer()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        playerLayer.videoGravity = .resizeAspect
+        layer = playerLayer
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// Play or pause, the time, a bar to scrub along the clip, and the sound on or off.
+private struct TransportBar: View {
+    let player: ClipPlayer
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button {
+                player.togglePlayback()
+            } label: {
+                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                    .frame(width: 18)
+            }
+            .buttonStyle(.borderless)
+            .help(player.isPlaying ? "Pause" : "Play")
+
+            Text(verbatim: Self.time(player.currentTime))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+            Slider(
+                value: Binding(get: { player.currentTime }, set: { player.scrub(to: $0) }),
+                in: 0...max(player.duration, 0.01)
+            ) { editing in
+                player.setScrubbing(editing)
+            }
+            .controlSize(.small)
+            Text(verbatim: Self.time(player.duration))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+
+            Button {
+                player.isMuted.toggle()
+            } label: {
+                Image(systemName: player.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .frame(width: 20)
+            }
+            .buttonStyle(.borderless)
+            .help(player.isMuted ? "Sound on" : "Sound off")
+        }
+        .font(.callout)
+    }
+
+    /// "0:04".
+    private static func time(_ seconds: Double) -> String {
+        let whole = Int(max(seconds, 0).rounded(.down))
+        return String(format: "%d:%02d", whole / 60, whole % 60)
     }
 }
 
@@ -314,56 +452,94 @@ struct HistoryItemMenu: View {
 
 // MARK: - Live job
 
-private struct LiveJobView: View {
-    @Environment(AppModel.self) private var app
-    let job: GenerationJob
+/// The outline a generation fills, in its shape: which model, and how big.
+private struct GenerationFrame: View {
+    let model: ModelDescriptor
+    let size: PixelSize
+    let frames: Int?
+    let fps: Int?
+    var isPulsing = false
 
     /// "768 × 512", and the duration for a clip.
     private var sizeLabel: String {
-        let size = job.request.size
         let dimensions = "\(size.width) × \(size.height)"
-        guard let frames = job.request.frames, let fps = job.request.fps, fps > 0 else { return dimensions }
+        guard let frames, let fps, fps > 0 else { return dimensions }
         return "\(dimensions) · \(Format.clipDuration(frames: frames, fps: fps))"
     }
 
     var body: some View {
-        let size = job.request.size
+        RoundedRectangle(cornerRadius: 6)
+            .fill(.quaternary.opacity(0.5))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(.tertiary, style: StrokeStyle(lineWidth: 1, dash: [6, 5]))
+            }
+            .overlay {
+                VStack(spacing: 6) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 34, weight: .light))
+                        .symbolEffect(.pulse, isActive: isPulsing)
+                    // The family, as under a finished image; the tooltip has the full name.
+                    Text(model.family.displayName)
+                        .font(.callout.weight(.medium))
+                        .lineLimit(1)
+                        .help(model.name)
+                    Text(verbatim: sizeLabel)
+                        .font(.caption.monospacedDigit())
+                }
+                .foregroundStyle(.secondary)
+                .padding(8)
+            }
+            .aspectRatio(CGSize(width: size.width, height: size.height), contentMode: .fit)
+            .frame(maxWidth: min(CGFloat(size.width), 520), maxHeight: min(CGFloat(size.height), 520))
+    }
+}
+
+/// The "+" after the history: the frame of the next generation as the controls on the left set
+/// it up, until Generate starts it.
+private struct DraftView: View {
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
+        if let model = app.selectedModel {
+            let video = model.family.media == .video
+            VStack(spacing: 22) {
+                GenerationFrame(
+                    model: model,
+                    size: app.settings.size(for: model.family),
+                    frames: video ? app.settings.videoFrames : nil,
+                    fps: video ? app.settings.videoFrameRate : nil
+                )
+                VStack(spacing: 6) {
+                    Text(video ? "New Clip" : "New Image").font(.headline)
+                    Text("The last one’s settings are on the left: change them, then Generate (⌘↩).")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: 520)
+            }
+            .padding(28)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+private struct LiveJobView: View {
+    @Environment(AppModel.self) private var app
+    let job: GenerationJob
+
+    var body: some View {
         VStack(spacing: 22) {
-            RoundedRectangle(cornerRadius: 6)
-                .fill(.quaternary.opacity(0.5))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(.tertiary, style: StrokeStyle(lineWidth: 1, dash: [6, 5]))
-                }
-                .overlay {
-                    // What is being made: which model, and how big.
-                    VStack(spacing: 6) {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 34, weight: .light))
-                            .symbolEffect(.pulse, isActive: !job.isCancelling)
-                        // The family, as under a finished image; the tooltip has the full name.
-                        Text(job.model.family.displayName)
-                            .font(.callout.weight(.medium))
-                            .lineLimit(1)
-                            .help(job.model.name)
-                        Text(verbatim: sizeLabel)
-                            .font(.caption.monospacedDigit())
-                    }
-                    .foregroundStyle(.secondary)
-                    .padding(8)
-                }
-                .aspectRatio(CGSize(width: size.width, height: size.height), contentMode: .fit)
-                .frame(maxWidth: min(CGFloat(size.width), 520), maxHeight: min(CGFloat(size.height), 520))
+            GenerationFrame(model: job.model, size: job.request.size, frames: job.request.frames, fps: job.request.fps,
+                            isPulsing: !job.isCancelling)
 
             VStack(spacing: 10) {
                 HStack {
                     Text(job.statusLabel).font(.headline)
                     Spacer()
-                    if let remaining = job.estimatedSecondsRemaining {
-                        Text(Format.remaining(remaining))
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                    }
+                    TimeLeft(job: job)
+                        .foregroundStyle(.secondary)
                 }
                 if let fraction = job.fraction {
                     ProgressView(value: fraction)

@@ -12,10 +12,12 @@ struct AppAlert: Identifiable {
 /// App-wide state: model catalog, generation settings, the job queue and the history.
 @Observable
 final class AppModel {
-    /// What the image viewer shows: the job in progress / latest result, or a picked history item.
+    /// What the image viewer shows: the job in progress / latest result, a picked history item, or
+    /// the frame of the next generation (the "+" after the history).
     enum ViewerSelection: Hashable {
         case live
         case item(HistoryItem.ID)
+        case draft
     }
 
     /// Why "Generate" is not available right now.
@@ -314,35 +316,34 @@ final class AppModel {
                 referenceImage: isVideo && model.family.takesReferenceImage ? reference : nil
             )
             let output = isVideo ? history.newVideoURL(seed: seed) : history.newImageURL(seed: seed)
-            queue.append(GenerationJob(model: model, request: request, outputURL: output))
+            let job = GenerationJob(model: model, request: request, outputURL: output)
+            job.plan = TimeEstimate.plan(model: model, request: request, history: history.items, models: models)
+            queue.append(job)
         }
         viewer = .live
         pump()
     }
 
-    /// What the "+" after the history repeats: the last generation queued, running or finished.
+    /// What the "+" after the history starts from: the last generation queued, running or finished.
     var lastGeneration: (model: ModelDescriptor, request: GenerationRequest)? {
         if let job = queue.last ?? activeJob { return (job.model, job.request) }
         guard let item = history.items.first, let model = models.first(where: { $0.id == item.modelID }) else { return nil }
         return (model, item.request)
     }
 
-    /// One more generation like the last one, with a new seed; the controls are left as they are.
-    func generateAgain() {
-        guard let (model, last) = lastGeneration, isInstalled(model) else { return }
-        preloadDeclined = false
-        var request = last
-        request.seed = Int.random(in: 0..<1_000_000_000)
-        request.lowMemory = settings.lowMemory
-        if let reference = request.referenceImage,
-           !FileManager.default.fileExists(atPath: HistoryStore.referenceURL(reference).path) {
-            request.referenceImage = nil
+    /// The "+": the last generation's settings on the left and the frame of the next one on the
+    /// right, for Generate to start.
+    func startDraft(undoManager: UndoManager? = nil) {
+        guard let (model, request) = lastGeneration else {
+            viewer = .draft
+            return
         }
-        let output = model.family.media == .video ? history.newVideoURL(seed: request.seed) : history.newImageURL(seed: request.seed)
-        queue.append(GenerationJob(model: model, request: request, outputURL: output))
-        viewer = .live
-        pump()
+        let controls = controls(from: request, modelID: model.id, media: model.family.media)
+        replaceControls(with: controls.settings, modelID: controls.modelID, viewer: .draft, actionName: "New",
+                        undoManager: undoManager)
     }
+
+    var showsDraft: Bool { viewer == .draft }
 
     func cancel(_ job: GenerationJob) {
         if let index = queue.firstIndex(where: { $0 === job }) {
@@ -497,6 +498,7 @@ final class AppModel {
         switch viewer {
         case .item(let id): history.item(withID: id) ?? history.items.first
         case .live: history.items.first
+        case .draft: nil
         }
     }
 
@@ -506,9 +508,10 @@ final class AppModel {
     /// Shows a history item and puts its prompt, model and settings in the controls on the left.
     /// `undoManager` is the window's, where ⌘Z finds what they replaced.
     func select(_ item: HistoryItem, undoManager: UndoManager? = nil) {
-        viewer = item.id == history.items.first?.id && activeJob == nil ? .live : .item(item.id)
-        let controls = controls(from: item)
-        replaceControls(with: controls.settings, modelID: controls.modelID, actionName: "Load Settings", undoManager: undoManager)
+        let controls = controls(from: item.request, modelID: item.modelID, media: item.kind)
+        replaceControls(with: controls.settings, modelID: controls.modelID,
+                        viewer: item.id == history.items.first?.id && activeJob == nil ? .live : .item(item.id),
+                        actionName: "Load Settings", undoManager: undoManager)
     }
 
     func isSelected(_ item: HistoryItem) -> Bool {
@@ -520,6 +523,11 @@ final class AppModel {
     func moveSelection(by offset: Int, undoManager: UndoManager? = nil) {
         let items = history.items
         guard !items.isEmpty else { return }
+        // The draft sits after the newest: left of it is the newest, right of it nothing.
+        if viewer == .draft {
+            if offset > 0 { select(items[0], undoManager: undoManager) }
+            return
+        }
         let current = displayedItem.flatMap { item in items.firstIndex { $0.id == item.id } } ?? 0
         let next = min(max(current + offset, 0), items.count - 1)
         select(items[next], undoManager: undoManager)
@@ -536,36 +544,38 @@ final class AppModel {
         history.removeAll()
     }
 
-    /// An item's prompt blocks, model and settings, as the controls should show them. Its seed goes
-    /// in the seed field, but Random seed stays as it was: Generate makes a variation unless it is
-    /// turned off.
-    private func controls(from item: HistoryItem) -> (settings: GenerationSettings, modelID: String) {
-        let model = models.first { $0.id == item.modelID }
+    /// A generation's prompt blocks, model and settings, as the controls should show them. Its seed
+    /// goes in the seed field with Random on, as always by default: Generate makes a variation, and
+    /// turning Random off makes the same one again.
+    private func controls(from request: GenerationRequest, modelID: String, media: MediaKind)
+        -> (settings: GenerationSettings, modelID: String) {
+        let model = models.first { $0.id == modelID }
         var updated = settings
-        if let blocks = item.request.blocks, !blocks.isEmpty {
+        if let blocks = request.blocks, !blocks.isEmpty {
             updated.blocks = blocks
         } else {
-            updated.blocks = PromptBlock.defaults(subject: item.prompt)
+            updated.blocks = PromptBlock.defaults(subject: request.prompt)
         }
-        let isVideo = item.kind == .video
-        updated.apply(size: item.size, video: isVideo)
-        if isVideo, let frames = item.request.frames, let fps = item.request.fps, fps > 0 {
+        let isVideo = media == .video
+        updated.apply(size: request.size, video: isVideo)
+        if isVideo, let frames = request.frames, let fps = request.fps, fps > 0 {
             updated.videoFrameRate = fps
             updated.videoSeconds = min(max((Double(frames - 1) / Double(fps)).rounded(), GenerationSettings.videoDurations.lowerBound),
                                        GenerationSettings.videoDurations.upperBound)
         }
         if isVideo {
-            updated.referenceImage = item.request.referenceImage.flatMap { name in
+            updated.referenceImage = request.referenceImage.flatMap { name in
                 FileManager.default.fileExists(atPath: HistoryStore.referenceURL(name).path) ? name : nil
             }
         }
-        updated.steps = item.request.steps
-        updated.guidance = item.request.guidance
-        updated.seed = item.request.seed
+        updated.steps = request.steps
+        updated.guidance = request.guidance
+        updated.seed = request.seed
+        updated.randomSeed = true
         // Only a model that makes transparent images says which background was chosen: the
         // others always save false, which would turn the choice off for the next Ming image.
         if model?.family.producesAlpha == true {
-            updated.transparentBackground = item.request.transparentBackground
+            updated.transparentBackground = request.transparentBackground
         }
         return (updated, model?.id ?? selectedModelID)
     }
@@ -590,17 +600,22 @@ final class AppModel {
         return initial
     }
 
-    /// Puts other settings and another model in the controls so that ⌘Z brings back what they
-    /// replaced: a click in the history or Reset does not lose a prompt being written. Without the
-    /// view's undo manager (a menu command), the main window's, which exists while the app is active.
-    private func replaceControls(with new: GenerationSettings, modelID: String, actionName: String, undoManager: UndoManager?) {
-        let previous = (settings: settings, modelID: selectedModelID)
-        guard new != previous.settings || modelID != previous.modelID else { return }
+    /// Puts other settings and another model in the controls, and shows `newViewer`, so that ⌘Z
+    /// brings back what they replaced and what was shown: a click in the history, the "+" or Reset
+    /// does not lose a prompt being written. Without the view's undo manager (a menu command), the
+    /// main window's, which exists while the app is active.
+    private func replaceControls(
+        with new: GenerationSettings, modelID: String, viewer newViewer: ViewerSelection? = nil, actionName: String,
+        undoManager: UndoManager?
+    ) {
+        let previous = (settings: settings, modelID: selectedModelID, viewer: viewer)
+        let shown = newViewer ?? viewer
+        guard new != previous.settings || modelID != previous.modelID || shown != previous.viewer else { return }
         if let undoManager = undoManager ?? NSApp.mainWindow?.undoManager {
             undoManager.registerUndo(withTarget: self) { model in
                 MainActor.assumeIsolated {
-                    model.replaceControls(with: previous.settings, modelID: previous.modelID, actionName: actionName,
-                                          undoManager: undoManager)
+                    model.replaceControls(with: previous.settings, modelID: previous.modelID, viewer: previous.viewer,
+                                          actionName: actionName, undoManager: undoManager)
                 }
             }
             undoManager.setActionName(actionName)
@@ -608,6 +623,7 @@ final class AppModel {
         // The model first: switching family resets steps and guidance, which `new` then sets.
         selectedModelID = modelID
         settings = new
+        viewer = shown
     }
 
     /// Makes a generated image (a clip's first frame) the reference image of the next clip.
