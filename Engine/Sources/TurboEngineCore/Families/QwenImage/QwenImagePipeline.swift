@@ -158,8 +158,13 @@ public final class QwenImageModel: FamilyModel {
 
     /// Packed latents [1, h·w, 64] → [H, W, 3] uint8 pixels; in tiles with Save memory on.
     public func decode(latents: MLXArray, latentHeight: Int, latentWidth: Int, vae: QwenImageVAE, isCancelled: () -> Bool = { false }) throws -> MLXArray {
-        let grid = Self.unpack(latents, latentHeight: latentHeight, latentWidth: latentWidth)
-        let decoded = lowRam
+        try Self.decode(latents: latents, latentHeight: latentHeight, latentWidth: latentWidth, vae: vae, tiled: lowRam, isCancelled: isCancelled)
+    }
+
+    /// The same for any Qwen-Image checkpoint (the edit model decodes the same way).
+    public static func decode(latents: MLXArray, latentHeight: Int, latentWidth: Int, vae: QwenImageVAE, tiled: Bool, isCancelled: () -> Bool = { false }) throws -> MLXArray {
+        let grid = unpack(latents, latentHeight: latentHeight, latentWidth: latentWidth)
+        let decoded = tiled
             ? try VAETiling.decode(grid, spatialScale: QwenImageVAE.spatialScale, decode: { vae.decode($0) }, isCancelled: isCancelled)
             : vae.decode(grid)
         return Pixels.toPixels(decoded)

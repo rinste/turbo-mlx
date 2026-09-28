@@ -11,7 +11,8 @@ public struct FamilyRequest {
     public var guidance: Double
     /// Composite an RGBA result onto white (families that produce alpha).
     public var flattenAlpha: Bool
-    /// Video families: how many frames, at what rate, and the image the clip starts from.
+    /// Video families: how many frames and at what rate; `imagePath` the picture a clip starts
+    /// from, or an image is edited from (FLUX.2 Klein, Qwen-Image Edit).
     public var frames: Int?
     public var fps: Double?
     public var imagePath: String?
@@ -63,7 +64,7 @@ public protocol FamilyModel: AnyObject {
 /// Loads the model a spec names, by family.
 public enum FamilyLoader {
     /// Families this engine implements, as the app names them.
-    public static let families = ["flux2-klein", "z-image-turbo", "qwen-image", "ming", "ltx-2"]
+    public static let families = ["flux2-klein", "z-image-turbo", "qwen-image", "qwen-image-edit", "ming", "ltx-2"]
 
     public static func load(_ spec: ModelSpec, loadTokenizer: Bool = true) throws -> FamilyModel {
         let root = URL(fileURLWithPath: spec.path)
@@ -75,6 +76,8 @@ public enum FamilyLoader {
             return try ZImageModel(modelPath: root, config: .turbo, loadTokenizer: loadTokenizer)
         case "qwen-image":
             return try QwenImageModel(modelPath: root, config: .qwenImage2512, loadTokenizer: loadTokenizer)
+        case "qwen-image-edit":
+            return try QwenImageEditModel(modelPath: root, config: .qwenImageEdit2511, loadTokenizer: loadTokenizer)
         case "ming":
             return try MingModel(modelPath: root, config: .design, loadTokenizer: loadTokenizer)
         case "ltx-2":

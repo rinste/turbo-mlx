@@ -83,6 +83,7 @@ public enum GenerationError: LocalizedError {
     case sizeTooSmall
     case unreadableImage(String)
     case referenceTooSmall
+    case referenceRequired
 
     public var errorDescription: String? {
         switch self {
@@ -90,6 +91,7 @@ public enum GenerationError: LocalizedError {
         case .sizeTooSmall: "The image must be at least 16 × 16 pixels."
         case .unreadableImage(let path): "Couldn’t read the reference image \((path as NSString).lastPathComponent)."
         case .referenceTooSmall: "The reference image must be at least 16 × 16 pixels."
+        case .referenceRequired: "This model edits a picture: add a reference image."
         }
     }
 }

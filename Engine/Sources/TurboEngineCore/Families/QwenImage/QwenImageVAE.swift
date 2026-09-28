@@ -2,11 +2,11 @@ import Foundation
 import MLX
 import MLXNN
 
-// Qwen-Image's autoencoder (Wan 2.1's causal 3D VAE), decoder only, after mflux's `qwen_vae/*`;
-// Ming-Image's is the same network retrained for RGBA with one scaling factor. Activations are
-// channels-last [B, T, H, W, C] throughout (the reference transposes around every convolution).
-// A still image is one frame, so the temporal up-sampling never runs and its `time_conv`
-// weights are skipped when loading.
+// Qwen-Image's autoencoder (Wan 2.1's causal 3D VAE) after mflux's `qwen_vae/*`: the decoder, and
+// the encoder for the picture an edit starts from; Ming-Image's is the same network retrained for
+// RGBA with one scaling factor. Activations are channels-last [B, T, H, W, C] throughout (the
+// reference transposes around every convolution). A still image is one frame, so the temporal
+// up- and down-sampling never run and their `time_conv` weights are skipped when loading.
 
 /// A 3D convolution padded causally in time (twice the padding before, none after).
 final class QwenCausalConv3D: Module {
@@ -193,6 +193,78 @@ final class QwenDecoder3D: Module {
     }
 }
 
+/// A stride-2 convolution of each frame after a row and a column of zeros at the bottom and right
+/// (the encoder's spatial down-sampling; a still image never reaches the temporal one).
+final class QwenDownsample3D: Module {
+    @ModuleInfo(key: "resample_conv") var resampleConv: Conv2d
+
+    init(dim: Int) {
+        _resampleConv.wrappedValue = Conv2d(inputChannels: dim, outputChannels: dim, kernelSize: 3, stride: 2, padding: 0)
+        super.init()
+    }
+
+    func callAsFunction(_ x: MLXArray) -> MLXArray {
+        let (batch, time, height, width, channels) = (x.shape[0], x.shape[1], x.shape[2], x.shape[3], x.shape[4])
+        var frames = x.reshaped([batch * time, height, width, channels])
+        frames = padded(frames, widths: [IntOrPair(0), IntOrPair((0, 1)), IntOrPair((0, 1)), IntOrPair(0)])
+        let out = resampleConv(frames)
+        return out.reshaped([batch, time, out.shape[1], out.shape[2], out.shape[3]])
+    }
+}
+
+final class QwenDownBlock3D: Module {
+    @ModuleInfo(key: "resnets") var resnets: [QwenResBlock3D]
+    @ModuleInfo(key: "downsamplers") var downsamplers: [QwenDownsample3D]
+
+    init(inChannels: Int, outChannels: Int, numResBlocks: Int = 2, downsample: Bool) {
+        var resnets: [QwenResBlock3D] = []
+        var current = inChannels
+        for _ in 0 ..< numResBlocks {
+            resnets.append(QwenResBlock3D(inChannels: current, outChannels: outChannels))
+            current = outChannels
+        }
+        _resnets.wrappedValue = resnets
+        _downsamplers.wrappedValue = downsample ? [QwenDownsample3D(dim: outChannels)] : []
+        super.init()
+    }
+
+    func callAsFunction(_ x: MLXArray) -> MLXArray {
+        var h = x
+        for resnet in resnets { h = resnet(h) }
+        for downsampler in downsamplers { h = downsampler(h) }
+        return h
+    }
+}
+
+/// `QwenImageEncoder3D`: stages of `baseDim`, 2× and 4× channels, halving the size three times,
+/// then 32 channels (the mean and the log-variance of the 16 latent channels).
+final class QwenEncoder3D: Module {
+    @ModuleInfo(key: "conv_in") var convIn: QwenCausalConv3D
+    @ModuleInfo(key: "down_blocks") var downBlocks: [QwenDownBlock3D]
+    @ModuleInfo(key: "mid_block") var midBlock: QwenMidBlock3D
+    @ModuleInfo(key: "norm_out") var normOut: QwenImageRMSNorm
+    @ModuleInfo(key: "conv_out") var convOut: QwenCausalConv3D
+
+    init(baseDim: Int, outChannels: Int = 32) {
+        let dims = [1, 1, 2, 4, 4].map { $0 * baseDim }
+        _convIn.wrappedValue = QwenCausalConv3D(inChannels: 3, outChannels: dims[0], kernelSize: 3, padding: 1)
+        _downBlocks.wrappedValue = (0 ..< 4).map { stage in
+            QwenDownBlock3D(inChannels: dims[stage], outChannels: dims[stage + 1], downsample: stage < 3)
+        }
+        _midBlock.wrappedValue = QwenMidBlock3D(dim: dims[4])
+        _normOut.wrappedValue = QwenImageRMSNorm(channels: dims[4])
+        _convOut.wrappedValue = QwenCausalConv3D(inChannels: dims[4], outChannels: outChannels, kernelSize: 3, padding: 1)
+        super.init()
+    }
+
+    func callAsFunction(_ x: MLXArray) -> MLXArray {
+        var h = convIn(x)
+        for block in downBlocks { h = block(h) }
+        h = midBlock(h)
+        return convOut(silu(normOut(h)))
+    }
+}
+
 public final class QwenImageVAE: Module {
     /// How the transformer's latents relate to the decoder's: Qwen-Image's per-channel
     /// statistics, or Ming-Image's single factor.
@@ -203,6 +275,8 @@ public final class QwenImageVAE: Module {
 
     @ModuleInfo(key: "decoder") var decoder: QwenDecoder3D
     @ModuleInfo(key: "post_quant_conv") var postQuantConv: QwenCausalConv3D
+    @ModuleInfo(key: "encoder") var encoder: QwenEncoder3D?
+    @ModuleInfo(key: "quant_conv") var quantConv: QwenCausalConv3D?
 
     public static let latentChannels = 16
     public static let spatialScale = 8
@@ -211,10 +285,15 @@ public final class QwenImageVAE: Module {
 
     public let normalization: Normalization
 
-    public init(outChannels: Int = 3, baseDim: Int = 96, normalization: Normalization = .meanStd) {
+    /// `withEncoder` for an edit, which encodes its picture.
+    public init(outChannels: Int = 3, baseDim: Int = 96, normalization: Normalization = .meanStd, withEncoder: Bool = false) {
         self.normalization = normalization
         _decoder.wrappedValue = QwenDecoder3D(latentChannels: Self.latentChannels, outChannels: outChannels, baseDim: baseDim)
         _postQuantConv.wrappedValue = QwenCausalConv3D(inChannels: Self.latentChannels, outChannels: Self.latentChannels, kernelSize: 1, padding: 0)
+        _encoder.wrappedValue = withEncoder ? QwenEncoder3D(baseDim: baseDim) : nil
+        _quantConv.wrappedValue = withEncoder
+            ? QwenCausalConv3D(inChannels: 2 * Self.latentChannels, outChannels: 2 * Self.latentChannels, kernelSize: 1, padding: 0)
+            : nil
         super.init()
     }
 
@@ -222,6 +301,29 @@ public final class QwenImageVAE: Module {
     /// not part of this still-image, decoder-only port.
     public static func ignoresKey(_ key: String) -> Bool {
         key.hasPrefix("encoder.") || key.hasPrefix("quant_conv.") || key.contains(".time_conv.")
+    }
+
+    /// The same with the encoder (an edit's): only the temporal convolutions are left out.
+    public static func ignoresKeyWithEncoder(_ key: String) -> Bool {
+        key.contains(".time_conv.")
+    }
+
+    /// [B, H, W, 3] in [-1, 1] → [B, H/8, W/8, 16] latents as the transformer reads them: the
+    /// encoder's mean, normalized with the per-channel statistics (`QwenVAE.encode`).
+    public func encode(_ image: MLXArray) -> MLXArray {
+        guard let encoder, let quantConv else { preconditionFailure("this VAE was built without its encoder") }
+        let moments = quantConv(encoder(image.expandedDimensions(axis: 1)))
+        let mean = MLXArray(Self.latentsMean).reshaped([1, 1, 1, 1, Self.latentChannels])
+        let std = MLXArray(Self.latentsStd).reshaped([1, 1, 1, 1, Self.latentChannels])
+        return ((moments[.ellipsis, 0 ..< Self.latentChannels] - mean) / std).squeezed(axis: 1)
+    }
+
+    /// `pack_latents` of channels-last latents: [1, 2h, 2w, 16] → [1, h·w, 64].
+    public static func pack(_ grid: MLXArray) -> MLXArray {
+        let (height, width) = (grid.shape[1] / 2, grid.shape[2] / 2)
+        return grid.reshaped([1, height, 2, width, 2, latentChannels])
+            .transposed(0, 1, 3, 5, 2, 4)
+            .reshaped([1, height * width, 4 * latentChannels])
     }
 
     /// The checkpoint's tensors with the norms' weights flat. mflux's checkpoints store them so

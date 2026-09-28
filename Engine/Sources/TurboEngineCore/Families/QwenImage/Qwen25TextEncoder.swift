@@ -3,8 +3,10 @@ import MLX
 import MLXNN
 
 // Qwen-Image's text encoder: the language model of Qwen2.5-VL 7B, after mflux's
-// `qwen_text_encoder/*` (text path only: no vision tower, so the multimodal rotary embedding
-// reduces to the plain one). Names follow mflux, whose checkpoints keep it unquantized in bf16.
+// `qwen_text_encoder/*`, with the vision tower for an edit's picture (Qwen25VisionTower.swift).
+// mflux numbers every token's position alike on the three rotary axes, the picture's too, so the
+// multimodal rotary embedding reduces to the plain one. Names follow mflux, whose checkpoints keep
+// it unquantized in bf16.
 
 final class Qwen25Attention: Module {
     @ModuleInfo(key: "q_proj") var qProj: Linear
@@ -82,26 +84,33 @@ final class Qwen25DecoderLayer: Module {
     }
 }
 
-/// mflux's `QwenEncoder`: embeddings, the decoder layers and the final norm.
+/// mflux's `QwenEncoder`: embeddings, the decoder layers and the final norm, and for an edit the
+/// vision tower whose tokens replace the picture's placeholders.
 final class Qwen25Encoder: Module {
     @ModuleInfo(key: "embed_tokens") var embedTokens: Embedding
     @ModuleInfo(key: "layers") var layers: [Qwen25DecoderLayer]
     @ModuleInfo(key: "norm") var norm: Qwen3RMSNorm
+    @ModuleInfo(key: "visual") var visual: Qwen25VisionTower?
 
     let config: QwenImageConfig.TextEncoder
 
-    init(config: QwenImageConfig.TextEncoder) {
+    init(config: QwenImageConfig.TextEncoder, vision: QwenImageConfig.Vision? = nil) {
         self.config = config
         _embedTokens.wrappedValue = Embedding(embeddingCount: config.vocabSize, dimensions: config.hiddenSize)
         _layers.wrappedValue = (0 ..< config.numHiddenLayers).map { _ in Qwen25DecoderLayer(config: config) }
         _norm.wrappedValue = Qwen3RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
+        _visual.wrappedValue = vision.map { Qwen25VisionTower($0, outDim: config.hiddenSize) }
         super.init()
     }
 
-    /// The final-norm hidden states [B, S, hidden] in the weights' dtype.
-    func callAsFunction(_ inputIds: MLXArray, attentionMask: MLXArray) -> MLXArray {
+    /// The final-norm hidden states [B, S, hidden] in the weights' dtype, or in float32 when a
+    /// picture's tokens (`imageEmbeds`, float32) are placed in the sequence.
+    func callAsFunction(_ inputIds: MLXArray, attentionMask: MLXArray, imageEmbeds: MLXArray? = nil) -> MLXArray {
         let (batch, length) = (inputIds.shape[0], inputIds.shape[1])
         var h = embedTokens(inputIds)
+        if let imageEmbeds {
+            h = Self.placing(imageEmbeds, in: h, inputIds: inputIds, tokenId: config.imageTokenId)
+        }
 
         // Padding (keys of padded tokens) plus causality, additive in float32.
         let padding = MLX.where(attentionMask .== 1, MLXArray(Float(0)), MLXArray(-Float.infinity))
@@ -119,6 +128,24 @@ final class Qwen25Encoder: Module {
             h = layer(h, mask: mask, cos: cos, sin: sin)
         }
         return norm(h)
+    }
+
+    /// As mflux's `QwenEncoder` does it: the placeholder tokens' embeddings replaced, in order, by
+    /// the picture's rows, all or nothing (only when there are rows enough). The reference stacks
+    /// the rows, so float32 picture rows make the whole sequence float32; concatenating does too.
+    static func placing(_ image: MLXArray, in embeds: MLXArray, inputIds: MLXArray, tokenId: Int) -> MLXArray {
+        let ids = inputIds.reshaped([-1]).asArray(Int32.self)
+        let placeholders = ids.filter { Int($0) == tokenId }.count
+        guard placeholders > 0, image.shape[0] >= placeholders else { return embeds }
+        let hidden = embeds.shape[embeds.ndim - 1]
+        let rows = embeds.reshaped([-1, hidden])
+        var next = 0
+        let index = ids.enumerated().map { position, id -> Int32 in
+            guard Int(id) == tokenId, next < image.shape[0] else { return Int32(position) }
+            next += 1
+            return Int32(rows.shape[0] + next - 1)
+        }
+        return concatenated([rows, image], axis: 0)[MLXArray(index)].reshaped(embeds.shape)
     }
 
     /// `QwenRotaryEmbedding` on text positions 0..<S (the same on all three axes, so the
@@ -142,9 +169,9 @@ public final class Qwen25TextEncoder: Module {
 
     public let config: QwenImageConfig.TextEncoder
 
-    public init(config: QwenImageConfig.TextEncoder) {
+    public init(config: QwenImageConfig.TextEncoder, vision: QwenImageConfig.Vision? = nil) {
         self.config = config
-        _encoder.wrappedValue = Qwen25Encoder(config: config)
+        _encoder.wrappedValue = Qwen25Encoder(config: config, vision: vision)
         super.init()
     }
 
@@ -152,6 +179,27 @@ public final class Qwen25TextEncoder: Module {
     /// the vision tower (never loaded for text-to-image).
     public static func ignoresKey(_ key: String) -> Bool {
         key.contains("rotary_emb.") || key.hasPrefix("encoder.visual.")
+    }
+
+    /// The same for an edit, which loads the vision tower (its rotary frequencies are computed too).
+    public static func ignoresKeyWithVision(_ key: String) -> Bool {
+        key.contains("rotary_emb.") || key.contains("rotary_pos_emb.")
+    }
+
+    /// The picture's tokens: `pixelValues` [N, 1176] of the pictures `grids` describes → [N / 4, hidden].
+    public func imageEmbeds(pixelValues: MLXArray, grids: [QwenVisionGrid]) -> MLXArray {
+        guard let visual = encoder.visual else { preconditionFailure("this text encoder has no vision tower") }
+        return visual(pixelValues, grids: grids)
+    }
+
+    /// An edit's prompt, as `QwenVisionLanguageEncoder` and `QwenImageEdit` make it: the encoder
+    /// over the template with the picture's tokens in place, the states after the 64-token system
+    /// prompt, cast to float16. `imageEmbeds` from `imageEmbeds(pixelValues:grids:)`.
+    public func editEmbeds(inputIds: MLXArray, imageEmbeds: MLXArray) -> MLXArray {
+        let mask = MLXArray.ones(inputIds.shape, dtype: .int32)
+        let hidden = encoder(inputIds, attentionMask: mask, imageEmbeds: imageEmbeds)
+        let kept = hidden.shape[1] > config.dropIndex ? hidden[0..., config.dropIndex..., 0...] : hidden
+        return kept.asType(.float16)
     }
 
     /// `inputIds` [1, S] of one prompt (no padding) → its embeddings [1, S − dropIndex, hidden]

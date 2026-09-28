@@ -6,6 +6,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     case zImageTurbo = "z-image-turbo"
     case flux2Klein = "flux2-klein"
     case qwenImage = "qwen-image"
+    case qwenImageEdit = "qwen-image-edit"
     case ltx2 = "ltx-2"
 
     var displayName: String {
@@ -14,6 +15,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .zImageTurbo: "Z-Image Turbo"
         case .flux2Klein: "FLUX.2 Klein"
         case .qwenImage: "Qwen-Image"
+        case .qwenImageEdit: "Qwen-Image Edit"
         case .ltx2: "LTX-2"
         }
     }
@@ -24,14 +26,17 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     var media: MediaKind { self == .ltx2 ? .video : .image }
 
     /// A reference image: the first frame of a clip (LTX-2), the picture an image is edited from
-    /// as the prompt says (FLUX.2 Klein).
-    var takesReferenceImage: Bool { self == .ltx2 || self == .flux2Klein }
+    /// as the prompt says (FLUX.2 Klein, Qwen-Image Edit).
+    var takesReferenceImage: Bool { self == .ltx2 || self == .flux2Klein || self == .qwenImageEdit }
+
+    /// Qwen-Image Edit only edits: it needs the picture.
+    var requiresReferenceImage: Bool { self == .qwenImageEdit }
 
     /// Checkpoint sub-folders that must hold complete safetensors shards.
     var components: [String] {
         switch self {
         case .ming: ["mllm", "connector", "mlp", "transformer", "vae"]
-        case .zImageTurbo, .flux2Klein, .qwenImage: ["transformer", "text_encoder", "vae"]
+        case .zImageTurbo, .flux2Klein, .qwenImage, .qwenImageEdit: ["transformer", "text_encoder", "vae"]
         case .ltx2: []
         }
     }
@@ -50,7 +55,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     var tokenizerFile: String? {
         switch self {
         case .ming: "mllm/tokenizer.json"
-        case .zImageTurbo, .flux2Klein, .qwenImage: "tokenizer/tokenizer.json"
+        case .zImageTurbo, .flux2Klein, .qwenImage, .qwenImageEdit: "tokenizer/tokenizer.json"
         case .ltx2: nil // in the text encoder's checkpoint
         }
     }
@@ -62,7 +67,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         switch self {
         case .ming: return weights
         case .zImageTurbo: return weights + ["tokenizer/*"]
-        case .flux2Klein, .qwenImage: return weights + ["tokenizer/**", "added_tokens.json", "chat_template.jinja"]
+        case .flux2Klein, .qwenImage, .qwenImageEdit: return weights + ["tokenizer/**", "added_tokens.json", "chat_template.jinja"]
         case .ltx2:
             return ["LICENSE", "README.md", "config.json", "embedded_config.json", "quantize_config.json", "split_model.json",
                     "transformer-distilled-1.1.safetensors", "connector.safetensors", "vae_decoder.safetensors",
@@ -142,7 +147,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
 
     var supportsGuidance: Bool {
         switch family {
-        case .ming, .qwenImage: true
+        case .ming, .qwenImage, .qwenImageEdit: true
         case .zImageTurbo, .ltx2: false
         case .flux2Klein: isKleinBase
         }
@@ -154,14 +159,15 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .ming: 12
         case .zImageTurbo: 9
         case .flux2Klein: isKleinBase ? 50 : 4
-        case .qwenImage: 20
+        case .qwenImage, .qwenImageEdit: 20
         case .ltx2: 8
         }
     }
 
-    /// Qwen-Image and FLUX.2 Klein base run real CFG, recommended at 4; the others default to off.
+    /// Qwen-Image (and its editor) and FLUX.2 Klein base run real CFG, recommended at 4; the
+    /// others default to off.
     var defaultGuidance: Double {
-        family == .qwenImage || isKleinBase ? 4 : 1
+        family == .qwenImage || family == .qwenImageEdit || isKleinBase ? 4 : 1
     }
 
     var stepRange: ClosedRange<Int> {
@@ -169,7 +175,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .ming: 4...40
         case .zImageTurbo: 4...20
         case .flux2Klein: isKleinBase ? 10...60 : 2...12
-        case .qwenImage: 10...50
+        case .qwenImage, .qwenImageEdit: 10...50
         case .ltx2: 4...8
         }
     }
@@ -281,6 +287,19 @@ enum ModelCatalog {
             source: .huggingFace(repo: "mflux-community/qwen-image-2512-mflux-q4"),
             revision: "ec35d366eeb701838007c1720c3d80f2f7fbf9f4",
             sizeBytes: 27_605_801_473,
+            license: "Apache 2.0",
+            recommendedMemoryGB: 32,
+            isBuiltIn: true
+        ),
+        // Qwen-Image-Edit 2511: the transformer in 4 bits, Qwen2.5-VL in bf16 with its vision
+        // tower, which reads the reference picture into the prompt.
+        ModelDescriptor(
+            name: "Qwen-Image Edit 2511 · 32 GB RAM",
+            detail: "Alibaba's 20B editor: changes the reference picture as the prompt says and keeps the rest. Thorough but slow: 20 steps.",
+            family: .qwenImageEdit,
+            source: .huggingFace(repo: "mflux-community/qwen-image-edit-2511-mflux-q4"),
+            revision: "720ad94d982b3dc22f9122ee96af31221d542d47",
+            sizeBytes: 28_958_972_495,
             license: "Apache 2.0",
             recommendedMemoryGB: 32,
             isBuiltIn: true

@@ -221,22 +221,24 @@ struct QwenImageRope {
 
     /// The image grid `height` × `width` (one frame) and `textLength` text tokens.
     func callAsFunction(height: Int, width: Int, textLength: Int) -> (imageCos: MLXArray, imageSin: MLXArray, textCos: MLXArray, textSin: MLXArray) {
-        // Frame axis: position 0 for every token; height and width: from −(n − n/2) to n/2 − 1.
-        let (frameCos, frameSin) = table(positions: [0], dim: axesDim[0])
-        let (heightCos, heightSin) = table(positions: (0 ..< height).map { Float($0 - (height - height / 2)) }, dim: axesDim[1])
-        let (widthCos, widthSin) = table(positions: (0 ..< width).map { Float($0 - (width - width / 2)) }, dim: axesDim[2])
-        let count = height * width
-        let frameC = broadcast(frameCos, to: [count, axesDim[0] / 2])
-        let frameS = broadcast(frameSin, to: [count, axesDim[0] / 2])
-        let heightC = broadcast(heightCos.reshaped([height, 1, axesDim[1] / 2]), to: [height, width, axesDim[1] / 2]).reshaped([count, axesDim[1] / 2])
-        let heightS = broadcast(heightSin.reshaped([height, 1, axesDim[1] / 2]), to: [height, width, axesDim[1] / 2]).reshaped([count, axesDim[1] / 2])
-        let widthC = broadcast(widthCos.reshaped([1, width, axesDim[2] / 2]), to: [height, width, axesDim[2] / 2]).reshaped([count, axesDim[2] / 2])
-        let widthS = broadcast(widthSin.reshaped([1, width, axesDim[2] / 2]), to: [height, width, axesDim[2] / 2]).reshaped([count, axesDim[2] / 2])
-        let imageCos = concatenated([frameC, heightC, widthC], axis: -1)
-        let imageSin = concatenated([frameS, heightS, widthS], axis: -1)
+        callAsFunction(grids: [(height, width)], textLength: textLength)
+    }
 
-        // Text: the same position on all three axes, from max(h/2, w/2).
-        let start = max(height / 2, width / 2)
+    /// Several image grids one after the other (an edit's image, then its pictures), the `i`-th at
+    /// frame position `i`, and `textLength` text tokens.
+    func callAsFunction(grids: [(height: Int, width: Int)], textLength: Int) -> (imageCos: MLXArray, imageSin: MLXArray, textCos: MLXArray, textSin: MLXArray) {
+        var cosParts: [MLXArray] = []
+        var sinParts: [MLXArray] = []
+        for (frame, grid) in grids.enumerated() {
+            let (c, s) = gridTable(frame: frame, height: grid.height, width: grid.width)
+            cosParts.append(c)
+            sinParts.append(s)
+        }
+        let imageCos = cosParts.count == 1 ? cosParts[0] : concatenated(cosParts, axis: 0)
+        let imageSin = sinParts.count == 1 ? sinParts[0] : concatenated(sinParts, axis: 0)
+
+        // Text: the same position on all three axes, from the largest max(h/2, w/2).
+        let start = grids.map { max($0.height / 2, $0.width / 2) }.max() ?? 0
         let positions = (0 ..< textLength).map { Float(start + $0) }
         var textCosParts: [MLXArray] = []
         var textSinParts: [MLXArray] = []
@@ -246,6 +248,21 @@ struct QwenImageRope {
             textSinParts.append(s)
         }
         return (imageCos, imageSin, concatenated(textCosParts, axis: -1), concatenated(textSinParts, axis: -1))
+    }
+
+    /// One grid's cos and sin: frame axis at `frame`; height and width from −(n − n/2) to n/2 − 1.
+    private func gridTable(frame: Int, height: Int, width: Int) -> (MLXArray, MLXArray) {
+        let (frameCos, frameSin) = table(positions: [Float(frame)], dim: axesDim[0])
+        let (heightCos, heightSin) = table(positions: (0 ..< height).map { Float($0 - (height - height / 2)) }, dim: axesDim[1])
+        let (widthCos, widthSin) = table(positions: (0 ..< width).map { Float($0 - (width - width / 2)) }, dim: axesDim[2])
+        let count = height * width
+        let frameC = broadcast(frameCos, to: [count, axesDim[0] / 2])
+        let frameS = broadcast(frameSin, to: [count, axesDim[0] / 2])
+        let heightC = broadcast(heightCos.reshaped([height, 1, axesDim[1] / 2]), to: [height, width, axesDim[1] / 2]).reshaped([count, axesDim[1] / 2])
+        let heightS = broadcast(heightSin.reshaped([height, 1, axesDim[1] / 2]), to: [height, width, axesDim[1] / 2]).reshaped([count, axesDim[1] / 2])
+        let widthC = broadcast(widthCos.reshaped([1, width, axesDim[2] / 2]), to: [height, width, axesDim[2] / 2]).reshaped([count, axesDim[2] / 2])
+        let widthS = broadcast(widthSin.reshaped([1, width, axesDim[2] / 2]), to: [height, width, axesDim[2] / 2]).reshaped([count, axesDim[2] / 2])
+        return (concatenated([frameC, heightC, widthC], axis: -1), concatenated([frameS, heightS, widthS], axis: -1))
     }
 }
 
@@ -282,12 +299,18 @@ public final class QwenImageTransformer: Module {
     /// One pass. `latents` [B, h·w, 64] packed (float32, as mflux creates them), `prompt`
     /// [B, T, joint dim] bf16, `timestep` the step's sigma in [0, 1], the latent grid `h` × `w`.
     public func callAsFunction(latents: MLXArray, prompt: MLXArray, timestep: Float, latentHeight: Int, latentWidth: Int) -> MLXArray {
+        callAsFunction(latents: latents, prompt: prompt, timestep: timestep, grids: [(latentHeight, latentWidth)])
+    }
+
+    /// One pass over several grids of tokens in `latents`, one after the other: an edit's image,
+    /// then its pictures' latents (mflux's `cond_image_grid`). Returns a prediction for every token.
+    public func callAsFunction(latents: MLXArray, prompt: MLXArray, timestep: Float, grids: [(height: Int, width: Int)]) -> MLXArray {
         var hidden = imgIn(latents)
         let batch = hidden.shape[0]
         let timesteps = MLXArray(Array(repeating: timestep, count: batch)).asType(hidden.dtype)
         var text = txtIn(txtNorm(prompt))
         let temb = timeTextEmbed(timesteps, hiddenType: hidden.dtype)
-        let ropes = rope(height: latentHeight, width: latentWidth, textLength: prompt.shape[1])
+        let ropes = rope(grids: grids, textLength: prompt.shape[1])
         for block in transformerBlocks {
             (text, hidden) = block(
                 image: hidden, text: text, temb: temb,

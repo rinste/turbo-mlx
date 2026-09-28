@@ -1,6 +1,6 @@
 # turbo-engine
 
-The engine of Turbo MLX: the catalog's five families (four image models and LTX-2 for video) on
+The engine of Turbo MLX: the catalog's six families (five image models and LTX-2 for video) on
 [MLX Swift](https://github.com/ml-explore/mlx-swift), behind a JSON-lines protocol (below) that
 the app speaks to it; the Python engine the app used to ship, `Reference/turbo_worker.py`, speaks
 it too for the image families (see `docs/native-engine.md` for the why and the plan).
@@ -10,13 +10,16 @@ Sources/turbo-engine/         the executable: `serve` (the worker) and `verify` 
 Sources/TurboEngineCore/      protocol, mflux checkpoint loading, PNG output, the families
   Families/Family.swift       the FamilyModel protocol the engine drives, and the loader by family
   Families/Shared/            what families share: the Qwen3 prompter, the S3-DiT, the schedules,
-                              tiled VAE decoding, mixture-of-experts layers, pixels
+                              tiled VAE decoding, mixture-of-experts layers, pixels, Pillow's
+                              bicubic and Lanczos resizes
   Families/Klein/             FLUX.2 Klein: Qwen3 text encoder, FLUX.2 transformer, VAE decoder,
                               and the VAE encoder for the pictures an image is edited from
   Families/ZImage/            Z-Image Turbo: the Qwen3 encoder read in float32, the S3-DiT,
                               the 16-channel decoder
   Families/QwenImage/         Qwen-Image 2512: Qwen2.5-VL text encoder, the dual-stream
-                              transformer, the causal 3D decoder, classifier-free guidance
+                              transformer, the causal 3D decoder, classifier-free guidance; and
+                              Qwen-Image-Edit 2511: the vision tower and the VAE encoder for the
+                              picture an image is edited from
   Families/Ming/              Ming-Image: the Ling MoE encoder, the Qwen2 connector and heads,
                               the S3-DiT in bf16, the RGBA decoder
   Families/LTX/               LTX-2.3: Gemma 3 12B and the text connector, the audio–video
@@ -28,9 +31,9 @@ Fixtures/make_*_fixture.py    build the checkpoint + references `verify` compare
 Fixtures/requirements.txt     the mflux revision they (and the reference worker) run with
 Fixtures/requirements-ltx.txt the ltx-2-mlx revision the LTX-2 port follows
 Reference/turbo_worker.py     mflux behind the same protocol, to compare real images
-Licenses/                     the MIT licenses of the projects the ports follow (mflux, ltx-2-mlx,
-                              and mlx-lm with mlx-swift-lm for the mixture-of-experts layers),
-                              which the app's acknowledgements reproduce
+Licenses/                     the licenses of the projects the ports follow (mflux, ltx-2-mlx,
+                              mlx-lm with mlx-swift-lm for the mixture-of-experts layers, Pillow
+                              for its resizes), which the app's acknowledgements reproduce
 ```
 
 The modules mirror mflux's module tree name for name, so the checkpoints the app already
@@ -46,13 +49,16 @@ every tensor where its key says.
 | FLUX.2 Klein | Qwen3 (hidden states of layers 9, 18, 27), padded to 512 | FLUX.2 double/single stream; an edit adds the reference picture's tokens after the image's (t = 10), only the image's come out | FLUX.2, 32 channels; the encoder for references, in their own proportions up to ~1 MP | base checkpoints: negative space |
 | Z-Image Turbo | Qwen3 4B in float32, second-to-last state, real tokens only, thinking on | S3-DiT, tokens padded to 32 with learned pad tokens, float32 stream | FLUX.1-style, 16 channels, tiles with Save memory | off |
 | Qwen-Image 2512 | Qwen2.5-VL 7B (bf16, unquantized), the template's 34 tokens dropped | 60 dual-stream blocks, float32 stream, modulation producers at 8 bits | Wan-derived causal 3D, 16 channels, tiles | true CFG, rescaled to the conditional norm; the unconditional pass is skipped at 1 |
+| Qwen-Image-Edit 2511 | Qwen2.5-VL 7B with its vision tower: the picture at ~384 × 384 (Pillow's bicubic twice, as mflux) in 14-pixel patches, windowed attention, 2 × 2 merged; its tokens replace the placeholders of a 64-token template, everything in float32, then float16 | Qwen-Image's; the picture's latents follow the image's (frame position 1), only the image's come out | Qwen-Image's, plus the encoder for the picture at the image's size (its own proportions when they differ; Pillow's Lanczos) | as Qwen-Image, negative prompt empty |
 | Ming-Image 0.1 Design | Ling-mini-2.0 MoE (256 experts, 8 routed with group-limited top-k, bf16 router as upstream), Qwen2 connector over 256 query tokens, direct-VLM head | S3-DiT in bf16, no padding, two caption streams | Qwen VAE for RGBA, one scaling factor, tiles | zeroed conditions |
 | LTX-2.3 distilled | Gemma 3 12B (4-bit, all 49 hidden states, prompt left-padded to 1024), per-token RMS, two projections and two 8-block connectors with learnable registers | 48 audio–video blocks (4096 + 2048 wide, cross-modal attention both ways), block linears 4 or 8 bits, float32 activations | causal-3D conv VAE (non-causal decoder, 32 × 32 × 8, 128 channels), tiled over frames and pixels; audio VAE + BigVGAN vocoder with bandwidth extension to 48 kHz | none (distilled); two stages: 8 steps at half size, ×2 latent upsampler, 3 steps |
 
 Every family keeps a prompt cache and encodes the queued prompts while its text encoder is
 resident. With *Save memory*, Qwen-Image and Ming-Image release the text side once the prompts are
 encoded and reload only it when a new prompt arrives (after releasing the transformer, so the two
-are never co-resident); the other two keep everything loaded.
+are never co-resident); the other two keep everything loaded. Qwen-Image-Edit encodes its prompt
+with the picture, so at the start of each image rather than ahead for the queue, and caches the
+last few prompt–picture pairs; with *Save memory* it releases its text side the same way.
 
 ## Building
 
@@ -126,12 +132,14 @@ PY=~/.venvs/mflux/bin/python
 $PY Engine/Fixtures/make_klein_fixture.py      /tmp/fixtures/klein
 $PY Engine/Fixtures/make_zimage_fixture.py     /tmp/fixtures/zimage
 $PY Engine/Fixtures/make_qwen_image_fixture.py /tmp/fixtures/qwen-image
+$PY Engine/Fixtures/make_qwen_image_edit_fixture.py /tmp/fixtures/qwen-image-edit
 $PY Engine/Fixtures/make_ming_fixture.py       /tmp/fixtures/ming
 
 # 2. The same computations in Swift (the fixture names its family)
 build/bin/turbo-engine verify /tmp/fixtures/klein
 build/bin/turbo-engine verify /tmp/fixtures/zimage
 build/bin/turbo-engine verify /tmp/fixtures/qwen-image
+build/bin/turbo-engine verify /tmp/fixtures/qwen-image-edit
 build/bin/turbo-engine verify /tmp/fixtures/ming
 ```
 
@@ -140,7 +148,9 @@ RMS one): the text side, the initial noise for the fixture's seed, one transform
 also the unconditional one), the schedule, the whole denoising loop (guided where the family uses
 guidance), and the decode; for Klein also an edit from a reference picture (the VAE encoder, the
 picture's tokens and ids, one pass and the loop with them, its decode, and the sizes pictures of
-several shapes are encoded at). Anything above 3% fails. Identical math lands well below that; a
+several shapes are encoded at); for Qwen-Image-Edit the picture's resizes byte for byte, its
+patches, the vision tower, the prompt with the picture's tokens, the picture's latents, a pass and
+the loop over the image and the picture. Anything above 3% fails. Identical math lands well below that; a
 wrong reshape, a swapped rotary pair or a missing cast shows up as a large error at the first stage
 it touches.
 

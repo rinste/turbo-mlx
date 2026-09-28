@@ -242,11 +242,44 @@ class QwenImageFamily:
         )
 
 
+class QwenImageEditFamily:
+    """Alibaba Qwen-Image-Edit 2511: the picture in `image` changed as the prompt says (true CFG)."""
+
+    @staticmethod
+    def load(spec: dict):
+        from mflux.models.common.resolution.config_resolution import ConfigResolution
+        from mflux.models.qwen.variants.edit.qwen_image_edit import QwenImageEdit
+
+        config = ConfigResolution.resolve_restricted(None, "qwen-image-edit", model_path=spec["path"])
+        return QwenImageEdit(model_config=config, model_path=spec["path"])
+
+    @staticmethod
+    def is_cached(model, prompt: str) -> bool:
+        return True  # the prompt is encoded with the picture, inside generate_image
+
+    @staticmethod
+    def encode(model, prompt: str, spec: dict, upcoming: list[str] = ()) -> None:
+        pass
+
+    @staticmethod
+    def generate(model, p: dict):
+        return model.generate_image(
+            seed=int(p["seed"]),
+            prompt=p["prompt"],
+            image_paths=[p["image"]],
+            width=int(p["width"]),
+            height=int(p["height"]),
+            num_inference_steps=int(p["steps"]),
+            guidance=float(p["guidance"]),
+        )
+
+
 FAMILIES = {
     "ming": MingFamily,
     "z-image-turbo": ZImageTurboFamily,
     "flux2-klein": Flux2KleinFamily,
     "qwen-image": QwenImageFamily,
+    "qwen-image-edit": QwenImageEditFamily,
 }
 
 

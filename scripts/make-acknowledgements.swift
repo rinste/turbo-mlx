@@ -53,6 +53,7 @@ let ported: [(name: String, url: String, use: String)] = [
     ("ltx-2-mlx", "https://github.com/dgrauet/ltx-2-mlx", "LTX-2.3, video and sound"),
     ("mlx-lm", "https://github.com/ml-explore/mlx-lm", "the mixture-of-experts layers"),
     ("mlx-swift-lm", "https://github.com/ml-explore/mlx-swift-lm", "the mixture-of-experts layers"),
+    ("Pillow", "https://github.com/python-pillow/Pillow", "its bicubic and Lanczos resizes, for the pictures edits start from"),
 ]
 
 /// The packages a Package.resolved pins, with their licenses in `checkouts`.

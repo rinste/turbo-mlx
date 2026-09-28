@@ -60,9 +60,14 @@ enum TimeEstimate {
                     + Array(repeating: Self.attended(tokens) / 1000, count: 3)
                 decode = pixels / 1_000_000 * Double(frames)
             } else {
-                // 16 × 16 pixels per token; FLUX.2 Klein reads a reference image's tokens in every pass too.
-                let referenceTokens = model.family == .flux2Klein ? TimeEstimate.referenceTokens(reference) : 0
-                stepUnits = Array(repeating: (cfg ? 2 : 1) * Self.attended(pixels / 256 + Double(referenceTokens)) / 1000, count: max(steps, 0))
+                // 16 × 16 pixels per token; FLUX.2 Klein reads a reference image's tokens in every pass
+                // too, and Qwen-Image Edit its picture's, encoded at about the image's size.
+                let referenceTokens = switch model.family {
+                case .flux2Klein: Double(TimeEstimate.referenceTokens(reference))
+                case .qwenImageEdit: pixels / 256
+                default: 0.0
+                }
+                stepUnits = Array(repeating: (cfg ? 2 : 1) * Self.attended(pixels / 256 + referenceTokens) / 1000, count: max(steps, 0))
                 decode = pixels / 1_000_000
             }
         }
@@ -96,6 +101,8 @@ enum TimeEstimate {
         // With CFG, Ming-Image takes three times as long, not two.
         case .ming: Rates(denoise: cfg ? 4.25 : 2.75, decode: 3.1, fixed: 1.3, load: 5)
         case .qwenImage: Rates(denoise: 2.85, decode: 6.7, fixed: 3.3, load: 5)
+        // Qwen-Image's transformer over twice the tokens; reading the picture adds to the fixed part.
+        case .qwenImageEdit: Rates(denoise: 2.85, decode: 6.7, fixed: 12, load: 5)
         // The 8-bit transformer is slower: 294 s against 231 s for 5 s at 768 × 512.
         case .ltx2 where model.id.contains("q8"): Rates(denoise: 6.93, decode: 0.7, fixed: 12, load: 5)
         case .ltx2: Rates(denoise: 5.3, decode: 0.6, fixed: 12, load: 5)

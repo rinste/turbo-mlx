@@ -26,6 +26,7 @@ final class AppModel {
         case noModel
         case modelNotDownloaded
         case modelDownloading
+        case missingReference
         case emptyPrompt
 
         var hint: String {
@@ -33,6 +34,7 @@ final class AppModel {
             case .noModel: "Choose a model."
             case .modelNotDownloaded: "Download the model to get started."
             case .modelDownloading: "Waiting for the download to finish."
+            case .missingReference: "Add the picture to edit."
             case .emptyPrompt: "Write a prompt."
             }
         }
@@ -364,8 +366,14 @@ final class AppModel {
         guard let model = selectedModel else { return .noModel }
         if downloads.isDownloading(model) { return .modelDownloading }
         if !isInstalled(model) { return .modelNotDownloaded }
+        if model.family.requiresReferenceImage, !hasReferenceImage { return .missingReference }
         if settings.trimmedPrompt.isEmpty { return .emptyPrompt }
         return nil
+    }
+
+    /// The settings name a reference image whose file is still there.
+    var hasReferenceImage: Bool {
+        settings.referenceImage.map { FileManager.default.fileExists(atPath: HistoryStore.referenceURL($0).path) } ?? false
     }
 
     /// The running job first, then the queue.

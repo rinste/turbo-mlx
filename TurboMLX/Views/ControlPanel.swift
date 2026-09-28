@@ -596,7 +596,8 @@ private struct Reordering {
 
 /// The image a clip starts from, or an image is made from: dropped from Finder or from the history
 /// strip, chosen with the open panel, or picked among the generated images. A clip takes it as its
-/// first frame and the prompt says what happens next; FLUX.2 Klein changes it as the prompt says.
+/// first frame and the prompt says what happens next; FLUX.2 Klein and Qwen-Image Edit change it as
+/// the prompt says.
 private struct ReferenceImageSection: View {
     @Environment(AppModel.self) private var app
     @Binding var settings: GenerationSettings
@@ -605,6 +606,14 @@ private struct ReferenceImageSection: View {
     @State private var failure: String?
 
     private var isVideo: Bool { app.selectedModel?.family.media == .video }
+
+    private var caption: String {
+        if isVideo { return "Optional. It is fitted to the clip’s size, cropped from the middle." }
+        if app.selectedModel?.family.requiresReferenceImage == true {
+            return "Needed: the picture to edit. It keeps its own proportions, at about the new image’s size; the new image takes the format below."
+        }
+        return "Optional. It keeps its own proportions, at most about a megapixel; the new image takes the format below."
+    }
 
     var body: some View {
         Section {
@@ -656,9 +665,7 @@ private struct ReferenceImageSection: View {
             if let failure {
                 Text(failure).font(.caption).foregroundStyle(.red)
             } else {
-                Text(isVideo
-                     ? "Optional. It is fitted to the clip’s size, cropped from the middle."
-                     : "Optional. It keeps its own proportions, at most about a megapixel; the new image takes the format below.")
+                Text(caption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -899,7 +906,7 @@ private struct ParametersSection: View {
                     }
                 } label: {
                     Text("Guidance")
-                        .help(model.family == .qwenImage
+                        .help(model.family == .qwenImage || model.family == .qwenImageEdit
                               ? "How strictly to follow the prompt. 4 is the recommended value."
                               : "How strictly to follow the prompt. 1 = off; higher values double the time of each step.")
                 }
@@ -1074,6 +1081,8 @@ private struct MemoryRows: View {
             "Frees the text encoder (about 12 GB) once the prompt is read and decodes the image in tiles: about 15 GB instead of 35 GB at 1024 px. A prompt that was not in the queue yet loads it again."
         case .qwenImage:
             "Frees the text encoder (about 14 GB) once the prompt is read and decodes the image in tiles. A prompt that was not in the queue yet loads it again."
+        case .qwenImageEdit:
+            "Frees the text encoder (about 15 GB) once the prompt and the picture are read, and decodes the image in tiles. Each new prompt or picture loads it again."
         case .zImageTurbo, .flux2Klein:
             "Keeps less in memory and, where it doesn’t affect the image, decodes it in tiles."
         case .ltx2:
@@ -1177,7 +1186,7 @@ private struct GenerateBar: View {
             let percent = model.flatMap { app.downloads.active[$0.id]?.fraction }.map { " · \(Int($0 * 100))%" } ?? ""
             wideButton("Downloading\(percent)", systemImage: "arrow.down.circle") {}
                 .disabled(true)
-        case .noModel, .emptyPrompt:
+        case .noModel, .missingReference, .emptyPrompt:
             wideButton(generateTitle, systemImage: generateSymbol, note: note) {}
                 .disabled(true)
         case nil:

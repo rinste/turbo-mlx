@@ -4,7 +4,7 @@ import MLX
 /// The worker behind the JSON protocol: keeps one model loaded, generates images with phases,
 /// progress and timings, and answers `load`, `cancel` and `unload` like `turbo_worker.py`.
 public final class Engine {
-    public static let version = "0.2"
+    public static let version = "0.3"
     public static let mlxSwiftVersion = "0.31.6"
     /// Families this engine implements, as the app names them.
     public static var families: [String] { FamilyLoader.families }
