@@ -7,16 +7,6 @@ struct AppAlert: Identifiable {
     var title: String
     var message: String
     var offersLog = false
-    /// A button that opens a web page, such as a new release's.
-    var link: (title: String, url: URL)?
-
-    static func update(_ release: UpdateChecker.Release) -> AppAlert {
-        AppAlert(
-            title: "Turbo MLX \(release.version) is available",
-            message: "You have version \(UpdateChecker.currentVersion). Download the new one from its release page and put it in Applications in place of this one: images, settings and models stay.",
-            link: ("Download", release.page)
-        )
-    }
 }
 
 /// App-wide state: model catalog, generation settings, the job queue and the history.
@@ -50,7 +40,7 @@ final class AppModel {
     let backend = BackendController()
     let downloads = DownloadCenter()
     let history = HistoryStore()
-    let updates = UpdateChecker()
+    let updater = AppUpdater()
 
     private(set) var models: [ModelDescriptor]
     private(set) var installed: [String: URL] = [:]
@@ -175,7 +165,6 @@ final class AppModel {
         FolderAccess.restore()
         refreshInstalled()
         backend.ensureWorker()
-        checkForUpdatesInBackground()
     }
 
     func shutdown() {
@@ -336,34 +325,6 @@ final class AppModel {
         refreshInstalled()
         if let failure {
             alert = AppAlert(title: "Couldn’t move \(model.name) to the Trash", message: failure)
-        }
-    }
-
-    // MARK: Updates
-
-    /// Turbo MLX → Check for Updates: says what it found, "up to date" and failures included.
-    func checkForUpdates() {
-        Task {
-            do {
-                if let release = try await updates.check() {
-                    alert = .update(release)
-                } else {
-                    alert = AppAlert(title: "Turbo MLX is up to date",
-                                     message: "Version \(UpdateChecker.currentVersion) is the latest.")
-                }
-            } catch {
-                alert = AppAlert(title: "Couldn’t check for updates", message: error.localizedDescription)
-            }
-        }
-    }
-
-    /// At launch, at most once a day: a newer version is announced once, and not over another
-    /// alert; a failed check stays quiet.
-    private func checkForUpdatesInBackground() {
-        guard updates.isDue else { return }
-        Task {
-            guard let release = try? await updates.check(), alert == nil, updates.announcesOnce(release) else { return }
-            alert = .update(release)
         }
     }
 

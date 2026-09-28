@@ -81,7 +81,8 @@ private struct GenerationCommands: Commands {
 
     var body: some Commands {
         CommandGroup(after: .appInfo) {
-            Button("Check for Updates…") { model.checkForUpdates() }
+            Button("Check for Updates…") { model.updater.checkForUpdates() }
+                .disabled(!model.updater.canCheckForUpdates)
         }
         CommandGroup(replacing: .newItem) {}
 

@@ -47,9 +47,13 @@ A download resumes where it stopped, tries again by itself when the network drop
 Mac from going to sleep while it runs. *Move to Trash…*, in the ⋯ menu next to the model or in
 Settings → Models, takes a model off the disk again.
 
-Prompts, images and videos never leave the Mac. Besides the model downloads, the app only asks
-GitHub once a day whether a newer version is out (Settings → About turns that off, and Turbo MLX →
-Check for Updates asks at any time).
+New versions install themselves: once a day the app looks for one on GitHub and, when you agree,
+downloads it, checks its signature and restarts with it (Settings → About can also let it do so
+without asking, or turn the checks off; Turbo MLX → Check for Updates looks at any time). Versions
+before 1.1 only point to the download page.
+
+Prompts, images and videos never leave the Mac: besides the model downloads, the app only asks
+GitHub whether a newer version is out.
 
 ## Models
 
@@ -147,6 +151,16 @@ SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo-engine serve ──▶ 
   missing, and fails aloud when the files that arrived are not a complete model. No engine is
   needed to download. A gated or private repository uses the token the Hugging Face CLI saved
   (`hf auth login`).
+- **Updates.** [Sparkle](https://sparkle-project.org) (`Services/AppUpdater.swift`) reads the
+  `appcast.xml` attached to the latest GitHub release (`SUFeedURL` in `TurboMLX-Info.plist`). An
+  update is installed only if its EdDSA signature matches the public key in that file,
+  `SUPublicEDKey`, and it is signed with the same Developer ID; Sparkle's installer service, which
+  the sandbox lets the app reach through two `mach-lookup` exceptions in `TurboMLX.entitlements`,
+  replaces the app and relaunches it. `scripts/release.sh` writes each release's feed with
+  `scripts/make-appcast.sh`, signing it with the private key that Sparkle's `generate_keys` put in
+  the maintainer's keychain. Keep a copy of that key (`generate_keys -x <file>`, then somewhere
+  safe): an update signed with any other key is refused by every copy of the app already out there.
+  Sparkle compares build numbers, so `CURRENT_PROJECT_VERSION` must grow with every release.
 - **Sandbox.** The app runs in the App Sandbox (`TurboMLX.entitlements`): its history and
   settings live in its container, and outside it the app reaches only `~/.cache/huggingface`,
   the folder the Hugging Face CLI and mflux use by default, through an entitlement for that path
@@ -172,9 +186,11 @@ Engine/       the engine (Swift package: turbo-engine, TurboEngineCore), its fix
               mflux reference worker and the licenses of the projects its ports follow (Licenses/)
 scripts/      release.sh, embed-engine.sh, build-engine.sh, ExportOptions.plist, make-icon.swift
               (draws the app icon at every size into the asset catalog), make-acknowledgements.swift
-              (the licenses Settings → About shows: Resources/Acknowledgements.txt)
+              (the licenses Settings → About shows: Resources/Acknowledgements.txt), make-appcast.sh
+              (a release's Sparkle feed)
 TurboMLX.entitlements   the app's sandbox (the engine's: Engine/turbo-engine.entitlements)
 Signing.xcconfig        how local builds are signed (the team goes in Signing.local.xcconfig)
+TurboMLX-Info.plist     the Info.plist keys Xcode cannot generate: Sparkle's feed and public key
 ```
 
 The project uses Xcode's synchronized folders: files added under `TurboMLX/` join the target on

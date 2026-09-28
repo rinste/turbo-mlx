@@ -19,13 +19,10 @@ struct ContentView: View {
             isPresented: Binding(get: { app.alert != nil }, set: { if !$0 { app.alert = nil } }),
             presenting: app.alert
         ) { alert in
-            if let link = alert.link {
-                Button(link.title) { NSWorkspace.shared.open(link.url) }
-            }
             if alert.offersLog {
                 Button("Open Log") { openWindow(id: WindowID.log) }
             }
-            Button(alert.link == nil ? "OK" : "Later", role: .cancel) {}
+            Button("OK", role: .cancel) {}
         } message: { alert in
             Text(alert.message)
         }

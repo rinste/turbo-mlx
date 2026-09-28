@@ -1,14 +1,19 @@
 // Writes TurboMLX/Resources/Acknowledgements.txt, the licenses of the code in the app, which
 // Settings → About shows: the projects the engine's ports follow (Engine/Licenses), the engine's
-// Swift packages (Engine/Package.resolved, read from the checkouts of the engine's last build)
-// and the libraries MLX carries inside mlx-swift. The Apache License is written out once, with
-// each package's NOTICE. Run it after changing the engine's dependencies:
+// Swift packages (Engine/Package.resolved, read from the checkouts of the engine's last build),
+// the libraries MLX carries inside mlx-swift, and the app's own packages (Sparkle; the project's
+// Package.resolved, read from build/SourcePackages). The Apache License is written out once, with
+// each package's NOTICE. Run it after changing dependencies:
 //
-//   scripts/build-engine.sh && swift scripts/make-acknowledgements.swift
+//   scripts/build-engine.sh
+//   xcodebuild -resolvePackageDependencies -project TurboMLX.xcodeproj -scheme TurboMLX \
+//     -clonedSourcePackagesDirPath build/SourcePackages
+//   swift scripts/make-acknowledgements.swift
 
 import Foundation
 
 let checkouts = "build/engine/SourcePackages/checkouts"
+let appCheckouts = "build/SourcePackages/checkouts"
 let output = "TurboMLX/Resources/Acknowledgements.txt"
 
 struct Component {
@@ -50,20 +55,26 @@ let ported: [(name: String, url: String, use: String)] = [
     ("mlx-swift-lm", "https://github.com/ml-explore/mlx-swift-lm", "the mixture-of-experts layers"),
 ]
 
-// The engine's packages, as resolved.
-guard let resolvedData = FileManager.default.contents(atPath: "Engine/Package.resolved"),
-      let resolved = try? JSONSerialization.jsonObject(with: resolvedData) as? [String: Any],
-      let pins = resolved["pins"] as? [[String: Any]]
-else { fail("cannot read Engine/Package.resolved") }
-guard FileManager.default.fileExists(atPath: checkouts) else { fail("no \(checkouts): run scripts/build-engine.sh first") }
-
-var packages: [Component] = pins.map { pin in
-    let identity = pin["identity"] as? String ?? "?"
-    let location = (pin["location"] as? String ?? "").replacingOccurrences(of: ".git", with: "")
-    let version = (pin["state"] as? [String: Any])?["version"] as? String
-    return Component(name: location.split(separator: "/").last.map(String.init) ?? identity, url: location, version: version,
-                     licensePath: "\(checkouts)/\(identity)")
+/// The packages a Package.resolved pins, with their licenses in `checkouts`.
+func resolvedPackages(resolvedAt path: String, checkouts: String, hint: String) -> [Component] {
+    guard let data = FileManager.default.contents(atPath: path),
+          let resolved = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let pins = resolved["pins"] as? [[String: Any]]
+    else { fail("cannot read \(path)") }
+    guard FileManager.default.fileExists(atPath: checkouts) else { fail("no \(checkouts): \(hint)") }
+    return pins.map { pin in
+        let identity = pin["identity"] as? String ?? "?"
+        let location = (pin["location"] as? String ?? "").replacingOccurrences(of: ".git", with: "")
+        let version = (pin["state"] as? [String: Any])?["version"] as? String
+        return Component(name: location.split(separator: "/").last.map(String.init) ?? identity, url: location,
+                         version: version, licensePath: "\(checkouts)/\(identity)")
+    }
 }
+
+// The engine's packages and the app's, as resolved.
+var packages = resolvedPackages(resolvedAt: "Engine/Package.resolved", checkouts: checkouts, hint: "run scripts/build-engine.sh first")
+    + resolvedPackages(resolvedAt: "TurboMLX.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved",
+               checkouts: appCheckouts, hint: "resolve the app's packages into build/SourcePackages (see above)")
 packages.sort { $0.name.lowercased() < $1.name.lowercased() }
 
 // Inside mlx-swift: the MLX core and the libraries it compiles in.

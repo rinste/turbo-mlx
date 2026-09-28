@@ -161,10 +161,10 @@ private struct AboutSettings: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        @Bindable var updates = app.updates
+        let updater = app.updater
         Form {
             Section {
-                LabeledContent("Turbo MLX", value: UpdateChecker.currentVersion)
+                LabeledContent("Turbo MLX", value: Self.version)
                 Text("Generates images, and videos with sound, on your Mac’s GPU with MLX. Models download from Hugging Face and stay on your computer: prompts, images and videos never leave your Mac.")
                     .foregroundStyle(.secondary)
                 LabeledContent("Source code") {
@@ -172,22 +172,25 @@ private struct AboutSettings: View {
                 }
             }
             Section {
-                Toggle("Check for updates automatically", isOn: $updates.checksAutomatically)
+                Toggle("Check for updates automatically", isOn: Binding(
+                    get: { updater.checksAutomatically }, set: { updater.setChecksAutomatically($0) }))
+                Toggle("Download and install them without asking", isOn: Binding(
+                    get: { updater.installsAutomatically }, set: { updater.setInstallsAutomatically($0) }))
+                    .disabled(!updater.checksAutomatically)
                 HStack {
-                    if let newer = updates.newer {
-                        Text("Version \(newer.version) is available.")
-                        Link("Download", destination: newer.page)
-                    }
                     Spacer()
-                    Button("Check Now") { app.checkForUpdates() }
+                    Button("Check Now") { updater.checkForUpdates() }
+                        .disabled(!updater.canCheckForUpdates)
                 }
             } footer: {
-                Text("Once a day at launch, the app asks GitHub for the latest release, and nothing else.")
+                Text("Once a day the app asks GitHub for the latest release. A new version is installed only if it carries the app’s signature, and the app restarts with it; images, settings and models stay.")
                     .foregroundStyle(.secondary)
             }
+            .onAppear { updater.refresh() }
             Section("Components") {
                 LabeledContent("MLX Swift", value: "MIT · Apple")
                 LabeledContent("swift-transformers", value: "Apache 2.0 · Hugging Face")
+                LabeledContent("Sparkle", value: "MIT · the updates")
                 LabeledContent("mflux, ltx-2-mlx", value: "MIT · the references the engine follows")
                 Button("Acknowledgements…") { openWindow(id: WindowID.acknowledgements) }
             }
@@ -208,6 +211,13 @@ private struct AboutSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// "1.1 (2)": the version people see, and the build number updates are compared by.
+    private static var version: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
+        return (info?["CFBundleVersion"] as? String).map { "\(short) (\($0))" } ?? short
     }
 
     @ViewBuilder

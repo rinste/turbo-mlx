@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The keys Xcode cannot generate from build settings, merged into the Info.plist it generates:
+     Sparkle's, for the updates (Services/AppUpdater.swift). The feed is the appcast.xml attached to
+     the latest GitHub release; the public key checks the EdDSA signature scripts/release.sh gives
+     each update with the private key in the keychain. -->
+<plist version="1.0">
+<dict>
+	<key>SUFeedURL</key>
+	<string>https://github.com/rinste/turbo-mlx/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>ZX/i7/xaVLBflPcAmSB4K3d5cRn9OCZPN6ojWeAjmt0=</string>
+	<key>SUEnableInstallerLauncherService</key>
+	<true/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+</dict>
+</plist>

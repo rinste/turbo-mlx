@@ -6,14 +6,17 @@
 # by the command below, which asks for the Apple ID and the password.
 #   xcrun notarytool store-credentials turbo-mlx --team-id <team-id>
 #
-# Usage: scripts/release.sh            -> build/release/Turbo-MLX-<version>.dmg
+# Usage: scripts/release.sh            -> build/release/Turbo-MLX-<version>.dmg and appcast.xml
 #        NOTARY_PROFILE=other scripts/release.sh
 #        TEAM_ID=<team-id> scripts/release.sh   (with more than one Developer ID certificate)
 #
-# To publish a version: raise MARKETING_VERSION (and CURRENT_PROJECT_VERSION) in the project, run
-# `swift scripts/make-acknowledgements.swift` if the engine's dependencies changed, run this
-# script and attach the DMG to a GitHub release tagged with the same number (v1.1 for 1.1), not
-# a pre-release: that is the release the app's update check compares itself with.
+# To publish a version: raise MARKETING_VERSION and CURRENT_PROJECT_VERSION in the project (Sparkle
+# compares build numbers, so the second must grow with every release; the script checks it against
+# the published one), run `swift scripts/make-acknowledgements.swift` if dependencies changed, run
+# this script and attach both files to a GitHub release tagged with the same version (v1.1 for
+# 1.1), not a pre-release. Publishing it is what ships the update: the app reads the appcast.xml
+# of the latest release. Signing the feed uses Sparkle's private key in the keychain (made once
+# by generate_keys; keep a copy of it, see README).
 set -euo pipefail
 
 cd "${0:A:h}/.."
@@ -52,8 +55,9 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 
 step "Archiving (Release, Developer ID)"
+# Packages in build/SourcePackages, where make-appcast.sh finds Sparkle's signing tool.
 xcodebuild -quiet -project TurboMLX.xcodeproj -scheme TurboMLX -configuration Release \
-  -destination "generic/platform=macOS" -archivePath "$ARCHIVE" archive \
+  -destination "generic/platform=macOS" -archivePath "$ARCHIVE" -clonedSourcePackagesDirPath build/SourcePackages archive \
   CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="Developer ID Application" DEVELOPMENT_TEAM="$TEAM_ID" \
   OTHER_CODE_SIGN_FLAGS="--timestamp"
 
@@ -62,6 +66,15 @@ xcodebuild -quiet -exportArchive -archivePath "$ARCHIVE" -exportPath "$OUT/expor
   -exportOptionsPlist scripts/ExportOptions.plist
 APP="$OUT/export/Turbo MLX.app"
 VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Contents/Info.plist")
+BUILD=$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" "$APP/Contents/Info.plist")
+
+# Sparkle offers an update only when its build number is higher than the installed one.
+PUBLISHED=$(curl -fsL "https://github.com/rinste/turbo-mlx/releases/latest/download/appcast.xml" 2>/dev/null \
+  | sed -nE 's/.*<sparkle:version>([^<]+)<.*/\1/p' | head -1) || PUBLISHED=""
+if [[ "$PUBLISHED" == <-> && "$BUILD" == <-> ]] && (( BUILD <= PUBLISHED )); then
+  print -u2 "Build $BUILD is not newer than the published one ($PUBLISHED): raise CURRENT_PROJECT_VERSION."
+  exit 1
+fi
 
 step "Verifying the signature"
 codesign --verify --deep --strict --verbose=2 "$APP"
@@ -95,4 +108,7 @@ codesign --sign "Developer ID Application" --timestamp "$DMG"
 notarize "$DMG"
 xcrun stapler staple "$DMG"
 
-step "Done: $DMG"
+step "Update feed"
+scripts/make-appcast.sh "$DMG"
+
+step "Done: $DMG and $OUT/appcast.xml, for a release tagged v$VERSION"
