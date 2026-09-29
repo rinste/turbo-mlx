@@ -76,9 +76,9 @@ GitHub whether a newer version is out.
 | [FLUX.2 Klein 4B](https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4) | 24 GB | 4.6 GB | 14.1 GB | the fastest: 4 steps; edits a reference image as the prompt says · Apache 2.0 |
 | [Qwen-Image 2512](https://huggingface.co/mflux-community/qwen-image-2512-mflux-q4) | 32 GB | 27.6 GB | 21.3 GB | 20B, rich scenes and long text · 4-bit · 20 steps · Apache 2.0 |
 | [Qwen-Image Edit 2511](https://huggingface.co/mflux-community/qwen-image-edit-2511-mflux-q4) | 32 GB | 29 GB | 33 GB (672 × 880, without *Save memory*) | changes a reference picture as the prompt says and keeps the rest · 20B, 4-bit · 20 steps · Apache 2.0 |
-| [LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q4) | 32 GB | 28.5 GB | 17 GB (768 × 512, 5 s) | video with sound, from a prompt or from an image as the first frame · 22B distilled, 4-bit · 8 + 3 steps · LTX-2 Community |
-| [LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q8) | 64 GB | 37.8 GB | 38 GB (768 × 512, 5 s) | the 8-bit version, closer to the original |
-| [SeedVR2 Upscaler 3B](https://huggingface.co/numz/SeedVR2_comfyUI) | 16 GB | 7.3 GB | 10.5 GB (to 1536 × 1536), 19 GB (to 4096 × 4096) | enlarges a picture 2–4× with sharper, faithful detail, in one step, no prompt · float16 · Apache 2.0 |
+| [LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q4) | 32 GB | 28.5 GB | 18 GB (768 × 512, 5 s) | video with sound, from a prompt or from an image as the first frame · 22B distilled, 4-bit · 8 + 3 steps · LTX-2 Community |
+| [LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q8) | 64 GB | 37.8 GB | 37 GB (768 × 512, 5 s) | the 8-bit version, closer to the original |
+| [SeedVR2 Upscaler 3B](https://huggingface.co/numz/SeedVR2_comfyUI) | 16 GB | 7.3 GB | 11 GB (to 2304 × 2304), 18 GB (to 4096 × 4096) | enlarges a picture 2–4× with sharper, faithful detail, in one step, no prompt · float16 · Apache 2.0 |
 
 Measured on an M1 Max with mflux 0.20, the Python reference the native engine is checked against
 (the 8-bit Z-Image peak adds its larger weights to the measured 4-bit one). A model is listed under
@@ -86,14 +86,14 @@ the smallest common Mac memory size it peaks under 80% of. Times at 1024 × 1024
 (editing a reference image, about 40 s at 1024 × 640: its tokens join the image's), Z-Image Turbo
 4-bit ~100 s; Ming-Image takes 76 s at 1024 × 576. The model stays loaded between images. LTX-2.3 is
 measured with the native engine against dgrauet's [ltx-2-mlx](https://github.com/dgrauet/ltx-2-mlx),
-with *Save memory*: a 5-second 768 × 512 clip with sound takes about 4 minutes (231 s), a 3-second
-one from an image 137 s; the 8-bit version, without *Save memory* as on a 64 GB Mac, takes 5 minutes
-(294 s) for the same 5 seconds. Qwen-Image Edit reads the picture's tokens next to the image's in
+with *Save memory*: a 5-second 768 × 512 clip with sound takes about 3½ minutes (206 s), a 3-second
+one from an image 122 s; the 8-bit version, without *Save memory* as on a 64 GB Mac, takes
+3.6 minutes (219 s) for the same 5 seconds. Qwen-Image Edit reads the picture's tokens next to the image's in
 both passes of every step: a 672 × 880 edit in 20 steps took 12.4 minutes with mflux and about 15 with
 the native engine (measured while the Mac was busy building), whose image matched mflux's to 68 dB.
 SeedVR2 encodes and decodes the picture in tiles and runs its transformer once, attending within
-windows: 672 × 880 to 1344 × 1760 takes 34 s (mflux 51 s, peaking at 18 GB), 768 × 768 to
-2304 × 2304 75 s at 11 GB, to 4096 × 4096 about 4 minutes at 19 GB; its images match mflux's to
+windows: 672 × 880 to 1344 × 1760 takes 29 s (mflux 51 s, peaking at 18 GB), 768 × 768 to
+2304 × 2304 41 s at 11 GB, to 4096 × 4096 about 2 minutes at 18 GB; its images match mflux's to
 57–62 dB.
 
 Ming-Image comes in one version (te5): at 1024 px its memory peak is set by the DiT, which is the

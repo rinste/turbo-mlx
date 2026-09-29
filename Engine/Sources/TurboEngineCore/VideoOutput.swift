@@ -120,7 +120,7 @@ public final class VideoOutput {
                                  MLXArray.full([count, height, width, 1], values: MLXArray(UInt8(255)))], axis: -1)
         eval(bgra)
         if firstFrame == nil { firstFrame = frames[0] }
-        let bytes = bgra.asData(noCopy: false)
+        let bytes = bgra.asData(access: .copy).data
         let frameBytes = width * height * 4
         for index in 0 ..< count {
             // The sound a little ahead of this frame, then the frame once the writer takes it.

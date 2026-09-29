@@ -7,32 +7,80 @@ code refer to the files of the engine in `Engine/Sources/`.*
 
 ## Status
 
-29 September 2026: Phase 0's first item, mlx-swift 0.32.2, is being done in a session of its
-own. Nothing else has started.
+29 September 2026: Phase 0's first item and 1c are done; the rest has not started.
+
+- **mlx-swift 0.32.2**, whose MLX core is the one mflux's venv and ltx-2-mlx run, replaced 0.31.6
+  (core 0.31.1). Two deprecated calls changed (`asData(noCopy:)`), nothing else in the code. Every
+  fixture passes, and what two MLX versions used to round differently now matches the references
+  exactly: Klein's bf16 text encoder (3–4% before), Ming's text side, passes and loop (1–3%), LTX's
+  video and audio decoders in bf16 (25% and 0.6%). One stage moved the other way, within
+  tolerance: LTX's text connector, bit-identical before, is 1.5% off. Real images came closer to
+  mflux's (PSNR at 512², same prompt and seed): Klein 29 → 39 dB, Z-Image 35 → 39 dB (4-bit) and
+  38 → 44 dB (8-bit), Qwen-Image 25 → 36 dB, Qwen-Image Edit 60 dB, Ming 32 → 33 dB, SeedVR2 61 dB.
+- **What the new core cost, and 1c.** MLX 0.32.2 runs a short 3D convolution (PR 3785) as one 2D
+  convolution per kernel frame, all queued at once, each free to use Winograd with buffers for as
+  many frames as three quarters of the GPU's working set hold (`winograd_batch_step`). Faster, but
+  a still image's causal VAE did three convolutions where one suffices, and a clip's decode held
+  Winograd buffers for whole tiles three times over: SeedVR2's first upscale took twice as long
+  and peaked 6 GB higher, a 5-second LTX clip with *Save memory* peaked at 30 GB instead of 16.
+  Two changes, both in the engine: a single frame goes through one 2D convolution (1c: the
+  kernel's last frame for the Qwen-Image VAE, whose padding frames are zeros, which is bit for bit
+  what MLX computes; the kernel's frames summed for SeedVR2, whose padding repeats the frame: 60.6
+  dB from mflux against 61.4); and `turbo-engine` sets `MLX_CONV_WINOGRAD_TILE_BATCH=1` at launch,
+  one frame per Winograd step, which only a clip has more than one of.
+- **Before and after**, M1 Max 64 GB, the same requests through the protocol, one process per
+  engine (mflux 0.20 on MLX 0.32.2 for comparison; its 1024² figures are §1.4's):
+
+  | Model | Request | mlx-swift 0.31.6 | 0.32.2 | mflux |
+  |---|---|---|---|---|
+  | FLUX.2 Klein 4B q4 | 512², 4 steps | 11.2 s · 6.3 GB | 9.4 s · 6.3 GB | 11.5 s · 6.2 GB |
+  | FLUX.2 Klein 4B q4 | 1024², 4 steps | 33.9 s · 12.7 GB | 28.6 s · 12.7 GB | 29.9 s · 10.6 GB |
+  | FLUX.2 Klein 4B q4 | edit, 640 × 512 | 20.9 s · 6.6 GB | 17.4 s · 6.6 GB | |
+  | Z-Image Turbo q4 | 512², 9 steps | 21.2 s · 7.4 GB | 20.0 s · 7.4 GB | 24.6 s · 7.3 GB |
+  | Z-Image Turbo q4, Save memory | 1024², 9 steps | 95.0 s · 7.7 GB | 95.7 s · 7.7 GB | 106 s · 7.8 GB |
+  | Z-Image Turbo q8 | 512², 9 steps | 23.4 s · 12.1 GB | 22.6 s · 12.1 GB | 23.5 s · 12.0 GB |
+  | Qwen-Image 2512 q4, Save memory | 512², 10 steps, CFG | 62.8 s · 15.1 GB | 55.3 s · 16.0 GB | 65.5 s · 16.6 GB |
+  | Qwen-Image Edit 2511 q4, Save memory | 320 × 256, 3 steps | 18.6 s · 16.3 GB | 17.4 s · 16.3 GB | 19.9 s · 28.8 GB |
+  | Ming-Image te5, Save memory | 512², 12 steps | 43.9 s · 11.7 GB | 35.2 s · 11.7 GB | 40.4 s · 11.7 GB |
+  | SeedVR2 3B | 640 × 512 → 1280 × 1024 | 19.7 s · 9.8 GB | 10.4 s · 10.7 GB | 32.8 s · 17.2 GB |
+  | SeedVR2 3B | 768² → 3072² | 135.9 s · 13.2 GB | 79.5 s · 13.2 GB | |
+  | LTX-2.3 q4 | 768 × 512, 25 frames | 67.9 s · 24.8 GB | 60.4 s · 26.7 GB | |
+  | LTX-2.3 q4, Save memory | 768 × 512, 5 s | 227.4 s · 15.9 GB | 205.7 s · 18.2 GB | |
+  | LTX-2.3 q8 | 768 × 512, 5 s | 294 s · 38 GB | 218.5 s · 37.4 GB | |
+
+  Without the two changes 0.32.2 gave SeedVR2 38.1 s · 15.6 GB and the 5-second clip
+  221.6 s · 30.2 GB. The engine is now ahead of mflux on every family, so §1.4's gaps and most of
+  §8's targets are behind us; Klein's peak at 1024² is not.
+- **A lesson for the next update:** an MLX release can change the memory a model needs without
+  changing a pixel (here through a heuristic sized on the Mac's whole working set). Updating
+  mlx-swift means re-measuring the peaks, not only running `verify`: the `bench` of Phase 0 is
+  the tool for it.
 
 ## Short answer
 
 **Yes, and it already is, for the part that matters.** The native engine exists, is Swift on
 mlx-swift, runs every family of the catalog (FLUX.2 Klein, Z-Image Turbo, Qwen-Image 2512,
-Qwen-Image Edit 2511, Ming-Image, LTX-2.3), loads the mflux checkpoints without conversion, is
+Qwen-Image Edit 2511, Ming-Image, LTX-2.3, and since 3378198 the SeedVR2 upscaler), loads the mflux checkpoints without conversion, is
 checked stage by stage against mflux and ltx-2-mlx, and the app carries no Python: no
 interpreter, no venv, no `uv`. The bundle went from 77 to 41 MB.
 
 What is left, to "detach completely" and to be efficient, lies on four axes:
 
-1. **Speed.** The engine is at parity with mflux within ±10–40 % depending on the family:
-   slower on Klein (+12 % at 1024², +40 % at 512²) and Ming (+15 %), faster on Z-Image (−13 %),
-   equal on Qwen-Image and LTX. The gap does not come from Swift but from precise things in
-   the code: no `compile`, RoPE tables rebuilt at every step, a RoPE rotation spread over a
-   dozen kernels, an MLX core older than mflux's (0.31.1 against 0.32.2), a 3D decoder run on
-   a single frame. All of them fixable in Swift, with the existing `verify` as the safety net.
+1. **Speed.** *Updated 29 September:* with mlx-swift 0.32.2 and the single-frame decoders
+   (Status) the engine is faster than mflux on every family: Klein −18 % at 512² and −4 % at
+   1024², Z-Image −4 to −19 %, Qwen-Image −16 %, Qwen-Image Edit −13 %, Ming −13 %, SeedVR2 3×.
+   When this plan was written it was slower on Klein (+12 % at 1024², +40 % at 512²) and Ming
+   (+15 %). What is left in the code (no `compile`, RoPE tables rebuilt at every step, a RoPE
+   rotation spread over a dozen kernels) is now headroom below mflux rather than a gap, and
+   Klein's higher peak at 1024² remains. All of it fixable in Swift, with the existing `verify`
+   as the safety net.
 2. **Python.** It only remains outside the app: the fixture generators (`Engine/Fixtures/*.py`),
    the reference worker (`Engine/Reference/turbo_worker.py`) and, indirectly, the catalog's
    checkpoints, which are conversions made by others with Python tools. The workflow can be
    brought to a point where Python is only needed to regenerate a reference when mflux
    changes, and a Swift converter makes the app independent of other people's checkpoints too.
 3. **Dependencies.** The engine has two direct ones (mlx-swift, swift-transformers) but
-   swift-transformers brings nine more. An in-house tokenizer (BPE over `tokenizer.json`)
+   swift-transformers brings eight more. An in-house tokenizer (BPE over `tokenizer.json`)
    leaves the engine with mlx-swift alone, which is Apple's and cannot be replaced. The app has
    only Sparkle, which disappears from the App Store channel.
 4. **App Store.** Feasible. Five things block it today: the "temporary exception" entitlement
@@ -55,7 +103,7 @@ converter. Every phase leaves the app shippable.
 |---|---|---|
 | JSON-lines protocol, child process, cancel, timings | `Engine/Sources/TurboEngineCore/{Engine,Protocol}.swift`, `Sources/turbo-engine/Server.swift` | the same protocol as the old Python worker; `cancel` read on a thread of its own |
 | mflux checkpoint loading (shards, index, bits and group size inferred from the shapes, stacked experts) | `Checkpoint.swift` | no conversion |
-| Six families, module for module after mflux / ltx-2-mlx | `Families/` (~7 000 lines) | text encoders, DiTs, VAEs, schedulers, tiling, MoE, Pillow's resizes bit for bit |
+| Seven families (SeedVR2 since 3378198), module for module after mflux / ltx-2-mlx | `Families/` (~7 000 lines) | text encoders, DiTs, VAEs, schedulers, tiling, MoE, Pillow's resizes bit for bit |
 | Tokenizers | swift-transformers (`Qwen3Prompter.swift`) | Qwen2/3 BPE, Gemma; chat templates through swift-jinja with a fixed-string fallback |
 | Output | `ImageOutput.swift` (PNG through ImageIO), `VideoOutput.swift` (MP4, H.264 + AAC, through AVAssetWriter) | frames go to the writer as the decoder produces them |
 | Verification | `turbo-engine verify <fixture>` | every stage against mflux, 3 % tolerance; LTX against ltx-2-mlx on a real pack |
@@ -80,12 +128,15 @@ organized: the fixtures have to be generated locally in a venv.
 | Target | Direct | Transitive | License | For |
 |---|---|---|---|---|
 | App | Sparkle 2.10 | | MIT | updates from the GitHub feed |
-| Engine | mlx-swift 0.31.6 | (vendors MLX's C++ core and Metal kernels) | MIT (Apple) | everything; not replaceable |
-| Engine | swift-transformers 1.3.4 (`Tokenizers`) | swift-jinja, swift-huggingface, swift-collections, swift-crypto, swift-asn1, swift-numerics, yyjson, EventSource, swift-argument-parser | Apache 2.0 | the tokenizers only; its `Hub` module (network, downloads) is dead weight in an app that downloads by itself |
+| Engine | mlx-swift 0.32.2 (0.31.6 until 29 September) | (vendors MLX's C++ core and Metal kernels) | MIT (Apple) | everything; not replaceable |
+| Engine | swift-transformers 1.3.4 (`Tokenizers`) | swift-jinja, swift-huggingface, swift-collections, swift-crypto, swift-asn1, swift-numerics, yyjson, EventSource | Apache 2.0 | the tokenizers only; its `Hub` module (network, downloads) is dead weight in an app that downloads by itself |
 
-Eleven packages resolved for the engine, one of them used for a single thing.
+Ten packages resolved for the engine (eleven with mlx-swift 0.31.6, which also pulled
+swift-argument-parser), one of them used for a single thing.
 
 ### 1.4 Measured performance (M1 Max, native against mflux 0.20 / ltx-2-mlx)
+
+*As of the plan's writing, with mlx-swift 0.31.6; Status has the figures since 0.32.2.*
 
 | Model | Size | Native | Reference | Peak, native / ref. |
 |---|---|---|---|---|
@@ -127,7 +178,7 @@ In order of what it is worth.
    fuses the elementwise part; or a custom kernel through `MLXFast.metalKernel`. The Qwen3 and
    Qwen2.5 text encoders (`rotateHalf`) can use the fused `MLXFast.RoPE` as Gemma already does
    (`Gemma3TextEncoder.swift`, lines 110–112).
-4. **MLX core 0.31.1 against 0.32.2.** The engine is on mlx-swift 0.31.6 (core 0.31.1); mflux is
+4. **MLX core 0.31.1 against 0.32.2.** *Done on 29 September (see Status).* The engine is on mlx-swift 0.31.6 (core 0.31.1); mflux is
    on 0.32.2. **mlx-swift 0.32.2 exists and vendors that very core 0.32.2** (checked in the tag's
    submodule): it brings the small-depth conv3d 3× faster (MLX PR 3785, which touches the
    Qwen/Ming decoders and LTX's VAE), the kernels for M5's neural accelerators and the Metal
@@ -135,7 +186,8 @@ In order of what it is worth.
    `from: "0.31.6"`, so it is a `Package.resolved` bump. To know: in 0.32.2 the synchronous
    `Memory.withWiredLimit` is deprecated and does nothing; the wired limit goes through a
    ticket-based, asynchronous `WiredMemoryManager` (`Source/MLX/WiredMemory.swift`).
-5. **Conv3d on a single frame.** `QwenCausalConv3D` (`QwenImageVAE.swift`, lines 12–30) runs a
+5. **Conv3d on a single frame.** *Done on 29 September for Qwen-Image, Ming and SeedVR2 (see
+   Status): with MLX 0.32.2 it also cost memory.* `QwenCausalConv3D` (`QwenImageVAE.swift`, lines 12–30) runs a
    real 3D convolution on one frame preceded by two frames of zeros: the result is identical to
    a Conv2d with the kernel's last temporal slice (`weight[:, 2]`), at a third of the
    multiplications. Today it also goes through core 0.31's slow path. A still-image decoder
@@ -298,7 +350,8 @@ hand to measure.
 ### Phase 0 — Measure and update (days)
 
 - mlx-swift → 0.32.2 (`Package.resolved`); rebuild; `verify` on the six fixtures; re-measure
-  the table of §1.4. The cheapest item with the most likely return (decoders, M5). *Under way.*
+  the table of §1.4. The cheapest item with the most likely return (decoders, M5). *Done (29
+  September): the results are under Status.*
 - `turbo-engine bench`: the catalog × 3 sizes × fixed prompts and seeds, seconds per phase and
   peak, in a table in `docs/`. The performance document has asked for it since September.
 - One Metal System Trace (Instruments) per family: the top kernels and the gaps between them
@@ -310,7 +363,7 @@ Gate: `verify` green on every family; a before/after table.
 
 a. RoPE tables per shape, computed once per generation (Klein, Qwen-Image, LTX).
 b. A fused RoPE rotation or `compile` of the step (Klein, Z-Image); measured on M1/M2 base too.
-c. The Qwen/Ming single-frame decoder with Conv2d (exact).
+c. The Qwen/Ming single-frame decoder with Conv2d (exact). *Done (29 September), SeedVR2's too.*
 d. Fused SDPA in the VAE mid block.
 e. GQA without `repeated` in the text encoders.
 f. A wired limit for the length of the generation + predicted peak and refusal.
@@ -385,14 +438,14 @@ then Z-Image and Qwen-Image; LoRA merging; "Add Model…" from original reposito
 
 | Metric | Today | Target | From |
 |---|---|---|---|
-| Klein 4B q4, 1024² | 33.4 s | ≤ 30 s | Phases 0–1 |
-| Klein 4B q4, 512² | 15.0 s | ≤ 11 s | Phase 1 (overhead) |
+| Klein 4B q4, 1024² | 33.4 s (28.6 s on 29 Sep) | ≤ 30 s | Phases 0–1 |
+| Klein 4B q4, 512² | 15.0 s (9.4 s on 29 Sep) | ≤ 11 s | Phase 1 (overhead) |
 | Z-Image q4, 1024², Save memory | 92 s | 65–70 s | Phase 3 (bf16) |
 | Qwen-Image q4, 1024², Save memory | 589 s | 60–90 s with Lightning; ~450 s with bf16 | Phases 3 and 6 |
 | Ming te5, 1024 × 576 | 76 s (mflux) | ≤ 76 s | Phase 1 |
-| Qwen / Ming decode | 6.7 / 3.1 s per MP | −30–50 % | Phase 1 (c, d) |
+| Qwen / Ming decode | 6.7 / 3.1 s per MP (about half on 29 Sep, 1c) | −30–50 % | Phase 1 (c, d) |
 | Klein peak, 1024² | 12.7 GB | ≤ 10.6 GB | Phases 0–1 |
-| Engine packages | 11 | 1 (mlx-swift) | Phase 5 |
+| Engine packages | 11 (10 since mlx-swift 0.32.2) | 1 (mlx-swift) | Phase 5 |
 | Python in the workflow | fixtures and reference, locally | only to regenerate a reference | Phase 4 |
 | App Store channel | none | an App Store target + TestFlight | Phase 2 |
 

@@ -101,22 +101,27 @@ enum TimeEstimate {
         }
     }
 
-    /// The native engine on an M1 Max (32 GPU cores), from the generations made while building it.
+    /// The native engine on an M1 Max (32 GPU cores), from the generations made while building it,
+    /// scaled on 29 September 2026 by what mlx-swift 0.32.2 changed in the same requests (Klein's
+    /// and Ming's steps 16% faster, the Qwen-Image and Ming decoders twice as fast, LTX's decoder
+    /// too, SeedVR2's encode and decode two to three times).
     private static func reference(_ model: ModelDescriptor, cfg: Bool) -> Rates {
         switch model.family {
-        case .flux2Klein: Rates(denoise: 1.86, decode: 1.2, fixed: 0.8, load: 3)
+        case .flux2Klein: Rates(denoise: 1.56, decode: 1.2, fixed: 0.8, load: 3)
         case .zImageTurbo: Rates(denoise: 2.5, decode: 1, fixed: 0.5, load: 3)
         // With CFG, Ming-Image takes three times as long, not two.
-        case .ming: Rates(denoise: cfg ? 4.25 : 2.75, decode: 3.1, fixed: 1.3, load: 5)
-        case .qwenImage: Rates(denoise: 2.85, decode: 6.7, fixed: 3.3, load: 5)
+        case .ming: Rates(denoise: cfg ? 3.55 : 2.3, decode: 2, fixed: 1.3, load: 5)
+        case .qwenImage: Rates(denoise: 2.5, decode: 3.4, fixed: 3.3, load: 5)
         // Qwen-Image's transformer over the image's and the picture's tokens: 745 s for 672 × 880 in
         // 20 steps (mflux; the native engine matched it at 336 × 432), reading the picture ~4 s.
-        case .qwenImageEdit: Rates(denoise: 3.4, decode: 6.7, fixed: 5, load: 5)
-        // The 8-bit transformer is slower: 294 s against 231 s for 5 s at 768 × 512.
-        case .ltx2 where model.id.contains("q8"): Rates(denoise: 6.93, decode: 0.7, fixed: 12, load: 5)
-        case .ltx2: Rates(denoise: 5.3, decode: 0.6, fixed: 12, load: 5)
-        // 1376 × 768 in 18 s, 1344 × 1760 in 34 s (encode and decode 14 and 25 s of it).
-        case .seedVR2: Rates(denoise: 0.97, decode: 8.3, fixed: 5.7, load: 3)
+        case .qwenImageEdit: Rates(denoise: 3.2, decode: 3.4, fixed: 5, load: 5)
+        // The 8-bit transformer is as fast as the 4-bit one since mlx-swift 0.32.2: 5 s at
+        // 768 × 512 in 219 s without Save memory, against 206 s with it for the 4-bit one.
+        case .ltx2 where model.id.contains("q8"): Rates(denoise: 5.4, decode: 0.28, fixed: 12, load: 5)
+        case .ltx2: Rates(denoise: 5.3, decode: 0.28, fixed: 12, load: 5)
+        // 1280 × 1024 in 10 s, 2304 × 2304 in 41 s, 4096 × 4096 in 125 s (encode and decode 5, 20
+        // and 62 s of it).
+        case .seedVR2: Rates(denoise: 0.97, decode: 4, fixed: 1, load: 3)
         }
     }
 

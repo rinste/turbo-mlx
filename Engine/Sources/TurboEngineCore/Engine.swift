@@ -5,7 +5,7 @@ import MLX
 /// progress and timings, and answers `load`, `cancel` and `unload` like `turbo_worker.py`.
 public final class Engine {
     public static let version = "0.3"
-    public static let mlxSwiftVersion = "0.31.6"
+    public static let mlxSwiftVersion = "0.32.2"
     /// Families this engine implements, as the app names them.
     public static var families: [String] { FamilyLoader.families }
 

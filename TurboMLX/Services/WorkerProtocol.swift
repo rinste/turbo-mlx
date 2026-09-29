@@ -42,7 +42,7 @@ nonisolated struct WorkerEvent: Decodable, Sendable {
 nonisolated struct BackendInfo: Equatable, Sendable {
     /// "turbo-engine 0.2".
     var engine: String
-    /// "mlx-swift 0.31.6".
+    /// "mlx-swift 0.32.2".
     var mlx: String
     var device: String
     var memory: Int64

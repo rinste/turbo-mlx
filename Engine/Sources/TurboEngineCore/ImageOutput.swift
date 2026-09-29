@@ -26,7 +26,7 @@ public enum ImageOutput {
             throw OutputError.unsupportedShape(pixels.shape)
         }
         let (height, width, channels) = (pixels.shape[0], pixels.shape[1], pixels.shape[2])
-        let data = pixels.asData(noCopy: false)
+        let data = pixels.asData(access: .copy).data
         guard let provider = CGDataProvider(data: data as CFData) else { throw OutputError.cannotCreateImage }
         let alpha: CGImageAlphaInfo = channels == 4 ? .last : .none
         guard let image = CGImage(

@@ -70,8 +70,8 @@ enum VerifySeedVR2 {
         ok = Verify.report("pixels", got: Pixels.toPixels(correctedArray), want: try reference("pixels")) && ok
 
         // 7. The whole upscale from the picture, as the app runs it. The encode's and decode's
-        // bfloat16 rounding (MLX 0.31 here, 0.32 in mflux) goes through the random weights and the
-        // histogram match, so a few pixels move: shown, with the PSNR, but the stages above decide.
+        // bfloat16 rounding goes through the random weights and the histogram match, so a few
+        // pixels move: shown, with the PSNR, but the stages above decide.
         let image = try model.upscale(picture: picture, width: width, height: height, softness: 0, seed: seed,
                                       phase: { _ in }, progress: { _, _ in }, isCancelled: { false })
         _ = Verify.report("whole upscale", got: image.pixels, want: try reference("pixels"), counts: false)

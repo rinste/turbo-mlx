@@ -106,6 +106,17 @@ var text = """
 for project in ported {
     text += "  \(project.name): \(project.use)\n    \(project.url)\n"
 }
+// Data rather than code: the engine's resource bundle carries SeedVR2's text embedding, which is
+// under the Apache License (listed with the packages that use it below).
+text += """
+
+    The engine contains SeedVR2's fixed text embedding (pos_emb), from
+    ByteDance's SeedVR2 under the Apache License 2.0, as mflux ships it:
+
+      SeedVR2
+        https://github.com/ByteDance-Seed/SeedVR
+
+    """
 text += "\nThe app contains these libraries:\n\n"
 for component in packages + bundled {
     text += "  \(component.name)\(component.version.map { " \($0)" } ?? "")\n    \(component.url)\n"
@@ -152,8 +163,10 @@ let rule = String(repeating: "=", count: 80)
 for (name, license) in sections {
     text += "\n\(rule)\n\(name)\n\(rule)\n\n\(license)\n"
 }
+apacheUsers.append("SeedVR2's text embedding")
 if let apacheText {
-    let users = wrap(("The license of " + apacheUsers.joined(separator: ", ") + ":").split(separator: " ").map(String.init))
+    let list = apacheUsers.dropLast().joined(separator: ", ") + ", and " + apacheUsers[apacheUsers.count - 1]
+    let users = wrap(("The license of " + list + ":").split(separator: " ").map(String.init))
     text += "\n\(rule)\nApache License 2.0\n\(rule)\n\n\(users)\n\n\(apacheText)\n"
 }
 for (name, notice) in notices {

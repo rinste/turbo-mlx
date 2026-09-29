@@ -12,7 +12,7 @@ let package = Package(
         .library(name: "TurboEngineCore", targets: ["TurboEngineCore"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.31.6"),
+        .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.32.2"),
         .package(url: "https://github.com/huggingface/swift-transformers", from: "1.3.4"),
     ],
     targets: [

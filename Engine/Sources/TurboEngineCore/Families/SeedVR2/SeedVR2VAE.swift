@@ -36,13 +36,28 @@ final class SeedVR2CausalConv3d: Module {
         var temporalPadding = padding.t
         if kernel.t > 1 {
             let causalPad = usePaddingCausal ? 2 * padding.t : kernel.t - 1
+            if x.shape[1] == 1 && causalPad == kernel.t - 1 {
+                // A still image: every frame the kernel sees is the picture repeated, so this is
+                // one 2D convolution with the kernel's frames added up (in float32, the precision
+                // the convolution runs in). A third of the work, and none of the buffers of the
+                // three per-frame convolutions MLX (0.32) would split the 3D one into.
+                return singleFrame(x, weight.asType(.float32).sum(axis: 1))
+            }
             if causalPad > 0 {
                 x = concatenated([repeated(x[0..., 0 ..< 1], count: causalPad, axis: 1), x], axis: 1)
             }
             temporalPadding = 0
+        } else if x.shape[1] == 1 && padding.t == 0 {
+            return singleFrame(x, weight[0..., 0])
         }
         let out = convGeneral(x, weight, strides: [stride.t, stride.h, stride.w], padding: [temporalPadding, padding.h, padding.w])
         return out + bias
+    }
+
+    /// The convolution of one frame, [B, 1, H, W, C], with a 2D kernel [O, kh, kw, C].
+    private func singleFrame(_ x: MLXArray, _ weight: MLXArray) -> MLXArray {
+        let out = convGeneral(x.squeezed(axis: 1), weight, strides: [stride.h, stride.w], padding: [padding.h, padding.w])
+        return expandedDimensions(out + bias, axis: 1)
     }
 }
 

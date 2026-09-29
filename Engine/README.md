@@ -74,7 +74,7 @@ last few prompt–picture pairs; with *Save memory* it releases its text side th
 
 ## Building
 
-Requires Xcode 26 (mlx-swift 0.31.6 asks for a Swift 6.3 toolchain) and a Mac with Apple silicon.
+Requires Xcode 26 (mlx-swift 0.32.2 asks for a Swift 6.3 toolchain) and a Mac with Apple silicon.
 `swift build` alone does not compile mlx-swift's Metal shaders on macOS; use Xcode or `xcodebuild`
 (from `Engine/`, with `-skipPackagePluginValidation` for mlx-swift's package plug-in).
 
@@ -117,11 +117,14 @@ decoders and the vocoder. Three stages are shown but do not decide, for the reas
 gives: Gemma's deeper states and the contexts they lead to carry bfloat16 rounding through 48
 layers; the first stage's loop moves a bfloat16 latent by about one unit of its last place at each
 early step, so two correct loops end a percent apart; and the video encoder and decoder, whose
-bfloat16 convolutions follow MLX's conv3d, which changed between mlx-swift's MLX (0.31) and the
-reference's (0.32.2). The encoder and decoder are therefore also compared in float32, where they
-match within 1e-4 (the generator writes those references too, from the reference's modules with
-upcast weights, next to Gemma's 49 states for the connector's check). Both packs pass, the 4-bit
-one from a prompt and from an image.
+bfloat16 convolutions follow MLX's conv3d. The encoder and decoder are therefore also compared in
+float32, where they match within 1e-4 (the generator writes those references too, from the
+reference's modules with upcast weights, next to Gemma's 49 states for the connector's check).
+Since the engine's mlx-swift carries the reference's MLX (0.32.2 on both sides, 29 September
+2026) the bfloat16 decoders match exactly as well, where MLX 0.31's conv3d left them 25% apart on
+the fixture; the text connector, bit-identical before, now differs by about 1.5% (the two builds
+of the same MLX round a kernel differently), well within the tolerance. Both packs pass, the
+4-bit one from a prompt and from an image.
 
 The whole pipeline, same prompt and seed through the app's protocol, 768 × 512 × 49 frames with
 the 4-bit pack: the same clip as the reference (PSNR 29–35 dB per frame, 32.6 on average, through
@@ -175,12 +178,14 @@ it touches.
 
 Two things to know when reading the numbers. Klein's text encoder is also run with float32
 activations, and that check decides for it: in bf16 its layers carry the rounding of MLX's
-kernels, which differ between mlx-swift's MLX (0.31) and the Python one, and the fixture's random
-weights amplify it (shown, marked "·"). Ming's router picks experts from bf16 scores, so a rounding
-difference between the two MLX versions can flip a choice; the fixture's random weights make that
-unlikely, and it would show as a large error on the caption features alone. Ming's text side and
-the start of its decode run in bf16 as well, as in mflux, and land at 2–3% on the fixture where
-the other families' stages stay under 1%.
+kernels, which the fixture's random weights amplify (shown, marked "·"). They match exactly while
+mlx-swift carries the MLX of mflux's venv (0.32.2 on both sides since 29 September 2026; with
+mlx-swift 0.31.6 they were 3–4% apart), and drift again when the two versions part. Ming's router
+picks experts from bf16 scores, so a rounding difference between two MLX versions can flip a
+choice; the fixture's random weights make that unlikely, and it would show as a large error on the
+caption features alone. Ming's text side and loop now match mflux exactly too; its decode, whose
+start runs in bf16 as in mflux, lands at 2.4% on the fixture where the other families' stages stay
+under 1%.
 
 The fixture generators are ordinary mflux code and run wherever mflux imports (they were exercised
 on a Linux CPU build of MLX while the ports were written); `verify` needs the Mac.
@@ -190,8 +195,9 @@ modules, and a published checkpoint can store a tensor in another shape (the Qwe
 are flat in the catalog's checkpoints, for one). Start `build/bin/turbo-engine serve` and
 `$PY Engine/Reference/turbo_worker.py serve`, send both the same `generate` line with the same
 checkpoint, prompt, seed and size, and compare the two PNGs: the same image, with small local
-differences from the two MLX versions' rounding (PSNR 27–35 dB at 512 × 512 for the four
-families).
+differences from bf16 rounding. On 29 September 2026, with the same MLX on both sides, at
+512 × 512: Klein 39 dB, Z-Image 39 dB (4-bit) and 44 dB (8-bit), Qwen-Image 36 dB, Ming 33 dB,
+Qwen-Image Edit 60 dB (27–35 dB before, with mlx-swift 0.31.6).
 
 A Klein edit (`params.image`, the reference picture's path) is compared the same way against
 mflux's `Flux2KleinEdit`, which the Python worker does not run. Give both an sRGB picture: the

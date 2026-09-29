@@ -21,6 +21,18 @@ final class QwenCausalConv3D: Module {
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
         var x = x
+        if x.shape[1] == 1 {
+            // A still image: the frames in front are zeros, so only the kernel's last frame
+            // meets the picture. MLX (0.32) splits a 3D convolution into one 2D convolution per
+            // kernel frame and adds them up; this is the one that is not all zeros, bit for bit,
+            // without the other two and their memory.
+            let p = padding
+            if p > 0 { x = padded(x, widths: [IntOrPair(0), IntOrPair(0), IntOrPair((p, p)), IntOrPair((p, p)), IntOrPair(0)]) }
+            let weight = conv3d.weight[0..., conv3d.weight.dim(1) - 1]
+            var y = conv2d(x.squeezed(axis: 1), weight)
+            if let bias = conv3d.bias { y = y + bias }
+            return expandedDimensions(y, axis: 1)
+        }
         if padding > 0 {
             let p = padding
             x = padded(x, widths: [IntOrPair(0), IntOrPair((2 * p, 0)), IntOrPair((p, p)), IntOrPair((p, p)), IntOrPair(0)])
