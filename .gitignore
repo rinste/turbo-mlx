@@ -17,3 +17,6 @@ __pycache__/
 
 # The signing team of this Mac (see Signing.xcconfig)
 Signing.local.xcconfig
+
+# Scripts that stay on this Mac.
+/scripts/local/

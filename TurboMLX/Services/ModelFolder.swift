@@ -1,9 +1,9 @@
 import Foundation
 import Synchronization
 
-/// Where the Hugging Face models live. By default, outside the App Store, `~/.cache/huggingface`,
+/// Where the Hugging Face models live. By default, in the GitHub build, `~/.cache/huggingface`,
 /// the folder the huggingface CLI, mflux and other tools share (the sandbox reaches it through an
-/// entitlement for that one path, TurboMLX.entitlements); in the App Store build, which may not
+/// entitlement for that one path, TurboMLX.entitlements); in the sealed build, which may not
 /// have that entitlement, a folder in the app's container. Either way the user can pick another
 /// folder (Settings → Models): the sandbox lets the app into it through the security-scoped
 /// bookmark kept here, opened at launch before the engine starts, so that the engine, a child
@@ -39,7 +39,7 @@ nonisolated enum ModelFolder {
 
     /// The default Hugging Face home for this build.
     static var defaultHome: URL {
-        #if APPSTORE
+        #if SEALED
         BackendController.supportDirectory.appending(path: "Models", directoryHint: .isDirectory)
         #else
         realHome.appending(path: ".cache/huggingface", directoryHint: .isDirectory)
@@ -93,10 +93,10 @@ nonisolated enum ModelFolder {
         prepareDefault()
     }
 
-    /// The App Store build's folder in the container, made when missing and kept out of Time
+    /// The sealed build's folder in the container, made when missing and kept out of Time
     /// Machine backups: its models are downloads.
     private static func prepareDefault() {
-        #if APPSTORE
+        #if SEALED
         var home = defaultHome
         guard !FileManager.default.fileExists(atPath: home.path) else { return }
         try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)

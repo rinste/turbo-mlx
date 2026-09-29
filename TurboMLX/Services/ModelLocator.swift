@@ -4,7 +4,7 @@ import Foundation
 /// and local folders.
 nonisolated struct ModelLocator: Sendable {
     /// The hub cache of the models folder (`ModelFolder`): by default the one the huggingface CLI,
-    /// mflux and other tools share, or the App Store build's in its container.
+    /// mflux and other tools share, or the sealed build's in its container.
     var hubCache: URL { ModelFolder.hubCache }
 
     /// The folder holding a complete copy of the model, or nil if it still has to be downloaded.

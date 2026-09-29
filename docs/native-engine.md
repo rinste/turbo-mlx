@@ -67,10 +67,10 @@ the build fails without the engine, and the app went from 77 to 41 MB. `turbo_wo
 that found the flat VAE norms), next to the fixture generators; the mflux revision both run with
 is in `Engine/Fixtures/requirements.txt`.
 
-The second half followed the same day: no Mac App Store, and the App Sandbox on, with the shared
-hub cache. The app reaches `~/.cache/huggingface` through a temporary-exception entitlement for
-that path, which the App Store would refuse but which needs no prompt and works where the folder
-does not exist yet; the engine is signed to inherit the sandbox, so it reads the models there
+The second half followed the same day: direct distribution only, and the App Sandbox on, with
+the shared hub cache. The app reaches `~/.cache/huggingface` through a temporary-exception
+entitlement for that path, which a sealed build could not have but which needs no prompt and
+works where the folder does not exist yet; the engine is signed to inherit the sandbox, so it reads the models there
 too. Local model folders are kept with security-scoped bookmarks, opened before the engine
 starts. `ShellEnvironment`'s shell probe is gone: an `HF_HOME` elsewhere is no longer followed,
 and the token comes from the file the Hugging Face CLI saves. A container migration manifest
@@ -135,8 +135,8 @@ Yes, and it is the right direction for this app, but not for the reason one migh
   first launch, uv, the private Python and the venv, the worker start-up, the login-shell
   environment probe, the PNG round trip, and Python's garbage collector standing between "free
   the text encoder" and the memory actually being freed. The app becomes one signed bundle that
-  works the moment it is opened, and becomes eligible for the Mac App Store (the current design
-  downloads and executes code, which App Store guideline 2.5.2 forbids).
+  works the moment it is opened, and can be sealed (the current design downloads and executes
+  code, which the strictest distribution rules forbid).
 - **For video it matters more than for images.** A clip is hundreds of frames plus, with LTX-2,
   an audio track: they should go from MLX arrays to an `AVAssetWriter` in the same process, not
   through files or pipes, and memory has to be steered closely enough (tiled and chunked
@@ -186,7 +186,7 @@ What is actually slow or heavy, and what would change:
 | Live preview | None: a preview per step would mean a PNG through the pipe | Cheap: decode a small preview from the latents every few steps in-process (the Swift FLUX.2 port already exposes a per-step image callback) |
 | Memory | Python process (a few hundred MB) plus MLX; freeing depends on Python's GC | MLX only; deterministic freeing; can react to macOS memory-pressure notifications |
 | Failures | A crash kills the worker; the app survives and shows the log | Same, provided the engine keeps its own process (see "The architecture"); in-process, a Metal out-of-memory is fatal |
-| Distribution | Hardened runtime, no sandbox, code downloaded at run time: not App Store eligible | Sandbox possible, App Store possible |
+| Distribution | Hardened runtime, no sandbox, code downloaded at run time: cannot be sealed | Sandbox possible, a sealed build possible |
 | Dependencies | `turbo_worker.py` imports private mflux modules (`ConfigResolution.resolve_restricted`, `QwenPromptEncoder`…) and is pinned to one commit | The pipeline is ours; new models are Swift work, not a Python adapter |
 
 ## What MLX Swift offers today
@@ -243,7 +243,7 @@ of LTX-2 (verified on GitHub; dates are last commits):
 | Qwen3, Gemma 3, Mistral 3, Qwen2.5-VL, Qwen3-VL and many more LLMs/VLMs | [mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm) 3.31.4 (Apple, MIT) | The text encoders of Z-Image, FLUX.2 Klein and Qwen-Image are models this library already runs; a diffusion pipeline needs their hidden states rather than logits, a small change. No T5 (needed only by the old LTX-Video 0.9 and FLUX.1) and no Ling MoE (Ming-Image). |
 | Tokenizers | [swift-transformers](https://github.com/huggingface/swift-transformers) 1.3.4 (Apache 2.0) | Loads `tokenizer.json` for Qwen2/3 (BPE), Gemma, T5 (Unigram). Caveat: SentencePiece's precompiled normalization is approximated. |
 | SD 2.1, SDXL Turbo | mlx-swift-examples `StableDiffusion` (Apple, MIT) | Apple's reference for a diffusion pipeline in Swift; not a model the app wants. |
-| FLUX.2 Klein 4B/9B, FLUX.2 dev | [VincentGourbin/flux-2-swift-mlx](https://github.com/VincentGourbin/flux-2-swift-mlx) (MIT, v2.1.0, 12 Sep 2026, macOS 15, pins mlx-swift 0.31.6) · [mzbac/flux2.swift](https://github.com/mzbac/flux2.swift) (Apache 2.0, Feb 2026, 5 commits) | The first is a real library (`Flux2Pipeline`: load with progress, per-step progress and preview callbacks, LoRA) behind an App Store product; it loads the original diffusers weights and quantizes at start-up (int4/8-bit, exportable), not mflux checkpoints; no cancellation API. Klein 4B transformer: 7.4 GB bf16, 2.1 GB int4; ~26–30 s at 1024² on an M2 Ultra. |
+| FLUX.2 Klein 4B/9B, FLUX.2 dev | [VincentGourbin/flux-2-swift-mlx](https://github.com/VincentGourbin/flux-2-swift-mlx) (MIT, v2.1.0, 12 Sep 2026, macOS 15, pins mlx-swift 0.31.6) · [mzbac/flux2.swift](https://github.com/mzbac/flux2.swift) (Apache 2.0, Feb 2026, 5 commits) | The first is a real library (`Flux2Pipeline`: load with progress, per-step progress and preview callbacks, LoRA) behind a commercial product; it loads the original diffusers weights and quantizes at start-up (int4/8-bit, exportable), not mflux checkpoints; no cancellation API. Klein 4B transformer: 7.4 GB bf16, 2.1 GB int4; ~26–30 s at 1024² on an M2 Ultra. |
 | Z-Image Turbo | [nanguoyu/z-image-swift-mlx](https://github.com/nanguoyu/z-image-swift-mlx) + [swift-diffusion-core](https://github.com/nanguoyu/swift-diffusion-core) (Apache 2.0, 23 Sep 2026) · [mzbac/zimage.swift](https://github.com/mzbac/zimage.swift) (MIT, Dec 2025) | The first reads mflux's numbered-shard 4-bit format directly (its own Qwen3 4B encoder; no cancellation); the core is still a scaffold, pinned to `main`. The second has progress stages and per-step cancellation (`Task.checkCancellation`), loads diffusers weights or its own 8-bit copy; M2 Ultra at 1024²: bf16 ~21 GB / 46 s, 8-bit ~7.5 GB / 44 s; its pins are stale. |
 | Qwen-Image family | [xocialize/qwen-image-edit-swift](https://github.com/xocialize/qwen-image-edit-swift) (MIT, macOS 26; Edit 2511 and NVIDIA's Qwen-Image-Flash) · `qwen-image21-swift` (Qwen-Image 2.1, a different 7 B architecture with research-only weights) · [mzbac/qwen.image.swift](https://github.com/mzbac/qwen.image.swift) (GPLv3: not usable here) | The Edit port's text-to-image path mirrors diffusers' `QwenImagePipeline`, and its weight keys are the same for Qwen-Image, Edit 2511 and Flash, so it should load the 2512 checkpoint, but nothing ships or tests that: to confirm first. Qwen2.5-VL from the same author's `qwen25vl-mlx-swift`. Flash 8-bit: 22 GB resident, 30 GB peak, 20 s for 4 steps at 1024². |
 | Ming-Image 0.1 Design / Layer | [xocialize/ming-image-swift](https://github.com/xocialize/ming-image-swift) (MIT, v0.2.0, 27 Sep 2026, macOS 26) | Its own Ling MoE encoder and Qwen2 connector; loads its own conversions (`mlx-community/Ming-Image-0.1-Design-{bf16,8bit,4bit}`, group 64), not the te5 checkpoint in the catalog. M5 Max peaks: bf16 ~50 GB, 8-bit ~28 GB, 4-bit ~20 GB (no encoder release, apparently: mflux with *Save memory* peaks at 14.7 GB); ~40 s at 1024², 12 steps. Part of `mlx-engine-swift` (one package per model, a memory governor, cooperative cancellation). |
@@ -503,7 +503,7 @@ harness exist, and the heavy image families can stay on Python meanwhile.
 
 **Phase 3 — Remove Python.** Delete `uv`, `setup_backend.sh`, `turbo_worker.py`, the install
 UI, `ShellEnvironment`'s shell probe. Turn on the App Sandbox (the shared hub cache through a
-security-scoped bookmark, or the app container: user's choice). Decide about the Mac App Store.
+security-scoped bookmark, or the app container: user's choice). Decide about a sealed build.
 
 **Phase 4 — Video.** LTX-2.3 distilled in `turbo-engine` (from the two Swift ports, gated on
 parity with the Python port), the viewer and export work from "Ready for video", memory tiers

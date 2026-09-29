@@ -1,4 +1,4 @@
-# A 100% Swift engine: efficient, with few dependencies, ready for the App Store
+# A 100% Swift engine: efficient, with few dependencies, and a sealed build
 
 *Plan, September 2026. Written from a reading of the repository at `main` f13474e (version 1.3,
 build 4); no code changed with it. The performance figures come from `README.md`,
@@ -7,33 +7,33 @@ code refer to the files of the engine in `Engine/Sources/`.*
 
 ## Status
 
-29 September 2026: Phase 0's first item and 1c are done, and the code side of Phase 2 (the App
-Store) is in the tree; the rest has not started.
+29 September 2026: Phase 0's first item and 1c are done, and the code side of Phase 2 (the
+sealed build) is in the tree; the rest has not started.
 
-- **Phase 2, what is done.** A second target, *TurboMLX App Store*, on the same synchronized
-  folder: `APPSTORE` compiles Sparkle out (`AppUpdater`, the Check for Updates menu, the Settings
-  section) and the target does not link it; `TurboMLX-AppStore.entitlements` has the sandbox,
-  network client, user-selected read-write and app-scope bookmarks, no temporary exception;
-  `TurboMLX-AppStore-Info.plist` drops Sparkle's keys and answers export compliance
-  (`ITSAppUsesNonExemptEncryption` false); its products go to `Release-AppStore`; the engine is
+- **Phase 2, what is done.** A second target, *TurboMLX Sealed* (a build that does not update
+  itself and has no sandbox exception), on the same synchronized folder: `SEALED` compiles Sparkle
+  out (`AppUpdater`, the Check for Updates menu, the Settings section) and the target does not
+  link it; `TurboMLX-Sealed.entitlements` has the sandbox, network client, user-selected
+  read-write and app-scope bookmarks, no temporary exception; `TurboMLX-Sealed-Info.plist` drops
+  Sparkle's keys and answers export compliance (`ITSAppUsesNonExemptEncryption` false); its
+  products go to `Release-Sealed`; the engine is
   signed with the identifier `<bundle id>.turbo-engine` (`TURBO_MLX_CHANNEL`). Models live in
   `ModelFolder`: by default `~/.cache/huggingface` in the GitHub build and the container's
-  `Application Support/TurboMLX/Models` (out of Time Machine) in the App Store one, and in both a
+  `Application Support/TurboMLX/Models` (out of Time Machine) in the sealed one, and in both a
   folder the user picks in Settings → Models, kept as a security-scoped bookmark opened before the
   engine starts (a Hugging Face home or a hub itself; the engine restarts to inherit it). The
   token: `HF_TOKEN`, else the keychain (Settings → Models), else, GitHub build only, the CLI's
   file. `Resources/PrivacyInfo.xcprivacy` declares no tracking, no data collected, and the reasons
   for UserDefaults (CA92.1), file dates (C617.1, 3B52.1) and disk space (E174.1, 85F4.1).
-  `scripts/release-appstore.sh` archives, checks (no Sparkle, no temporary exception, the engine
-  inherits the sandbox, the manifest is there) and exports the installer package; `--upload`
-  sends it with an App Store Connect API key. Checked: both targets build; the App Store build,
+  A release script for the sealed build, kept out of the repository, archives it, checks it (no
+  Sparkle, no temporary exception, the engine inherits the sandbox, the manifest is there),
+  exports the installer package and uploads it. Checked: both targets build; the sealed build,
   run sandboxed under a test bundle ID, starts its engine, makes its models folder in the
   container, excluded from backups, with no sandbox denial; the GitHub build is unchanged by
   default.
-- **Phase 2, what is left.** For the account holder: the Apple Distribution and Mac Installer
-  Distribution certificates, the App ID, a Mac App Store provisioning profile, the app's record and
-  an API key (the script's header lists them), then a TestFlight build on a clean Mac and the
-  submission. In the code: the predicted peak and its refusal (1f, below), and a visual check of
+- **Phase 2, what is left.** For the account holder: the certificates, identifier,
+  provisioning profile, record and API key the sealed channel needs (the release script's header
+  lists them), then a beta build on a clean Mac and the submission. In the code: the predicted peak and its refusal (1f, below), and a visual check of
   the two new Settings sections and of a folder chosen through the open panel with the engine
   reading from it. Worth deciding before submitting: machine-readable marking of generated media
   (IPTC `DigitalSourceType` `trainedAlgorithmicMedia` in the PNG and MP4 metadata), which Article
@@ -113,16 +113,17 @@ What is left, to "detach completely" and to be efficient, lies on four axes:
 3. **Dependencies.** The engine has two direct ones (mlx-swift, swift-transformers) but
    swift-transformers brings eight more. An in-house tokenizer (BPE over `tokenizer.json`)
    leaves the engine with mlx-swift alone, which is Apple's and cannot be replaced. The app has
-   only Sparkle, which disappears from the App Store channel.
-4. **App Store.** Feasible. Five things block it today: the "temporary exception" entitlement
-   for `~/.cache/huggingface`, Sparkle (and its two mach-lookup exceptions), the Hugging Face
-   token read from disk, the missing privacy manifest, and a memory handling that lets
-   generations start when they do not fit in RAM. None of them needs a change of architecture:
-   the sandboxed child process (`turbo-engine` in `Contents/MacOS`, `inherit` entitlement) is
-   the form Apple prescribes for a helper.
+   only Sparkle, which the sealed build leaves out.
+4. **A sealed build**, which does not update itself and has no sandbox exception, as some
+   distribution channels require. Feasible. Five things block it today: the "temporary
+   exception" entitlement for `~/.cache/huggingface`, Sparkle (and its two mach-lookup
+   exceptions), the Hugging Face token read from disk, the missing privacy manifest, and a
+   memory handling that lets generations start when they do not fit in RAM. None of them needs
+   a change of architecture: the sandboxed child process (`turbo-engine` in `Contents/MacOS`,
+   `inherit` entitlement) is the form Apple prescribes for a helper.
 
 Recommended order: measure and update MLX (days) → efficiency without changing pixels (1–2
-weeks) → App Store (1–2 weeks, app side, can run in parallel) → speed that changes pixels, as
+weeks) → the sealed build (1–2 weeks, app side, can run in parallel) → speed that changes pixels, as
 options (bf16, Lightning, live preview) → verification without Python → dependency diet →
 converter. Every phase leaves the app shippable.
 
@@ -243,7 +244,7 @@ In order of what it is worth.
    takes 60 (`docs/generation-performance.md`, §7). And today the app lets a Qwen-Image at
    2048² start on a 16 GB Mac: the engine dies of a Metal OOM (fatal, in either language) and
    the app reports it. The catalog's measured peaks scale with the pixels: a generation can be
-   refused before it starts. App Store review needs this too.
+   refused before it starts. A review of the sealed build would need this too.
 10. **Klein's higher peak** (12.7 against 10.6 GB): hypotheses to measure with
     `Memory.snapshot()` per phase: the default `cacheLimit` (unchanged outside Save memory),
     the float32 temporaries of the RoPE, the absence of `compile`.
@@ -316,7 +317,7 @@ quantizer → equality expected (at most rounding differences between MLX versio
 Order: Klein and Z-Image (keys close to diffusers), then Qwen-Image, last Ming (MoE, connector,
 a conversion with choices of its own) and LTX (dgrauet's packs have a layout of their own).
 
-### 3.3 Dependencies: an in-house tokenizer, Sparkle only outside the App Store
+### 3.3 Dependencies: an in-house tokenizer, Sparkle only in the GitHub build
 
 swift-transformers is used for one thing: `AutoTokenizer.from(modelFolder:)` and
 `applyChatTemplate`. An in-house tokenizer that reads `tokenizer.json`:
@@ -336,7 +337,7 @@ that talks to the GPU. It is the least urgent item for the end user and the most
 with "few external dependencies"; if the week is not worth it, a pinned swift-transformers is
 acceptable.
 
-Sparkle stays in the GitHub channel and leaves the App Store channel (§5).
+Sparkle stays in the GitHub channel and leaves the sealed one (§5).
 
 ## 4. Architecture: a separate process, confirmed
 
@@ -344,7 +345,7 @@ Sparkle stays in the GitHub channel and leaves the App Store channel (§5).
 process; an engine of 6–22 billion parameters near the memory ceiling will meet it; today the
 engine dies, the app survives and shows the log. In-process would lose all that for a gain the
 code does not justify (the PNG round trip is under a second). The sandboxed child process is
-also the form the App Store prescribes for a helper (see §5).
+also the form Apple prescribes for a helper in a sealed app (see §5).
 
 A possible refinement, not a necessary one: an XPC service (`Contents/XPCServices`) with a typed
 protocol and a lifecycle managed by launchd. It can come later, without touching the families.
@@ -354,20 +355,20 @@ the engine is synchronous on one thread (`Server.run` → `Engine.generate`). Ei
 is held on a `Task` for the length of the generation, or the C API is called through `Cmlx`.
 To decide when updating.
 
-## 5. App Store: what changes
+## 5. The sealed build: what changes
 
 | Blocker | Today | What to do |
 |---|---|---|
-| The `temporary-exception.files.home-relative-path.read-write` entitlement for `~/.cache` (`TurboMLX.entitlements`); the README says it: "Direct distribution only". *Done (29 Sep): `ModelFolder`, see Status.* | the models live in `~/.cache/huggingface/hub`, shared with mflux | Models in the container by default (`…/Application Support/TurboMLX/Models/hub`, the same hub layout: `ModelLocator` and `HubDownloader` do not change, only `huggingFaceHome` does; exclude the folder from Time Machine). An optional shared folder the user picks with `NSOpenPanel` + a security-scoped bookmark (`FolderAccess` exists already; it needs `files.user-selected.read-write`), which covers whoever wants to share with mflux: the user can pick `~/.cache/huggingface` itself. Migration: on first launch, offer to move or to reuse the existing downloads. |
+| The `temporary-exception.files.home-relative-path.read-write` entitlement for `~/.cache` (`TurboMLX.entitlements`), which a sealed build cannot have. *Done (29 Sep): `ModelFolder`, see Status.* | the models live in `~/.cache/huggingface/hub`, shared with mflux | Models in the container by default (`…/Application Support/TurboMLX/Models/hub`, the same hub layout: `ModelLocator` and `HubDownloader` do not change, only `huggingFaceHome` does; exclude the folder from Time Machine). An optional shared folder the user picks with `NSOpenPanel` + a security-scoped bookmark (`FolderAccess` exists already; it needs `files.user-selected.read-write`), which covers whoever wants to share with mflux: the user can pick `~/.cache/huggingface` itself. Migration: on first launch, offer to move or to reuse the existing downloads. |
 | The Hugging Face token read from `~/.cache/huggingface/token` and from the environment (`HubDownloader.storedToken`). *Done (29 Sep): `HuggingFaceToken`.* | | A field in Settings, stored in the Keychain; `HF_TOKEN` stays as an override for development. |
-| Sparkle: self-updating is not allowed in the App Store; two `temporary-exception.mach-lookup` entitlements; `SUFeedURL`/`SUPublicEDKey` in `TurboMLX-Info.plist`. *Done (29 Sep): the "TurboMLX App Store" target.* | `AppUpdater.swift`, the "Check for Updates…" menu, Settings → About | A second Xcode target ("Turbo MLX App Store") on the same synchronized folders, without the Sparkle product linked, with entitlements and Info.plist of its own and `SWIFT_ACTIVE_COMPILATION_CONDITIONS = APPSTORE`; `#if !APPSTORE` around `AppUpdater`, the menu and the Settings section. The GitHub channel stays as it is; `release.sh` learns an `-exportOptionsPlist` with `method = app-store-connect`. |
-| The `turbo-engine` helper | `Contents/MacOS`, entitlements `app-sandbox` + `inherit` (`Engine/turbo-engine.entitlements`) | Already compliant: Apple asks that a helper have only those two entitlements. Signed "Apple Distribution" with the app's profile from the Xcode archive. To be checked early with a TestFlight for Mac build. |
+| Sparkle: a sealed build does not update itself; two `temporary-exception.mach-lookup` entitlements; `SUFeedURL`/`SUPublicEDKey` in `TurboMLX-Info.plist`. *Done (29 Sep): the "TurboMLX Sealed" target.* | `AppUpdater.swift`, the "Check for Updates…" menu, Settings → About | A second Xcode target ("TurboMLX Sealed") on the same synchronized folders, without the Sparkle product linked, with entitlements and Info.plist of its own and `SWIFT_ACTIVE_COMPILATION_CONDITIONS = SEALED`; `#if !SEALED` around `AppUpdater`, the menu and the Settings section. The GitHub channel stays as it is; the sealed build gets a release script of its own. |
+| The `turbo-engine` helper | `Contents/MacOS`, entitlements `app-sandbox` + `inherit` (`Engine/turbo-engine.entitlements`) | Already compliant: Apple asks that a helper have only those two entitlements. Signed with the channel's certificate and the app's profile from the Xcode archive. To be checked early with a beta build. |
 | Privacy manifest | missing. *Done (29 Sep).* | `PrivacyInfo.xcprivacy` with the "required reason APIs" in use: `UserDefaults` (CA92.1), file dates (`ModelLocator`: `.contentModificationDateKey`; `QwenImageEditPipeline.pictureKey`: `attributesOfItem` → C617.1 / 3B52.1), disk space (`DownloadCenter.checkSpace`: `.volumeAvailableCapacityForImportantUsage` → E174.1 / 85F4.1). No tracking, no data collection. Codes to confirm against Apple's list at the time. |
-| Memory and review | the engine dies when memory runs out; the app says so | A predicted peak before starting (the catalog's peaks × pixels, per family) → a refusal with a clear message; the requirements stated on the store page; the 16 GB model (Z-Image q4) is there already. A reviewer on an 8–16 GB Mac must be able to generate something on first launch. |
-| Architecture | arm64 | Fine: the App Store accepts Apple-silicon-only apps (Intel Macs do not see it). |
-| 5–38 GB downloads | | They are data, not code (2.5.2 is about executable code). Draw Things is the precedent: it downloads models into its container. The space needed is already shown. |
-| Generated content | | Describe the use on the store page; the models' licenses are already in About (the LTX-2 Community license has use restrictions that bind the outputs too: to be said). |
-| Build number | `CURRENT_PROJECT_VERSION` grows for Sparkle | Holds for App Store Connect as well. |
+| Memory and review | the engine dies when memory runs out; the app says so | A predicted peak before starting (the catalog's peaks × pixels, per family) → a refusal with a clear message; the requirements stated on the product page; the 16 GB model (Z-Image q4) is there already. A reviewer on an 8–16 GB Mac must be able to generate something on first launch. |
+| Architecture | arm64 | Fine: Apple-silicon-only apps are accepted (Intel Macs do not see them). |
+| 5–38 GB downloads | | They are data, not code (the rules are about executable code). Apps that download models into their container already exist. The space needed is already shown. |
+| Generated content | | Describe the use on the product page; the models' licenses are already in About (the LTX-2 Community license has use restrictions that bind the outputs too: to be said). |
+| Build number | `CURRENT_PROJECT_VERSION` grows for Sparkle | Holds for the sealed channel as well. |
 
 What does not change: the sandbox and the hardened runtime (already on),
 `LSMinimumSystemVersion` 15, the container migration (already done), `TURBO_MLX_HOME` for
@@ -405,13 +406,13 @@ Gate: `verify` ≤ 3 % per stage; PSNR against the reference images no worse tha
 Klein 512² −20–30 %, Qwen/Ming decode −30–50 %, Ming 512² towards mflux's 38 s, a lower Klein
 peak.
 
-### Phase 2 — App Store (1–2 weeks, app side; in parallel with Phase 1)
+### Phase 2 — The sealed build (1–2 weeks, app side; in parallel with Phase 1)
 
-The whole table of §5: the store in the container + the optional shared folder + migration;
+The whole table of §5: the models in the container + the optional shared folder + migration;
 the token in the Keychain; a target without Sparkle with entitlements and Info.plist of its
-own; `PrivacyInfo.xcprivacy`; the predicted peak and its messages; `release.sh` for both
-channels; a TestFlight for Mac build; submission. Gate: the TestFlight build installs and
-generates on a clean 16 GB Mac; review answers.
+own; `PrivacyInfo.xcprivacy`; the predicted peak and its messages; a release script for the
+sealed channel; a beta build; submission. Gate: the beta build installs and generates on a clean
+16 GB Mac; review answers.
 
 ### Phase 3 — Speed that changes the pixels, as options (1–2 weeks)
 
@@ -457,9 +458,9 @@ then Z-Image and Qwen-Image; LoRA merging; "Add Model…" from original reposito
 - **mlx-swift is pre-1.0.** The wired-memory API already changed between 0.31.6 and 0.32.2. Pin
   by version, update only with the bench and `verify` at hand.
 - **`compile` on M1/M2 base.** mflux avoids it there: measure before enabling it everywhere.
-- **App Store review has unknowns** (generative content, the helper, the large downloads). The
-  TestFlight build at the end of Phase 2 finds them out at the lowest cost. The GitHub channel
-  depends on none of them.
+- **The sealed channel's review has unknowns** (generative content, the helper, the large
+  downloads). A beta build at the end of Phase 2 finds them out at the lowest cost. The GitHub
+  channel depends on none of them.
 - **The in-house tokenizer** can diverge on exotic text: the corpus has to be broad, and the old
   tokenizer stays available until the corpus is at 100 %.
 - **The converter** meets original layouts that differ from family to family: start with Klein,
@@ -478,7 +479,7 @@ then Z-Image and Qwen-Image; LoRA merging; "Add Model…" from original reposito
 | Klein peak, 1024² | 12.7 GB | ≤ 10.6 GB | Phases 0–1 |
 | Engine packages | 11 (10 since mlx-swift 0.32.2) | 1 (mlx-swift) | Phase 5 |
 | Python in the workflow | fixtures and reference, locally | only to regenerate a reference | Phase 4 |
-| App Store channel | none | an App Store target + TestFlight | Phase 2 |
+| Sealed channel | none (a target since 29 Sep) | a sealed target + a beta build | Phase 2 |
 
 The time targets are expectations to measure with Phase 0's bench, not promises: Phase 0
 itself may move them.

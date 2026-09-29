@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Builds Turbo MLX for distribution outside the Mac App Store: Developer ID signature,
+# Builds Turbo MLX for direct distribution: Developer ID signature,
 # notarization, stapling and a disk image. It needs a "Developer ID Application" certificate in
 # the keychain, whose team signs the app, and the notarization credentials, stored once: an
 # app-specific password of the team's Apple ID (account.apple.com → Sign-In and Security), saved

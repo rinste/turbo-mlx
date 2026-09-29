@@ -92,9 +92,9 @@
 			productReference = 7F0D3A8E0789E586CDB9E72D /* Turbo MLX.app */;
 			productType = "com.apple.product-type.application";
 		};
-		3F9C600CE054002844022BA1 /* TurboMLX App Store */ = {
+		3F9C600CE054002844022BA1 /* TurboMLX Sealed */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 5FE04DF0B79EFC144B0CF3A1 /* Build configuration list for PBXNativeTarget "TurboMLX App Store" */;
+			buildConfigurationList = 5FE04DF0B79EFC144B0CF3A1 /* Build configuration list for PBXNativeTarget "TurboMLX Sealed" */;
 			buildPhases = (
 				A6A655A2763975A9B7A610A1 /* Sources */,
 				2B7C1E0A4F3D9A6B8C5E7DA1 /* Frameworks */,
@@ -108,7 +108,7 @@
 			fileSystemSynchronizedGroups = (
 				6A674BEC06A202727EA618C8 /* TurboMLX */,
 			);
-			name = "TurboMLX App Store";
+			name = "TurboMLX Sealed";
 			packageProductDependencies = (
 			);
 			productName = TurboMLX;
@@ -150,7 +150,7 @@
 			projectRoot = "";
 			targets = (
 				3F9C600CE054002844022B5D /* TurboMLX */,
-				3F9C600CE054002844022BA1 /* TurboMLX App Store */,
+				3F9C600CE054002844022BA1 /* TurboMLX Sealed */,
 			);
 		};
 /* End PBXProject section */
@@ -430,18 +430,18 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "TurboMLX-AppStore.entitlements";
+				CODE_SIGN_ENTITLEMENTS = "TurboMLX-Sealed.entitlements";
 				ARCHS = arm64;
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CONFIGURATION_BUILD_DIR = "$(BUILD_DIR)/$(CONFIGURATION)-AppStore";
+				CONFIGURATION_BUILD_DIR = "$(BUILD_DIR)/$(CONFIGURATION)-Sealed";
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = "TurboMLX-AppStore-Info.plist";
+				INFOPLIST_FILE = "TurboMLX-Sealed-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Turbo MLX";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.graphics-design";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 Stefano Rinaldo";
@@ -455,9 +455,9 @@
 				SDKROOT = macosx;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) APPSTORE";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) SEALED";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				TURBO_MLX_CHANNEL = appstore;
+				TURBO_MLX_CHANNEL = sealed;
 			};
 			name = Debug;
 		};
@@ -467,18 +467,18 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "TurboMLX-AppStore.entitlements";
+				CODE_SIGN_ENTITLEMENTS = "TurboMLX-Sealed.entitlements";
 				ARCHS = arm64;
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CONFIGURATION_BUILD_DIR = "$(BUILD_DIR)/$(CONFIGURATION)-AppStore";
+				CONFIGURATION_BUILD_DIR = "$(BUILD_DIR)/$(CONFIGURATION)-Sealed";
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = "TurboMLX-AppStore-Info.plist";
+				INFOPLIST_FILE = "TurboMLX-Sealed-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Turbo MLX";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.graphics-design";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 Stefano Rinaldo";
@@ -492,9 +492,9 @@
 				SDKROOT = macosx;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) APPSTORE";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) SEALED";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				TURBO_MLX_CHANNEL = appstore;
+				TURBO_MLX_CHANNEL = sealed;
 			};
 			name = Release;
 		};
@@ -519,7 +519,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
-		5FE04DF0B79EFC144B0CF3A1 /* Build configuration list for PBXNativeTarget "TurboMLX App Store" */ = {
+		5FE04DF0B79EFC144B0CF3A1 /* Build configuration list for PBXNativeTarget "TurboMLX Sealed" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				15E1C023A31E324C1E6D16A1 /* Debug */,

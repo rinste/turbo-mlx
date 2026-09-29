@@ -170,7 +170,7 @@ private struct ModelsFolderSection: View {
         if ModelFolder.custom != nil {
             return "The folder you chose: models download there and are looked for there. Those in the default folder stay where they are."
         }
-        #if APPSTORE
+        #if SEALED
         return "A folder in the app’s data. To use the models mflux or the huggingface CLI downloaded, choose their folder, ~/.cache/huggingface (⌘⇧. shows hidden folders in the panel)."
         #else
         return "The shared Hugging Face cache, the same one mflux and other tools use. Another folder, on an external disk for instance, can take its place."
@@ -233,7 +233,7 @@ private struct HuggingFaceTokenSection: View {
     }
 
     private var note: String {
-        #if APPSTORE
+        #if SEALED
         "Only for gated or private repositories added with Add Model…: the models of the list need none. It is kept in your keychain."
         #else
         "Only for gated or private repositories added with Add Model…: the models of the list need none. It is kept in your keychain; without one, the token the huggingface CLI saved is used."
@@ -294,13 +294,13 @@ private struct AboutSettings: View {
                     Link("MIT License · GitHub", destination: URL(string: "https://github.com/rinste/turbo-mlx")!)
                 }
             }
-            #if !APPSTORE
+            #if !SEALED
             updatesSection
             #endif
             Section("Components") {
                 LabeledContent("MLX Swift", value: "MIT · Apple")
                 LabeledContent("swift-transformers", value: "Apache 2.0 · Hugging Face")
-                #if !APPSTORE
+                #if !SEALED
                 LabeledContent("Sparkle", value: "MIT · the updates")
                 #endif
                 LabeledContent("mflux, ltx-2-mlx", value: "MIT · the references the engine follows")
@@ -325,7 +325,7 @@ private struct AboutSettings: View {
         .formStyle(.grouped)
     }
 
-    #if !APPSTORE
+    #if !SEALED
     /// Sparkle's settings, in the GitHub build only.
     private var updatesSection: some View {
         let updater = app.updater

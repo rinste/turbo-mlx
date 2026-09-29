@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- What the app declares to the App Store about privacy: no tracking, no data collected (prompts,
-     images and clips stay on the Mac; the network is only for model downloads and, outside the App
-     Store, the update feed), and why it calls the APIs Apple asks a reason for:
+<!-- The app's privacy manifest: no tracking, no data collected (prompts, images and clips stay on
+     the Mac; the network is only for model downloads and, in the GitHub build, the update feed),
+     and why it calls the APIs Apple asks a reason for:
      - UserDefaults: its own settings (CA92.1).
      - File dates: the newest snapshot of a model in its folder (ModelLocator) and the engine's
        cache of a picture's encoding (QwenImageEditPipeline), for files in the container (C617.1)

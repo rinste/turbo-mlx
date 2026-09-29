@@ -45,7 +45,7 @@ final class AppModel {
     let backend = BackendController()
     let downloads = DownloadCenter()
     let history = HistoryStore()
-    #if !APPSTORE
+    #if !SEALED
     let updater = AppUpdater()
     #endif
 

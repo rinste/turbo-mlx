@@ -3,8 +3,8 @@ import Security
 
 /// The Hugging Face access token, for gated or private repositories (the catalog's models need
 /// none): `HF_TOKEN` when the app was started with one, else the one saved in Settings → Models,
-/// kept in the keychain, else, outside the App Store, the one the huggingface CLI saved in
-/// `~/.cache/huggingface/token`, which the App Store build's sandbox cannot read.
+/// kept in the keychain, else, in the GitHub build, the one the huggingface CLI saved in
+/// `~/.cache/huggingface/token`, which the sealed build's sandbox cannot read.
 nonisolated enum HuggingFaceToken {
     private static let service = "io.github.rinste.TurboMLX.huggingface"
     private static let account = "access-token"
@@ -13,7 +13,7 @@ nonisolated enum HuggingFaceToken {
         let environment = ProcessInfo.processInfo.environment
         if let token = environment["HF_TOKEN"] ?? environment["HUGGING_FACE_HUB_TOKEN"], !token.isEmpty { return token }
         if let saved { return saved }
-        #if APPSTORE
+        #if SEALED
         return nil
         #else
         let file = ModelFolder.realHome.appending(path: ".cache/huggingface/token")

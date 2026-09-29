@@ -1,6 +1,6 @@
-// Not in the App Store build (the APPSTORE condition of the "TurboMLX App Store" target), which
-// does not link Sparkle: the App Store updates the app itself.
-#if !APPSTORE
+// Not in the sealed build (the SEALED condition of the "TurboMLX Sealed" target), which does not
+// link Sparkle and does not update itself.
+#if !SEALED
 import Foundation
 import Observation
 import Sparkle

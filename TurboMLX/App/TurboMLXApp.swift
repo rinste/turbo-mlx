@@ -80,7 +80,7 @@ private struct GenerationCommands: Commands {
     let model: AppModel
 
     var body: some Commands {
-        #if !APPSTORE
+        #if !SEALED
         CommandGroup(after: .appInfo) {
             Button("Check for Updates…") { model.updater.checkForUpdates() }
                 .disabled(!model.updater.canCheckForUpdates)

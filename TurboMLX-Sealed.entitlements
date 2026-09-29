@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- The App Store build's entitlements: the sandbox with no temporary exception. Models live in the
+<!-- The sealed build's entitlements: the sandbox with no temporary exception. Models live in the
      container unless the user picks a folder (user-selected, kept as a security-scoped bookmark);
      no Sparkle, so no mach-lookup exceptions either. The embedded engine has its own two
      (Engine/turbo-engine.entitlements): the sandbox, inherited from the app. -->
