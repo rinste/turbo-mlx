@@ -67,6 +67,12 @@ before 1.1 only point to the download page.
 Prompts, images and videos never leave the Mac: besides the model downloads, the app only asks
 GitHub whether a newer version is out.
 
+Every image and clip says in its metadata that it was made with AI, in the form machines read
+(IPTC's Digital Source Type in XMP, which the EU AI Act asks of generated media): *Created using
+Generative AI* from a prompt, *Edited using Generative AI* when a picture was changed, animated
+or upscaled, unless that picture was itself made with AI. A PNG keeps it in its XMP next to the
+prompt and settings, an MP4 in an XMP box.
+
 ## Models
 
 | Model | Memory | Download | Peak at 1024 px | Notes |

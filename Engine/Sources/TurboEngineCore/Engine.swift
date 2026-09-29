@@ -135,7 +135,8 @@ public final class Engine {
 
             emitter.emit("phase", ["id": id, "phase": "saving"])
             let output = URL(fileURLWithPath: params.output)
-            try ImageOutput.writePNG(image.pixels, to: output, metadata: [
+            let source = Provenance.sourceType(input: params.image.map { URL(fileURLWithPath: $0) })
+            try ImageOutput.writePNG(image.pixels, to: output, source: source, metadata: [
                 "engine": "turbo-engine \(Self.version)",
                 "model": spec.name ?? spec.path,
                 "prompt": params.prompt,
@@ -210,15 +211,17 @@ public final class Engine {
 
         emitter.emit("phase", ["id": id, "phase": "encoding_video"])
         guard let writer, let clip else { throw VideoOutput.OutputError.cannotWrite("no frames were decoded") }
+        let source = Provenance.sourceType(input: params.image.map { URL(fileURLWithPath: $0) })
         do {
             try writer.finish()
+            try Provenance.markVideo(at: output, as: source)
         } catch {
             writer.cancel()
             throw error
         }
         let poster = output.deletingPathExtension().appendingPathExtension("png")
         if let first = writer.firstFrame {
-            try ImageOutput.writePNG(first, to: poster, metadata: [
+            try ImageOutput.writePNG(first, to: poster, source: source, metadata: [
                 "engine": "turbo-engine \(Self.version)",
                 "model": spec.name ?? spec.path,
                 "prompt": params.prompt,

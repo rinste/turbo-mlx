@@ -219,3 +219,9 @@ Commands on stdin, one JSON object per line: `generate` (id, model, params), `lo
 `cancel` (id), `unload`, `shutdown`. Events on stdout: `ready`, `phase`, `progress`, `done`
 (path, seed, size, seconds, peak_memory, timings per phase), `failed`, `cancelled`,
 `model_loaded`, `load_failed` (a `load` that did not), `unloaded`. Everything else goes to stderr, which the app shows as the engine log.
+
+Every PNG and MP4 the engine writes carries IPTC's Digital Source Type in XMP (`Provenance.swift`):
+`trainedAlgorithmicMedia` for a result from a prompt, `compositeWithTrainedAlgorithmicMedia` for
+one made from `params.image`, unless that picture declares `trainedAlgorithmicMedia` itself. A PNG
+has it in ImageIO's XMP chunk, beside the parameters (`dc:description`); an MP4 in a top-level
+`uuid` box with Adobe's XMP UUID, appended once the writer has finished, where exiftool reads it.

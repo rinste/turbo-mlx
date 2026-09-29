@@ -4,7 +4,8 @@ import ImageIO
 import MLX
 import UniformTypeIdentifiers
 
-/// PNG files from decoded pixels, with the generation's parameters in a text chunk.
+/// PNG files from decoded pixels, with the generation's parameters in a text chunk and the mark of
+/// generative AI in their XMP (`Provenance`).
 public enum ImageOutput {
     public enum OutputError: LocalizedError {
         case unsupportedShape([Int])
@@ -38,8 +39,9 @@ public enum ImageOutput {
         return image
     }
 
-    /// Writes a PNG; `metadata` (JSON-encodable) goes into the file's description.
-    public static func writePNG(_ pixels: MLXArray, to url: URL, metadata: [String: Any]) throws {
+    /// Writes a PNG; `metadata` (JSON-encodable) goes into the file's description, `source` into
+    /// its XMP.
+    public static func writePNG(_ pixels: MLXArray, to url: URL, source: Provenance.SourceType, metadata: [String: Any]) throws {
         let image = try cgImage(from: pixels)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
@@ -50,7 +52,7 @@ public enum ImageOutput {
            let text = String(data: json, encoding: .utf8) {
             properties[kCGImagePropertyPNGDictionary] = [kCGImagePropertyPNGDescription: text]
         }
-        CGImageDestinationAddImage(destination, image, properties as CFDictionary)
+        CGImageDestinationAddImageAndMetadata(destination, image, Provenance.imageMetadata(source), properties as CFDictionary)
         guard CGImageDestinationFinalize(destination) else { throw OutputError.cannotWrite(url) }
     }
 }
