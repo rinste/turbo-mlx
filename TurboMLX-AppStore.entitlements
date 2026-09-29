@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The App Store build's entitlements: the sandbox with no temporary exception. Models live in the
+     container unless the user picks a folder (user-selected, kept as a security-scoped bookmark);
+     no Sparkle, so no mach-lookup exceptions either. The embedded engine has its own two
+     (Engine/turbo-engine.entitlements): the sandbox, inherited from the app. -->
 <plist version="1.0">
 <dict>
 	<key>com.apple.security.app-sandbox</key>
@@ -10,15 +14,5 @@
 	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>
-	<key>com.apple.security.temporary-exception.mach-lookup.global-name</key>
-	<array>
-		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spks</string>
-		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spki</string>
-	</array>
-	<key>com.apple.security.temporary-exception.files.home-relative-path.read-write</key>
-	<array>
-		<string>/.cache</string>
-		<string>/.cache/huggingface/</string>
-	</array>
 </dict>
 </plist>

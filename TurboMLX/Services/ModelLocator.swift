@@ -3,20 +3,9 @@ import Foundation
 /// Finds model weights on disk: Hugging Face repos in the hub cache (where mflux looks for them)
 /// and local folders.
 nonisolated struct ModelLocator: Sendable {
-    /// `~/.cache/huggingface`, the folder the huggingface CLI, mflux and other tools share. The
-    /// app's sandbox reaches it through an entitlement for this one path (TurboMLX.entitlements),
-    /// and the engine, which inherits the sandbox, reads the models there too.
-    static let huggingFaceHome = realHome.appending(path: ".cache/huggingface", directoryHint: .isDirectory)
-
-    /// The user's home folder: in the sandbox, FileManager's is the app's container.
-    private static var realHome: URL {
-        if let entry = getpwuid(getuid()), let directory = entry.pointee.pw_dir {
-            return URL(fileURLWithPath: String(cString: directory), isDirectory: true)
-        }
-        return FileManager.default.homeDirectoryForCurrentUser
-    }
-
-    let hubCache = ModelLocator.huggingFaceHome.appending(path: "hub", directoryHint: .isDirectory)
+    /// The hub cache of the models folder (`ModelFolder`): by default the one the huggingface CLI,
+    /// mflux and other tools share, or the App Store build's in its container.
+    var hubCache: URL { ModelFolder.hubCache }
 
     /// The folder holding a complete copy of the model, or nil if it still has to be downloaded.
     /// A family with a companion checkpoint (LTX-2's text encoder) needs that one too.

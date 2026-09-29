@@ -57,22 +57,12 @@ nonisolated final class HubDownloader: Sendable {
         self.repo = repo
         self.revision = revision
         self.hubCache = hubCache
-        token = Self.storedToken
+        token = HuggingFaceToken.current
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 60
         configuration.timeoutIntervalForResource = 60 * 60 * 24
         configuration.httpMaximumConnectionsPerHost = 6
         session = URLSession(configuration: configuration)
-    }
-
-    /// `HF_TOKEN` when the app was started with one, or the token the huggingface CLI saved in
-    /// the Hugging Face folder.
-    private static var storedToken: String? {
-        let environment = ProcessInfo.processInfo.environment
-        if let token = environment["HF_TOKEN"] ?? environment["HUGGING_FACE_HUB_TOKEN"], !token.isEmpty { return token }
-        let stored = try? String(contentsOf: ModelLocator.huggingFaceHome.appending(path: "token"), encoding: .utf8)
-        let trimmed = stored?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
     }
 
     // MARK: Layout

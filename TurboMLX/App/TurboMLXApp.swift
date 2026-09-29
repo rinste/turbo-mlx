@@ -80,10 +80,12 @@ private struct GenerationCommands: Commands {
     let model: AppModel
 
     var body: some Commands {
+        #if !APPSTORE
         CommandGroup(after: .appInfo) {
             Button("Check for Updates…") { model.updater.checkForUpdates() }
                 .disabled(!model.updater.canCheckForUpdates)
         }
+        #endif
         CommandGroup(replacing: .newItem) {}
 
         CommandMenu("Generate") {

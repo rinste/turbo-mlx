@@ -45,7 +45,9 @@ final class AppModel {
     let backend = BackendController()
     let downloads = DownloadCenter()
     let history = HistoryStore()
+    #if !APPSTORE
     let updater = AppUpdater()
+    #endif
 
     private(set) var models: [ModelDescriptor]
     private(set) var installed: [String: URL] = [:]
@@ -53,6 +55,8 @@ final class AppModel {
     /// downloads included: what moving a model to the Trash frees. Measured with `installed`.
     private(set) var bytesOnDisk: [String: Int64] = [:]
     let locator = ModelLocator()
+    /// The hub cache the models are kept in (Settings → Models), as `ModelFolder` has it.
+    private(set) var modelsFolder = ModelFolder.hubCache
 
     var selectedModelID: String {
         didSet {
@@ -187,7 +191,10 @@ final class AppModel {
         started = true
         history.load()
         history.pruneReferences(keeping: settings.referenceImage)
-        // Local model folders before the engine, which inherits the access they open.
+        // The models folder and local model folders before the engine, which inherits the access
+        // they open.
+        ModelFolder.restore()
+        modelsFolder = locator.hubCache
         FolderAccess.restore()
         refreshInstalled()
         backend.ensureWorker()
@@ -221,6 +228,15 @@ final class AppModel {
     func isLoaded(_ model: ModelDescriptor) -> Bool {
         guard let path = backend.loadedModelPath else { return false }
         return installed[model.id]?.path == path
+    }
+
+    /// Keeps the models in `folder` from now on (nil: the default one). The models are looked for
+    /// there, and the engine starts again so that it inherits the access to the folder.
+    func useModelsFolder(_ folder: URL?) throws {
+        if let folder { try ModelFolder.choose(folder) } else { ModelFolder.useDefault() }
+        modelsFolder = locator.hubCache
+        refreshInstalled()
+        if backend.isRunning { backend.restartWorker() }
     }
 
     func refreshInstalled() {

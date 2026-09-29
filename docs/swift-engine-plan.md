@@ -7,7 +7,38 @@ code refer to the files of the engine in `Engine/Sources/`.*
 
 ## Status
 
-29 September 2026: Phase 0's first item and 1c are done; the rest has not started.
+29 September 2026: Phase 0's first item and 1c are done, and the code side of Phase 2 (the App
+Store) is in the tree; the rest has not started.
+
+- **Phase 2, what is done.** A second target, *TurboMLX App Store*, on the same synchronized
+  folder: `APPSTORE` compiles Sparkle out (`AppUpdater`, the Check for Updates menu, the Settings
+  section) and the target does not link it; `TurboMLX-AppStore.entitlements` has the sandbox,
+  network client, user-selected read-write and app-scope bookmarks, no temporary exception;
+  `TurboMLX-AppStore-Info.plist` drops Sparkle's keys and answers export compliance
+  (`ITSAppUsesNonExemptEncryption` false); its products go to `Release-AppStore`; the engine is
+  signed with the identifier `<bundle id>.turbo-engine` (`TURBO_MLX_CHANNEL`). Models live in
+  `ModelFolder`: by default `~/.cache/huggingface` in the GitHub build and the container's
+  `Application Support/TurboMLX/Models` (out of Time Machine) in the App Store one, and in both a
+  folder the user picks in Settings → Models, kept as a security-scoped bookmark opened before the
+  engine starts (a Hugging Face home or a hub itself; the engine restarts to inherit it). The
+  token: `HF_TOKEN`, else the keychain (Settings → Models), else, GitHub build only, the CLI's
+  file. `Resources/PrivacyInfo.xcprivacy` declares no tracking, no data collected, and the reasons
+  for UserDefaults (CA92.1), file dates (C617.1, 3B52.1) and disk space (E174.1, 85F4.1).
+  `scripts/release-appstore.sh` archives, checks (no Sparkle, no temporary exception, the engine
+  inherits the sandbox, the manifest is there) and exports the installer package; `--upload`
+  sends it with an App Store Connect API key. Checked: both targets build; the App Store build,
+  run sandboxed under a test bundle ID, starts its engine, makes its models folder in the
+  container, excluded from backups, with no sandbox denial; the GitHub build is unchanged by
+  default.
+- **Phase 2, what is left.** For the account holder: the Apple Distribution and Mac Installer
+  Distribution certificates, the App ID, a Mac App Store provisioning profile, the app's record and
+  an API key (the script's header lists them), then a TestFlight build on a clean Mac and the
+  submission. In the code: the predicted peak and its refusal (1f, below), and a visual check of
+  the two new Settings sections and of a folder chosen through the open panel with the engine
+  reading from it. Worth deciding before submitting: machine-readable marking of generated media
+  (IPTC `DigitalSourceType` `trainedAlgorithmicMedia` in the PNG and MP4 metadata), which Article
+  50 of the EU AI Act asks of generators placed on the EU market (to be confirmed with a lawyer);
+  LTX-2.5's license makes it a condition too.
 
 - **mlx-swift 0.32.2**, whose MLX core is the one mflux's venv and ltx-2-mlx run, replaced 0.31.6
   (core 0.31.1). Two deprecated calls changed (`asData(noCopy:)`), nothing else in the code. Every
@@ -327,11 +358,11 @@ To decide when updating.
 
 | Blocker | Today | What to do |
 |---|---|---|
-| The `temporary-exception.files.home-relative-path.read-write` entitlement for `~/.cache` (`TurboMLX.entitlements`); the README says it: "Direct distribution only" | the models live in `~/.cache/huggingface/hub`, shared with mflux | Models in the container by default (`…/Application Support/TurboMLX/Models/hub`, the same hub layout: `ModelLocator` and `HubDownloader` do not change, only `huggingFaceHome` does; exclude the folder from Time Machine). An optional shared folder the user picks with `NSOpenPanel` + a security-scoped bookmark (`FolderAccess` exists already; it needs `files.user-selected.read-write`), which covers whoever wants to share with mflux: the user can pick `~/.cache/huggingface` itself. Migration: on first launch, offer to move or to reuse the existing downloads. |
-| The Hugging Face token read from `~/.cache/huggingface/token` and from the environment (`HubDownloader.storedToken`) | | A field in Settings, stored in the Keychain; `HF_TOKEN` stays as an override for development. |
-| Sparkle: self-updating is not allowed in the App Store; two `temporary-exception.mach-lookup` entitlements; `SUFeedURL`/`SUPublicEDKey` in `TurboMLX-Info.plist` | `AppUpdater.swift`, the "Check for Updates…" menu, Settings → About | A second Xcode target ("Turbo MLX App Store") on the same synchronized folders, without the Sparkle product linked, with entitlements and Info.plist of its own and `SWIFT_ACTIVE_COMPILATION_CONDITIONS = APPSTORE`; `#if !APPSTORE` around `AppUpdater`, the menu and the Settings section. The GitHub channel stays as it is; `release.sh` learns an `-exportOptionsPlist` with `method = app-store-connect`. |
+| The `temporary-exception.files.home-relative-path.read-write` entitlement for `~/.cache` (`TurboMLX.entitlements`); the README says it: "Direct distribution only". *Done (29 Sep): `ModelFolder`, see Status.* | the models live in `~/.cache/huggingface/hub`, shared with mflux | Models in the container by default (`…/Application Support/TurboMLX/Models/hub`, the same hub layout: `ModelLocator` and `HubDownloader` do not change, only `huggingFaceHome` does; exclude the folder from Time Machine). An optional shared folder the user picks with `NSOpenPanel` + a security-scoped bookmark (`FolderAccess` exists already; it needs `files.user-selected.read-write`), which covers whoever wants to share with mflux: the user can pick `~/.cache/huggingface` itself. Migration: on first launch, offer to move or to reuse the existing downloads. |
+| The Hugging Face token read from `~/.cache/huggingface/token` and from the environment (`HubDownloader.storedToken`). *Done (29 Sep): `HuggingFaceToken`.* | | A field in Settings, stored in the Keychain; `HF_TOKEN` stays as an override for development. |
+| Sparkle: self-updating is not allowed in the App Store; two `temporary-exception.mach-lookup` entitlements; `SUFeedURL`/`SUPublicEDKey` in `TurboMLX-Info.plist`. *Done (29 Sep): the "TurboMLX App Store" target.* | `AppUpdater.swift`, the "Check for Updates…" menu, Settings → About | A second Xcode target ("Turbo MLX App Store") on the same synchronized folders, without the Sparkle product linked, with entitlements and Info.plist of its own and `SWIFT_ACTIVE_COMPILATION_CONDITIONS = APPSTORE`; `#if !APPSTORE` around `AppUpdater`, the menu and the Settings section. The GitHub channel stays as it is; `release.sh` learns an `-exportOptionsPlist` with `method = app-store-connect`. |
 | The `turbo-engine` helper | `Contents/MacOS`, entitlements `app-sandbox` + `inherit` (`Engine/turbo-engine.entitlements`) | Already compliant: Apple asks that a helper have only those two entitlements. Signed "Apple Distribution" with the app's profile from the Xcode archive. To be checked early with a TestFlight for Mac build. |
-| Privacy manifest | missing | `PrivacyInfo.xcprivacy` with the "required reason APIs" in use: `UserDefaults` (CA92.1), file dates (`ModelLocator`: `.contentModificationDateKey`; `QwenImageEditPipeline.pictureKey`: `attributesOfItem` → C617.1 / 3B52.1), disk space (`DownloadCenter.checkSpace`: `.volumeAvailableCapacityForImportantUsage` → E174.1 / 85F4.1). No tracking, no data collection. Codes to confirm against Apple's list at the time. |
+| Privacy manifest | missing. *Done (29 Sep).* | `PrivacyInfo.xcprivacy` with the "required reason APIs" in use: `UserDefaults` (CA92.1), file dates (`ModelLocator`: `.contentModificationDateKey`; `QwenImageEditPipeline.pictureKey`: `attributesOfItem` → C617.1 / 3B52.1), disk space (`DownloadCenter.checkSpace`: `.volumeAvailableCapacityForImportantUsage` → E174.1 / 85F4.1). No tracking, no data collection. Codes to confirm against Apple's list at the time. |
 | Memory and review | the engine dies when memory runs out; the app says so | A predicted peak before starting (the catalog's peaks × pixels, per family) → a refusal with a clear message; the requirements stated on the store page; the 16 GB model (Z-Image q4) is there already. A reviewer on an 8–16 GB Mac must be able to generate something on first launch. |
 | Architecture | arm64 | Fine: the App Store accepts Apple-silicon-only apps (Intel Macs do not see it). |
 | 5–38 GB downloads | | They are data, not code (2.5.2 is about executable code). Draw Things is the precedent: it downloads models into its container. The space needed is already shown. |

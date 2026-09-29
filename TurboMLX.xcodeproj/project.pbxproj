@@ -19,11 +19,19 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		2B7C1E0A4F3D9A6B8C5E7DA1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXFileReference section */
 		7F0D3A8E0789E586CDB9E72D /* Turbo MLX.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Turbo MLX.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		8E1F2A3B4C5D6E7F80918273 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
+		7F0D3A8E0789E586CDB9E7A1 /* Turbo MLX.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Turbo MLX.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -43,6 +51,7 @@
 			isa = PBXGroup;
 			children = (
 				7F0D3A8E0789E586CDB9E72D /* Turbo MLX.app */,
+				7F0D3A8E0789E586CDB9E7A1 /* Turbo MLX.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -83,6 +92,29 @@
 			productReference = 7F0D3A8E0789E586CDB9E72D /* Turbo MLX.app */;
 			productType = "com.apple.product-type.application";
 		};
+		3F9C600CE054002844022BA1 /* TurboMLX App Store */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5FE04DF0B79EFC144B0CF3A1 /* Build configuration list for PBXNativeTarget "TurboMLX App Store" */;
+			buildPhases = (
+				A6A655A2763975A9B7A610A1 /* Sources */,
+				2B7C1E0A4F3D9A6B8C5E7DA1 /* Frameworks */,
+				4D9E2F1B6A5C8B7D0E3F9AA1 /* Resources */,
+				D5E7F9A1B3C5D7E9F1A3B5A1 /* Embed turbo-engine */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				6A674BEC06A202727EA618C8 /* TurboMLX */,
+			);
+			name = "TurboMLX App Store";
+			packageProductDependencies = (
+			);
+			productName = TurboMLX;
+			productReference = 7F0D3A8E0789E586CDB9E7A1 /* Turbo MLX.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -94,6 +126,9 @@
 				LastUpgradeCheck = 2600;
 				TargetAttributes = {
 					3F9C600CE054002844022B5D = {
+						ProvisioningStyle = Manual;
+					};
+					3F9C600CE054002844022BA1 = {
 						ProvisioningStyle = Manual;
 					};
 				};
@@ -115,12 +150,20 @@
 			projectRoot = "";
 			targets = (
 				3F9C600CE054002844022B5D /* TurboMLX */,
+				3F9C600CE054002844022BA1 /* TurboMLX App Store */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		4D9E2F1B6A5C8B7D0E3F9A22 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4D9E2F1B6A5C8B7D0E3F9AA1 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -150,10 +193,37 @@
 			shellPath = /bin/zsh;
 			shellScript = "\"$SRCROOT/scripts/embed-engine.sh\"\n";
 		};
+		D5E7F9A1B3C5D7E9F1A3B5A1 /* Embed turbo-engine */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Embed turbo-engine";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/turbo-engine",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/zsh;
+			shellScript = "\"$SRCROOT/scripts/embed-engine.sh\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		A6A655A2763975A9B7A61016 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A6A655A2763975A9B7A610A1 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -354,6 +424,80 @@
 			};
 			name = Release;
 		};
+		15E1C023A31E324C1E6D16A1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 8E1F2A3B4C5D6E7F80918273 /* Signing.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "TurboMLX-AppStore.entitlements";
+				ARCHS = arm64;
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CONFIGURATION_BUILD_DIR = "$(BUILD_DIR)/$(CONFIGURATION)-AppStore";
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "TurboMLX-AppStore-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Turbo MLX";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.graphics-design";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 Stefano Rinaldo";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.rinste.TurboMLX;
+				PRODUCT_MODULE_NAME = TurboMLX;
+				PRODUCT_NAME = "Turbo MLX";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) APPSTORE";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				TURBO_MLX_CHANNEL = appstore;
+			};
+			name = Debug;
+		};
+		1DF4293B15D897E103A382A1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 8E1F2A3B4C5D6E7F80918273 /* Signing.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "TurboMLX-AppStore.entitlements";
+				ARCHS = arm64;
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CONFIGURATION_BUILD_DIR = "$(BUILD_DIR)/$(CONFIGURATION)-AppStore";
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "TurboMLX-AppStore-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Turbo MLX";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.graphics-design";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 Stefano Rinaldo";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.rinste.TurboMLX;
+				PRODUCT_MODULE_NAME = TurboMLX;
+				PRODUCT_NAME = "Turbo MLX";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) APPSTORE";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				TURBO_MLX_CHANNEL = appstore;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -371,6 +515,15 @@
 			buildConfigurations = (
 				821C6FF51B47D97AAA2741CC /* Debug */,
 				EA4D046D0D3CEA984AC38D75 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		5FE04DF0B79EFC144B0CF3A1 /* Build configuration list for PBXNativeTarget "TurboMLX App Store" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				15E1C023A31E324C1E6D16A1 /* Debug */,
+				1DF4293B15D897E103A382A1 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

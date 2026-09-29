@@ -1,3 +1,6 @@
+// Not in the App Store build (the APPSTORE condition of the "TurboMLX App Store" target), which
+// does not link Sparkle: the App Store updates the app itself.
+#if !APPSTORE
 import Foundation
 import Observation
 import Sparkle
@@ -53,3 +56,4 @@ final class AppUpdater {
         installsAutomatically = updater.automaticallyDownloadsUpdates
     }
 }
+#endif

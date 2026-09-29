@@ -53,7 +53,8 @@ memory for the lightest models (each model's needs are in the table below) and r
 for the models you pick, 5 to 38 GB each.
 
 On first launch, pick a model and click *Download and Generate*: the model downloads once from
-Hugging Face into `~/.cache/huggingface`, where mflux and other tools find it too, and stays there.
+Hugging Face into `~/.cache/huggingface`, where mflux and other tools find it too, and stays there
+(Settings → Models can keep the models in another folder, on an external disk for instance).
 A download resumes where it stopped, tries again by itself when the network drops, and keeps the
 Mac from going to sleep while it runs. *Move to Trash…*, in the ⋯ menu next to the model or in
 Settings → Models, takes a model off the disk again.
@@ -129,6 +130,14 @@ the container to the signature, and an ad hoc one changes with every build, so m
 new build out of the data an older one left. The script that builds a release,
 `scripts/release.sh`, explains in its header how to set up notarization and publish a version.
 
+The project has a second target, *TurboMLX App Store*, for the Mac App Store: the same sources
+compiled with `APPSTORE`, without Sparkle (the App Store updates the app), with its own
+entitlements (`TurboMLX-AppStore.entitlements`: the sandbox without temporary exceptions) and
+Info.plist, and its models in the app's container unless Settings → Models points it to another
+folder, `~/.cache/huggingface` included. `scripts/release-appstore.sh` archives it, checks it and
+exports the package App Store Connect takes (`--upload` sends it); its header lists what the
+Apple Developer account needs first. Both builds carry `Resources/PrivacyInfo.xcprivacy`.
+
 To try the first-run experience without touching your real history, point the app at an empty
 data folder in its container (`~` is the container's home there, hence the quotes):
 
@@ -190,13 +199,18 @@ SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo-engine serve ──▶ 
   a local model is kept with a security-scoped bookmark (`Services/FolderAccess.swift`), opened
   before the engine starts so it can read it too. The first sandboxed launch moved the history
   and the settings from their old places into the container
-  (`Resources/container-migration.plist`). Direct distribution only: the entitlement for
-  `~/.cache/huggingface` is a temporary exception, which the Mac App Store does not accept.
+  (`Resources/container-migration.plist`). The entitlement for `~/.cache/huggingface` is a
+  temporary exception, which the Mac App Store does not accept: the App Store build
+  (`TurboMLX-AppStore.entitlements`) keeps its models in the container instead, or in a folder
+  the user picks, reached like a local model's through a security-scoped bookmark
+  (`Services/ModelFolder.swift`), which the GitHub build can use too. The Hugging Face token, for
+  gated repositories only, can be saved in Settings → Models, in the keychain; the GitHub build
+  also reads the one the huggingface CLI saved.
 
 | What | Where |
 |---|---|
 | History (PNGs, MP4s + `history.json`) | `~/Library/Containers/io.github.rinste.TurboMLX/Data/Library/Application Support/TurboMLX/History` |
-| Models | `~/.cache/huggingface/hub` |
+| Models | `~/.cache/huggingface/hub`, or the folder chosen in Settings → Models; App Store build: `…/Containers/io.github.rinste.TurboMLX/Data/Library/Application Support/TurboMLX/Models/hub` |
 
 ```
 TurboMLX/

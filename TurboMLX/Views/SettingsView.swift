@@ -105,10 +105,9 @@ private struct ModelsSettings: View {
                         Text(subtitle(for: model))
                     }
                 }
-            } footer: {
-                Text("Hugging Face models are stored in the shared cache (\(app.locator.hubCache.path(percentEncoded: false))), the same one mflux and other tools use.")
-                    .foregroundStyle(.secondary)
             }
+            ModelsFolderSection()
+            HuggingFaceTokenSection()
         }
         .formStyle(.grouped)
         .confirmsTrashing($modelToTrash)
@@ -124,6 +123,131 @@ private struct ModelsSettings: View {
         }
         let size = model.sizeBytes.map { " · \(Format.bytes($0))" } ?? ""
         return "\(state)\(size) · \(model.id)"
+    }
+}
+
+/// Where the downloaded models are kept, and another folder to keep them in.
+private struct ModelsFolderSection: View {
+    @Environment(AppModel.self) private var app
+    @State private var problem: String?
+
+    var body: some View {
+        Section {
+            LabeledContent("Folder") {
+                Text(app.modelsFolder.path(percentEncoded: false))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            HStack {
+                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([app.modelsFolder]) }
+                    .disabled(!FileManager.default.fileExists(atPath: app.modelsFolder.path))
+                Spacer()
+                if ModelFolder.custom != nil {
+                    Button("Use Default") { use(nil) }
+                }
+                Button("Change…") { choose() }
+            }
+            // A download writes into the folder and the engine reads from it: both must be idle.
+            .disabled(app.isBusy || !app.downloads.active.isEmpty)
+        } header: {
+            Text("Models Folder")
+        } footer: {
+            Text(note)
+                .foregroundStyle(.secondary)
+        }
+        .alert("The folder cannot be used", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
+        } message: {
+            Text(problem ?? "")
+        }
+    }
+
+    private var note: String {
+        if let missing = ModelFolder.unavailable {
+            return "\(missing) could not be opened (a disk not connected?): until it can, models go to the default folder."
+        }
+        if ModelFolder.custom != nil {
+            return "The folder you chose: models download there and are looked for there. Those in the default folder stay where they are."
+        }
+        #if APPSTORE
+        return "A folder in the app’s data. To use the models mflux or the huggingface CLI downloaded, choose their folder, ~/.cache/huggingface (⌘⇧. shows hidden folders in the panel)."
+        #else
+        return "The shared Hugging Face cache, the same one mflux and other tools use. Another folder, on an external disk for instance, can take its place."
+        #endif
+    }
+
+    private func choose() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.showsHiddenFiles = true
+        panel.prompt = "Use This Folder"
+        panel.message = "Choose where to keep the models. A folder with models from mflux or the huggingface CLI (its hub, or the folder around it) is used as it is."
+        panel.directoryURL = app.modelsFolder.deletingLastPathComponent()
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        use(url)
+    }
+
+    private func use(_ folder: URL?) {
+        do {
+            try app.useModelsFolder(folder)
+        } catch {
+            problem = error.localizedDescription
+        }
+    }
+}
+
+/// The Hugging Face token, for gated or private repositories, kept in the keychain.
+private struct HuggingFaceTokenSection: View {
+    @State private var token = ""
+    @State private var isSaved = HuggingFaceToken.saved != nil
+    @State private var problem: String?
+
+    var body: some View {
+        Section {
+            SecureField("Access token", text: $token, prompt: Text(isSaved ? "Saved in the keychain" : "hf_…"))
+            HStack {
+                Spacer()
+                if isSaved {
+                    Button("Remove") {
+                        HuggingFaceToken.remove()
+                        isSaved = false
+                    }
+                }
+                Button("Save") { save() }
+                    .disabled(token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        } header: {
+            Text("Hugging Face Token")
+        } footer: {
+            Text(note)
+                .foregroundStyle(.secondary)
+        }
+        .alert("The token was not saved", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
+        } message: {
+            Text(problem ?? "")
+        }
+    }
+
+    private var note: String {
+        #if APPSTORE
+        "Only for gated or private repositories added with Add Model…: the models of the list need none. It is kept in your keychain."
+        #else
+        "Only for gated or private repositories added with Add Model…: the models of the list need none. It is kept in your keychain; without one, the token the huggingface CLI saved is used."
+        #endif
+    }
+
+    private func save() {
+        do {
+            try HuggingFaceToken.save(token.trimmingCharacters(in: .whitespacesAndNewlines))
+            token = ""
+            isSaved = true
+        } catch {
+            problem = error.localizedDescription
+        }
     }
 }
 
@@ -161,7 +285,6 @@ private struct AboutSettings: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        let updater = app.updater
         Form {
             Section {
                 LabeledContent("Turbo MLX", value: Self.version)
@@ -171,26 +294,15 @@ private struct AboutSettings: View {
                     Link("MIT License · GitHub", destination: URL(string: "https://github.com/rinste/turbo-mlx")!)
                 }
             }
-            Section {
-                Toggle("Check for updates automatically", isOn: Binding(
-                    get: { updater.checksAutomatically }, set: { updater.setChecksAutomatically($0) }))
-                Toggle("Download and install them without asking", isOn: Binding(
-                    get: { updater.installsAutomatically }, set: { updater.setInstallsAutomatically($0) }))
-                    .disabled(!updater.checksAutomatically)
-                HStack {
-                    Spacer()
-                    Button("Check Now") { updater.checkForUpdates() }
-                        .disabled(!updater.canCheckForUpdates)
-                }
-            } footer: {
-                Text("Once a day the app asks GitHub for the latest release. A new version is installed only if it carries the app’s signature, and the app restarts with it; images, settings and models stay.")
-                    .foregroundStyle(.secondary)
-            }
-            .onAppear { updater.refresh() }
+            #if !APPSTORE
+            updatesSection
+            #endif
             Section("Components") {
                 LabeledContent("MLX Swift", value: "MIT · Apple")
                 LabeledContent("swift-transformers", value: "Apache 2.0 · Hugging Face")
+                #if !APPSTORE
                 LabeledContent("Sparkle", value: "MIT · the updates")
+                #endif
                 LabeledContent("mflux, ltx-2-mlx", value: "MIT · the references the engine follows")
                 Button("Acknowledgements…") { openWindow(id: WindowID.acknowledgements) }
             }
@@ -212,6 +324,29 @@ private struct AboutSettings: View {
         }
         .formStyle(.grouped)
     }
+
+    #if !APPSTORE
+    /// Sparkle's settings, in the GitHub build only.
+    private var updatesSection: some View {
+        let updater = app.updater
+        return Section {
+            Toggle("Check for updates automatically", isOn: Binding(
+                get: { updater.checksAutomatically }, set: { updater.setChecksAutomatically($0) }))
+            Toggle("Download and install them without asking", isOn: Binding(
+                get: { updater.installsAutomatically }, set: { updater.setInstallsAutomatically($0) }))
+                .disabled(!updater.checksAutomatically)
+            HStack {
+                Spacer()
+                Button("Check Now") { updater.checkForUpdates() }
+                    .disabled(!updater.canCheckForUpdates)
+            }
+        } footer: {
+            Text("Once a day the app asks GitHub for the latest release. A new version is installed only if it carries the app’s signature, and the app restarts with it; images, settings and models stay.")
+                .foregroundStyle(.secondary)
+        }
+        .onAppear { updater.refresh() }
+    }
+    #endif
 
     /// "1.1 (2)": the version people see, and the build number updates are compared by.
     private static var version: String {

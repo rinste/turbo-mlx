@@ -41,10 +41,15 @@ fi
 if [[ "${CODE_SIGNING_ALLOWED:-NO}" == YES && -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]]; then
   flags=(--force --sign "$EXPANDED_CODE_SIGN_IDENTITY")
   [[ "${ENABLE_HARDENED_RUNTIME:-NO}" == YES ]] && flags+=(--options runtime)
+  # In the App Store build (TURBO_MLX_CHANNEL in the "TurboMLX App Store" target) the engine gets
+  # an identifier under the app's, as Apple wants for a helper tool in an App Store app; the
+  # GitHub build keeps the file name, as it always had.
+  engine_id=()
+  [[ "${TURBO_MLX_CHANNEL:-}" == appstore ]] && engine_id=(--identifier "$PRODUCT_BUNDLE_IDENTIFIER.turbo-engine")
   [[ -n "${OTHER_CODE_SIGN_FLAGS:-}" ]] && flags+=(${=OTHER_CODE_SIGN_FLAGS})
   for item in "$RES_DIR"/*.bundle(N) "$ENGINE"; do
     extra=()
-    [[ "$item" == "$ENGINE" ]] && extra=(--entitlements "$ENTITLEMENTS")
+    [[ "$item" == "$ENGINE" ]] && extra=(--entitlements "$ENTITLEMENTS" "${engine_id[@]}")
     codesign "${flags[@]}" "${extra[@]}" "$item" || {
       print "error: could not sign ${item:t}"
       rm -f "$ENGINE"
