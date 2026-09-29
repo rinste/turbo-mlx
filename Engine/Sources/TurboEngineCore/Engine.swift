@@ -77,7 +77,12 @@ public final class Engine {
     public func generate(id: String, spec: ModelSpec, params: GenerationParams) {
         let started = Date()
         marks = [:]
+        // Metal keeps what the job uses resident while it runs, as mlx-lm and the Python worker did:
+        // under memory pressure macOS would otherwise page the weights out, and a 10 s step could
+        // take 60. The allowance goes back when the job ends, so an idle engine pins nothing.
+        let wired = WiredAllowance.begin()
         defer {
+            wired?.end()
             forget(id)
             Memory.clearCache()
         }
@@ -280,5 +285,34 @@ public enum EngineError: LocalizedError {
         case .unsupportedFamily(let family): "The native engine does not run the \(family) family."
         case .missingTextEncoder(let family): "The \(family) model needs the path of its text encoder."
         }
+    }
+}
+
+/// A job's wired-memory allowance: mlx-swift's ticket, as large as the GPU's recommended working
+/// set (what the Python worker set with `mx.set_wired_limit`), started and ended from the
+/// engine's synchronous thread. When the last ticket ends, MLX goes back to the limit it had.
+struct WiredAllowance {
+    private let ticket: WiredMemoryTicket
+
+    static func begin() -> WiredAllowance? {
+        guard let size = GPU.maxRecommendedWorkingSetBytes(), size > 0 else { return nil }
+        let allowance = WiredAllowance(ticket: WiredMemoryTicket(size: size, policy: WiredMaxPolicy()))
+        let ticket = allowance.ticket
+        wait { await ticket.start() }
+        return allowance
+    }
+
+    func end() {
+        let ticket = ticket
+        Self.wait { await ticket.end() }
+    }
+
+    private static func wait(_ work: @escaping @Sendable () async -> Int) {
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            _ = await work()
+            done.signal()
+        }
+        done.wait()
     }
 }

@@ -29,6 +29,9 @@ final class AppModel {
         case missingReference
         case emptyPrompt
         case upscaleTooLarge
+        /// The generation should need more memory than this Mac can give (`MemoryEstimate`):
+        /// about `needed` GB, and what would bring it within reach.
+        case notEnoughMemory(needed: Int, remedy: String)
 
         var hint: String {
             switch self {
@@ -38,6 +41,8 @@ final class AppModel {
             case .missingReference: "Add the picture to edit."
             case .emptyPrompt: "Write a prompt."
             case .upscaleTooLarge: "Choose a smaller scale: at most 4096 × 4096 pixels."
+            case .notEnoughMemory(let needed, let remedy):
+                "Needs about \(needed) GB of memory, more than this Mac’s \(MemoryEstimate.installed) GB can give: \(remedy)."
             }
         }
     }
@@ -409,7 +414,34 @@ final class AppModel {
         if model.family.requiresReferenceImage, !hasReferenceImage { return .missingReference }
         if !model.family.isUpscaler, settings.trimmedPrompt.isEmpty { return .emptyPrompt }
         if model.family.isUpscaler, let size = settings.upscaledSize, size.megapixels > Upscale.maxMegapixels { return .upscaleTooLarge }
-        return nil
+        return memoryBlocker(for: model)
+    }
+
+    /// A generation this Mac cannot hold: the engine would run out of memory and die with it, so
+    /// it is refused, with the change that would make it fit.
+    private func memoryBlocker(for model: ModelDescriptor) -> Blocker? {
+        let size = settings.size(for: model.family)
+        let frames = model.family.media == .video ? settings.videoFrames : nil
+        guard let needed = MemoryEstimate.peak(model: model, size: size, frames: frames, lowMemory: settings.lowMemory),
+              needed > MemoryEstimate.available()
+        else { return nil }
+        let fitsAtAll = { (candidate: ModelDescriptor) in
+            MemoryEstimate.smallestPeak(model: candidate).map { $0 <= MemoryEstimate.available() } ?? false
+        }
+        let remedy = if MemoryEstimate.smallestPeak(model: model) != nil, !fitsAtAll(model) {
+            models.contains(where: fitsAtAll) ? "choose another model" : "the models need a Mac with more memory"
+        } else if !settings.lowMemory,
+                  let saving = MemoryEstimate.peak(model: model, size: size, frames: frames, lowMemory: true),
+                  saving <= MemoryEstimate.available() {
+            "turn on Save memory"
+        } else if model.family.isUpscaler {
+            "choose a smaller scale"
+        } else if model.family.media == .video {
+            "choose a smaller size or a shorter clip"
+        } else {
+            "choose a smaller size"
+        }
+        return .notEnoughMemory(needed: Int(needed.rounded(.up)), remedy: remedy)
     }
 
     /// The settings name a reference image whose file is still there.

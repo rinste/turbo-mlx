@@ -267,7 +267,7 @@ nonisolated struct GenerationRequest: Codable, Hashable, Sendable {
 /// `SeedVR2Util.preprocess_image`): the shorter side times the factor, cut down to a multiple of
 /// 16, the other side in proportion, both even.
 nonisolated enum Upscale {
-    /// The largest result: 4096 × 4096 takes about 4 minutes on an M1 Max and peaks at 19 GB.
+    /// The largest result: 4096 × 4096 takes about 2 minutes on an M1 Max and peaks at 18 GB.
     static let maxMegapixels = 16.8
 
     static func outputSize(of picture: PixelSize, factor: Double) -> PixelSize {

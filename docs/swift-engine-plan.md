@@ -7,8 +7,28 @@ code refer to the files of the engine in `Engine/Sources/`.*
 
 ## Status
 
-29 September 2026: Phase 0's first item and 1c are done, and the code side of Phase 2 (the
-sealed build) is in the tree; the rest has not started.
+29 September 2026: Phase 0's first item, 1c and 1f are done, the code side of Phase 2 (the
+sealed build) is in the tree, and every result is marked as made with generative AI; the rest has
+not started.
+
+- **1f, the memory a job needs.** The app refuses a generation this Mac cannot hold
+  (`TurboMLX/Models/MemoryEstimate.swift`, the `notEnoughMemory` blocker): its peak is predicted
+  from 48 measurements of the catalog's models (every image model at 512, 1024 and 2048 px or
+  1536 px, with and without Save memory; SeedVR2 up to 16.8 MP; LTX from 1 to 10 s, 768 × 512 and
+  1024 × 576, both packs), as the larger of the prompt's encoding and a line in the megapixels
+  (for a clip, in megapixels and megapixels × latent frames, capped by the decode budget the
+  engine gives a smaller Mac). The fit is within 0.5 GB of every measurement but Ming-Image with
+  Save memory, kept at the encoding's 11.7 GB. A job is refused above the Mac's memory less 2.5 GB,
+  and the message says what would make it fit: Save memory, a smaller size, a shorter clip, a
+  smaller scale, another model. And the engine wires what a job uses for its length (mlx-swift's
+  `WiredMemoryTicket`, as large as the GPU's recommended working set, as the Python worker did):
+  the system's wired memory rose to 29 GB during a Klein job and fell back after it, at the same
+  speed, with MLX's peak lower (10.1 against 12.7 GB at 1024 px), so the estimate errs on the side
+  of starting.
+- **Marking.** The engine writes IPTC's Digital Source Type into every PNG's XMP and into an XMP
+  box of every MP4 (`Provenance.swift`): "created" from a prompt, "edited" from a picture unless
+  the picture says it was itself generated. It is what Article 50 of the EU AI Act asks of
+  generated media in machine-readable form.
 
 - **Phase 2, what is done.** A second target, *TurboMLX Sealed* (a build that does not update
   itself and has no sandbox exception), on the same synchronized folder: `SEALED` compiles Sparkle
@@ -33,12 +53,9 @@ sealed build) is in the tree; the rest has not started.
   default.
 - **Phase 2, what is left.** For the account holder: the certificates, identifier,
   provisioning profile, record and API key the sealed channel needs (the release script's header
-  lists them), then a beta build on a clean Mac and the submission. In the code: the predicted peak and its refusal (1f, below), and a visual check of
-  the two new Settings sections and of a folder chosen through the open panel with the engine
-  reading from it. Worth deciding before submitting: machine-readable marking of generated media
-  (IPTC `DigitalSourceType` `trainedAlgorithmicMedia` in the PNG and MP4 metadata), which Article
-  50 of the EU AI Act asks of generators placed on the EU market (to be confirmed with a lawyer);
-  LTX-2.5's license makes it a condition too.
+  lists them), then a beta build on a clean Mac and the submission. In the code: a visual check
+  of the two new Settings sections, of a folder chosen through the open panel with the engine
+  reading from it, and of the refusal's message.
 
 - **mlx-swift 0.32.2**, whose MLX core is the one mflux's venv and ltx-2-mlx run, replaced 0.31.6
   (core 0.31.1). Two deprecated calls changed (`asData(noCopy:)`), nothing else in the code. Every
@@ -239,7 +256,7 @@ In order of what it is worth.
 8. **GQA through `repeated`** in the Qwen3 and Qwen2.5 text encoders (`Qwen3TextEncoder.swift`
    lines 89–93, `Qwen25TextEncoder.swift` lines 49–53): the fused SDPA handles grouped heads
    itself (Gemma already does). Only counts in prompt encoding: small.
-9. **Memory: no wired limit, no predicted peak.** The Python worker had `wired_memory()`; the
+9. **Memory: no wired limit, no predicted peak.** *Done on 29 September (1f, see Status).* The Python worker had `wired_memory()`; the
    engine has none. Without it macOS can page the weights out under pressure and a 10 s step
    takes 60 (`docs/generation-performance.md`, §7). And today the app lets a Qwen-Image at
    2048² start on a 16 GB Mac: the engine dies of a Metal OOM (fatal, in either language) and
@@ -398,7 +415,7 @@ b. A fused RoPE rotation or `compile` of the step (Klein, Z-Image); measured on 
 c. The Qwen/Ming single-frame decoder with Conv2d (exact). *Done (29 September), SeedVR2's too.*
 d. Fused SDPA in the VAE mid block.
 e. GQA without `repeated` in the text encoders.
-f. A wired limit for the length of the generation + predicted peak and refusal.
+f. A wired limit for the length of the generation + predicted peak and refusal. *Done (29 September).*
 g. `asyncEval` on the next step (measure; keep only if it shows).
 
 Gate: `verify` ≤ 3 % per stage; PSNR against the reference images no worse than today

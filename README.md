@@ -110,7 +110,11 @@ Qwen model here, with Qwen-Image-Edit 2511 for editing; Qwen-Image 2.1 is newer 
 non-commercial use only.
 
 Peaks are with *Save memory* on, the default below 64 GB; without it Ming-Image peaks at ~35 GB
-and Qwen-Image at ~43 GB.
+and Qwen-Image at ~43 GB. Before a generation starts, the app compares what it should need with
+this Mac's memory (less 2.5 GB for macOS and the app), from peaks measured for every model at
+several sizes and clip lengths (`TurboMLX/Models/MemoryEstimate.swift`): one that cannot fit is
+refused, with what would make it fit (*Save memory*, a smaller size or a shorter clip, another
+model), instead of starting and taking the engine down when the GPU runs out.
 More mflux checkpoints of the same families can be added from
 **⋯ → Add Model…** (Hugging Face repository or local folder; for Klein you can pick the 4B/9B/base
 variant).

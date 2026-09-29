@@ -1443,7 +1443,7 @@ private struct GenerateBar: View {
             let percent = model.flatMap { app.downloads.active[$0.id]?.fraction }.map { " · \(Int($0 * 100))%" } ?? ""
             wideButton("Downloading\(percent)", systemImage: "arrow.down.circle") {}
                 .disabled(true)
-        case .noModel, .missingReference, .emptyPrompt, .upscaleTooLarge:
+        case .noModel, .missingReference, .emptyPrompt, .upscaleTooLarge, .notEnoughMemory:
             wideButton(generateTitle, systemImage: generateSymbol, note: note) {}
                 .disabled(true)
         case nil:
