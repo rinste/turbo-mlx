@@ -11,6 +11,13 @@ code refer to the files of the engine in `Engine/Sources/`.*
 code side of Phase 2 (the sealed build) are in the tree, and every result is marked as made with
 generative AI; the rest has not started.
 
+- **Phase 1, what is left, measured first.** The RoPE work (1a, 1b's rotation) has an upper
+  bound: an engine whose rotation does nothing (wrong images, right timing) runs Klein's steps
+  2.5 % faster (7.3 against 7.5 s at 512², 24.9 against 25.5 s at 1024²), and the tables rebuilt
+  per pass are a few small elementwise kernels inside that. A fused kernel would recover part of
+  2.5 %, `compile` would risk exact parity for less than that; with the engine already ahead of
+  mflux, neither is worth it now. 1e (GQA in the text encoders) and 1g (`asyncEval`) touch only the
+  prompt's encoding or a percent or two: set aside likewise.
 - **Phase 4, verification without Python, the tools.** `turbo-engine verify --all` checks every
   fixture in `build/fixtures` in one run (the 8 in 1.5 minutes), `turbo-engine compare a b` gives
   the PSNR and the largest difference of two images, or of two clips frame by frame with their
