@@ -219,6 +219,9 @@ with its fixture and `verify` stage (see `Engine/README.md`), and an adapter in 
 native engine, what is checked so far, and what comes next.
 [docs/generation-performance.md](docs/generation-performance.md) ranks the ways to make generation
 faster, with the measurements that decide each one.
+[docs/swift-engine-plan.md](docs/swift-engine-plan.md) takes stock of the native engine (where it
+loses time, what still needs Python, its dependencies) and plans what follows: efficiency, fewer
+dependencies, the App Store.
 
 ## Troubleshooting
 
