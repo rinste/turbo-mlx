@@ -60,6 +60,9 @@ final class GenerationJob: Identifiable {
 
     var statusLabel: String {
         if isCancelling { return "Stopping…" }
+        // An upscale has one step and no prompt: its picture is what is read first.
+        if model.family.isUpscaler, phase == .encodingPrompt { return "Reading the picture…" }
+        if model.family.isUpscaler, phase == .denoising { return "Upscaling…" }
         if phase == .denoising { return "Step \(step) of \(totalSteps)" }
         return phase.label(video: model.family.media == .video)
     }
@@ -76,6 +79,15 @@ final class GenerationJob: Identifiable {
         case .decoding, .encodingVideo, .saving: return 1
         default: return nil
         }
+    }
+
+    /// `fraction`, except for an upscale: its single step and its decode, about half of its time,
+    /// would fill the bar at once, so it moves with the time the plan expects instead.
+    func fraction(at now: Date) -> Double? {
+        guard model.family.isUpscaler, phase == .denoising || phase == .decoding, let plan, let denoiseStartedAt,
+              case let total = (plan.steps.reduce(0, +) + plan.decode) * pace, total > 0
+        else { return fraction }
+        return min(now.timeIntervalSince(denoiseStartedAt) / total, 0.98)
     }
 
     /// Seconds left at `now`: the plan's steps and decode at this run's pace, counting down within

@@ -8,6 +8,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     case qwenImage = "qwen-image"
     case qwenImageEdit = "qwen-image-edit"
     case ltx2 = "ltx-2"
+    case seedVR2 = "seedvr2"
 
     var displayName: String {
         switch self {
@@ -17,6 +18,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .qwenImage: "Qwen-Image"
         case .qwenImageEdit: "Qwen-Image Edit"
         case .ltx2: "LTX-2"
+        case .seedVR2: "SeedVR2"
         }
     }
 
@@ -26,18 +28,21 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     var media: MediaKind { self == .ltx2 ? .video : .image }
 
     /// A reference image: the first frame of a clip (LTX-2), the picture an image is edited from
-    /// as the prompt says (FLUX.2 Klein, Qwen-Image Edit).
-    var takesReferenceImage: Bool { self == .ltx2 || self == .flux2Klein || self == .qwenImageEdit }
+    /// as the prompt says (FLUX.2 Klein, Qwen-Image Edit), the picture an upscaler enlarges.
+    var takesReferenceImage: Bool { self == .ltx2 || self == .flux2Klein || self == .qwenImageEdit || isUpscaler }
 
-    /// Qwen-Image Edit only edits: it needs the picture.
-    var requiresReferenceImage: Bool { self == .qwenImageEdit }
+    /// Qwen-Image Edit only edits and SeedVR2 only upscales: they need the picture.
+    var requiresReferenceImage: Bool { self == .qwenImageEdit || isUpscaler }
+
+    /// Enlarges the reference picture instead of following a prompt: no prompt, no format, a scale.
+    var isUpscaler: Bool { self == .seedVR2 }
 
     /// Checkpoint sub-folders that must hold complete safetensors shards.
     var components: [String] {
         switch self {
         case .ming: ["mllm", "connector", "mlp", "transformer", "vae"]
         case .zImageTurbo, .flux2Klein, .qwenImage, .qwenImageEdit: ["transformer", "text_encoder", "vae"]
-        case .ltx2: []
+        case .ltx2, .seedVR2: []
         }
     }
 
@@ -48,6 +53,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .ltx2:
             ["embedded_config.json", "transformer-distilled*.safetensors", "connector.safetensors", "vae_decoder.safetensors",
              "vae_encoder.safetensors", "audio_vae.safetensors", "vocoder.safetensors", "spatial_upscaler_x2_v1_1.safetensors"]
+        case .seedVR2: Self.seedVR2Files
         default: []
         }
     }
@@ -57,8 +63,13 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .ming: "mllm/tokenizer.json"
         case .zImageTurbo, .flux2Klein, .qwenImage, .qwenImageEdit: "tokenizer/tokenizer.json"
         case .ltx2: nil // in the text encoder's checkpoint
+        case .seedVR2: nil // no prompt: the engine has the fixed text embedding
         }
     }
+
+    /// SeedVR2's original checkpoint (numz/SeedVR2_comfyUI) holds every size and precision; the 3B
+    /// model in float16 is these two files.
+    static let seedVR2Files = ["seedvr2_ema_3b_fp16.safetensors", "ema_vae_fp16.safetensors"]
 
     /// Hugging Face files to download; mirrors each mflux weight definition (for LTX-2, the files
     /// of dgrauet's packs that the distilled pipeline reads).
@@ -73,6 +84,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
                     "transformer-distilled-1.1.safetensors", "connector.safetensors", "vae_decoder.safetensors",
                     "vae_encoder.safetensors", "audio_vae.safetensors", "vocoder.safetensors",
                     "spatial_upscaler_x2_v1_1.safetensors", "spatial_upscaler_x2_v1_1_config.json"]
+        case .seedVR2: return ["README.md"] + Self.seedVR2Files
         }
     }
 
@@ -160,7 +172,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
     var supportsGuidance: Bool {
         switch family {
         case .ming, .qwenImage, .qwenImageEdit: true
-        case .zImageTurbo, .ltx2: false
+        case .zImageTurbo, .ltx2, .seedVR2: false
         case .flux2Klein: isKleinBase
         }
     }
@@ -173,6 +185,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .flux2Klein: isKleinBase ? 50 : 4
         case .qwenImage, .qwenImageEdit: 20
         case .ltx2: 8
+        case .seedVR2: 1
         }
     }
 
@@ -189,6 +202,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .flux2Klein: isKleinBase ? 10...60 : 2...12
         case .qwenImage, .qwenImageEdit: 10...50
         case .ltx2: 4...8
+        case .seedVR2: 1...1
         }
     }
 }
@@ -314,6 +328,20 @@ enum ModelCatalog {
             sizeBytes: 28_958_972_495,
             license: "Apache 2.0",
             recommendedMemoryGB: 32,
+            isBuiltIn: true
+        ),
+        // SeedVR2 3B in float16 (ByteDance's one-step diffusion upscaler, as mflux runs it): the
+        // transformer and the VAE of the original checkpoint. Measured on an M1 Max: 688 × 384 to
+        // 1376 × 768 in 18 s, 672 × 880 to 1344 × 1760 in 34 s, peaking at 10.5 GB.
+        ModelDescriptor(
+            name: "SeedVR2 Upscaler 3B · 16 GB RAM",
+            detail: "ByteDance's upscaler: enlarges a picture two to four times with sharper, faithful detail, in one step. No prompt.",
+            family: .seedVR2,
+            source: .huggingFace(repo: "numz/SeedVR2_comfyUI"),
+            revision: "09ced71023636e9bc8cdf9cdecfb2625d1e691e8",
+            sizeBytes: 6_783_018_808 + 501_324_814 + 41_823,
+            license: "Apache 2.0",
+            recommendedMemoryGB: 16,
             isBuiltIn: true
         ),
     ]

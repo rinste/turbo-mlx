@@ -28,6 +28,7 @@ final class AppModel {
         case modelDownloading
         case missingReference
         case emptyPrompt
+        case upscaleTooLarge
 
         var hint: String {
             switch self {
@@ -36,6 +37,7 @@ final class AppModel {
             case .modelDownloading: "Waiting for the download to finish."
             case .missingReference: "Add the picture to edit."
             case .emptyPrompt: "Write a prompt."
+            case .upscaleTooLarge: "Choose a smaller scale: at most 4096 × 4096 pixels."
             }
         }
     }
@@ -242,7 +244,8 @@ final class AppModel {
     /// Downloads the selected model, then generates with the current prompt.
     func downloadAndGenerate() {
         guard let model = selectedModel else { return }
-        generateAfterDownload = settings.trimmedPrompt.isEmpty ? nil : model.id
+        let isEmpty = model.family.isUpscaler ? !hasReferenceImage : settings.trimmedPrompt.isEmpty
+        generateAfterDownload = isEmpty ? nil : model.id
         download(model)
         if !downloads.isDownloading(model) { generateAfterDownload = nil }
     }
@@ -388,7 +391,8 @@ final class AppModel {
         if downloads.isDownloading(model) { return .modelDownloading }
         if !isInstalled(model) { return .modelNotDownloaded }
         if model.family.requiresReferenceImage, !hasReferenceImage { return .missingReference }
-        if settings.trimmedPrompt.isEmpty { return .emptyPrompt }
+        if !model.family.isUpscaler, settings.trimmedPrompt.isEmpty { return .emptyPrompt }
+        if model.family.isUpscaler, let size = settings.upscaledSize, size.megapixels > Upscale.maxMegapixels { return .upscaleTooLarge }
         return nil
     }
 
@@ -408,23 +412,27 @@ final class AppModel {
         guard blocker == nil, let model = selectedModel else { return }
         preloadDeclined = false
         let isVideo = model.family.media == .video
+        let upscales = model.family.isUpscaler
         // A reference image whose file is gone (a history folder emptied by hand) is dropped.
         let reference = settings.referenceImage.flatMap { name in
             FileManager.default.fileExists(atPath: HistoryStore.referenceURL(name).path) ? name : nil
         }
         for seed in settings.nextSeeds() {
+            // An upscale has no prompt: the picture and the factor say it all.
             let request = GenerationRequest(
-                prompt: settings.trimmedPrompt,
-                blocks: settings.blocks.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
+                prompt: upscales ? "" : settings.trimmedPrompt,
+                blocks: upscales ? nil : settings.blocks.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
                 seed: seed,
                 size: settings.size(for: model.family),
                 steps: min(max(settings.steps, model.stepRange.lowerBound), model.stepRange.upperBound),
-                guidance: settings.guidance,
+                guidance: upscales ? 1 : settings.guidance,
                 transparentBackground: settings.transparentBackground && model.family.producesAlpha,
                 lowMemory: settings.lowMemory,
                 frames: isVideo ? settings.videoFrames : nil,
                 fps: isVideo ? settings.videoFrameRate : nil,
-                referenceImage: model.family.takesReferenceImage ? reference : nil
+                referenceImage: model.family.takesReferenceImage ? reference : nil,
+                upscale: upscales ? settings.upscale : nil,
+                softness: upscales ? settings.softness : nil
             )
             let output = isVideo ? history.newVideoURL(seed: seed) : history.newImageURL(seed: seed)
             let job = GenerationJob(model: model, request: request, outputURL: output)
@@ -707,13 +715,19 @@ final class AppModel {
         -> (settings: GenerationSettings, modelID: String) {
         let model = models.first { $0.id == modelID }
         var updated = settings
-        if let blocks = request.blocks, !blocks.isEmpty {
-            updated.blocks = blocks
-        } else {
-            updated.blocks = PromptBlock.defaults(subject: request.prompt)
-        }
         let isVideo = media == .video
-        updated.apply(size: request.size, video: isVideo)
+        if model?.family.isUpscaler == true {
+            // An upscale has neither prompt nor format: those stay as they are for the next image.
+            updated.upscale = request.upscale ?? updated.upscale
+            updated.softness = request.softness ?? updated.softness
+        } else {
+            if let blocks = request.blocks, !blocks.isEmpty {
+                updated.blocks = blocks
+            } else {
+                updated.blocks = PromptBlock.defaults(subject: request.prompt)
+            }
+            updated.apply(size: request.size, video: isVideo)
+        }
         if isVideo, let frames = request.frames, let fps = request.fps, fps > 0 {
             updated.videoFrameRate = fps
             updated.videoSeconds = min(max((Double(frames - 1) / Double(fps)).rounded(), GenerationSettings.videoDurations.lowerBound),
@@ -789,6 +803,26 @@ final class AppModel {
         selectedModelID = modelID
         settings = new
         viewer = shown
+    }
+
+    /// The upscaler, when the list has one.
+    var upscaler: ModelDescriptor? { models.first { $0.family.isUpscaler } }
+
+    /// Sets up an upscale of a generated image (a clip's first frame): the upscaler, the image as
+    /// its picture, in the draft for Generate to start; ⌘Z brings back the controls.
+    func upscale(_ item: HistoryItem, undoManager: UndoManager? = nil) {
+        guard let model = upscaler else { return }
+        let url = url(for: item)
+        Task {
+            do {
+                var new = settings
+                new.referenceImage = try await HistoryStore.importReference(from: url)
+                replaceControls(with: new, modelID: model.id, viewer: .draft, source: .draft, actionName: "Upscale",
+                                undoManager: undoManager)
+            } catch {
+                alert = AppAlert(title: "Couldn’t use the image", message: error.localizedDescription)
+            }
+        }
     }
 
     /// Makes a generated image (a clip's first frame) the reference image of the next clip.

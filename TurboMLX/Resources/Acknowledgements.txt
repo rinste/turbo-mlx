@@ -20,6 +20,12 @@ The engine's Swift ports follow these projects:
   Pillow: its bicubic and Lanczos resizes, for the pictures edits start from
     https://github.com/python-pillow/Pillow
 
+The engine contains SeedVR2's fixed text embedding (pos_emb), from
+ByteDance's SeedVR2 under the Apache License 2.0, as mflux ships it:
+
+  SeedVR2
+    https://github.com/ByteDance-Seed/SeedVR
+
 The app contains these libraries:
 
   EventSource 1.5.1
@@ -527,7 +533,7 @@ Apache License 2.0
 
 The license of swift-argument-parser, swift-asn1, swift-collections,
 swift-crypto, swift-huggingface, swift-jinja, swift-numerics,
-swift-transformers, metal-cpp:
+swift-transformers, metal-cpp, and SeedVR2's text embedding:
 
 Apache License
                            Version 2.0, January 2004

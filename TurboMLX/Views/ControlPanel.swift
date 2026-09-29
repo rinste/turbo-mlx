@@ -15,12 +15,17 @@ struct ControlPanel: View {
                 if model.family.takesReferenceImage {
                     ReferenceImageSection(settings: $app.settings)
                 }
-                PromptSection(settings: $app.settings, focus: $focusedBlock)
-                FormatSection(settings: $app.settings)
-                if model.family.media == .video {
-                    ClipSection(settings: $app.settings)
+                if model.family.isUpscaler {
+                    // No prompt and no format: the picture, and how much larger.
+                    UpscaleSection(settings: $app.settings)
+                } else {
+                    PromptSection(settings: $app.settings, focus: $focusedBlock)
+                    FormatSection(settings: $app.settings)
+                    if model.family.media == .video {
+                        ClipSection(settings: $app.settings)
+                    }
+                    ParametersSection(settings: $app.settings, model: model)
                 }
-                ParametersSection(settings: $app.settings, model: model)
                 AdvancedSection(isExpanded: $showsAdvanced, settings: $app.settings, family: model.family)
             }
         }
@@ -780,9 +785,11 @@ private struct ReferenceImageSection: View {
     @State private var failure: String?
 
     private var isVideo: Bool { app.selectedModel?.family.media == .video }
+    private var isUpscaler: Bool { app.selectedModel?.family.isUpscaler == true }
 
     private var caption: String {
         if isVideo { return "Optional. It is fitted to the clip’s size, cropped from the middle." }
+        if isUpscaler { return "Needed. It keeps its proportions; a picture larger than 2048 pixels is reduced to that first." }
         if app.selectedModel?.family.requiresReferenceImage == true {
             return "Needed: the picture to edit. It keeps its own proportions, at about the new image’s size; the new image takes the format below."
         }
@@ -794,10 +801,7 @@ private struct ReferenceImageSection: View {
             HStack(alignment: .center, spacing: 12) {
                 preview
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(settings.referenceImage == nil
-                         ? (isVideo ? "Drop an image here, or pick one: the clip starts from it."
-                                    : "Drop an image here, or pick one: the prompt says what to change in it.")
-                         : (isVideo ? "The clip starts from this image." : "The new image is made from this one, as the prompt says."))
+                    Text(prompt)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -834,7 +838,7 @@ private struct ReferenceImageSection: View {
                 }
             }
         } header: {
-            Text("Reference Image")
+            Text(isUpscaler ? "Picture to Upscale" : "Reference Image")
         } footer: {
             if let failure {
                 Text(failure).font(.caption).foregroundStyle(.red)
@@ -843,6 +847,17 @@ private struct ReferenceImageSection: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private var prompt: String {
+        switch (settings.referenceImage == nil, isVideo, isUpscaler) {
+        case (true, true, _): "Drop an image here, or pick one: the clip starts from it."
+        case (true, _, true): "Drop an image here, or pick one: it comes out larger, with sharper detail."
+        case (true, _, _): "Drop an image here, or pick one: the prompt says what to change in it."
+        case (false, true, _): "The clip starts from this image."
+        case (false, _, true): "This picture is upscaled."
+        case (false, _, _): "The new image is made from this one, as the prompt says."
         }
     }
 
@@ -872,7 +887,7 @@ private struct ReferenceImageSection: View {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
-        panel.message = "Choose the image the clip starts from"
+        panel.message = isUpscaler ? "Choose the picture to upscale" : isVideo ? "Choose the image the clip starts from" : "Choose the reference image"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         use(url)
     }
@@ -956,7 +971,7 @@ private struct HistoryImagePicker: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help(item.prompt)
+                    .help(item.caption)
                 }
             }
             .padding(12)
@@ -1089,6 +1104,56 @@ private struct ParametersSection: View {
     }
 }
 
+// MARK: - Upscale
+
+/// An upscaler's settings: how many times larger, how much the picture is softened first, and the
+/// size that makes.
+private struct UpscaleSection: View {
+    @Binding var settings: GenerationSettings
+
+    var body: some View {
+        Section("Upscale") {
+            Picker("Scale", selection: $settings.upscale) {
+                ForEach(GenerationSettings.upscaleFactors, id: \.self) { factor in
+                    Text(verbatim: "\(Int(factor))×").tag(factor)
+                }
+            }
+            .pickerStyle(.segmented)
+            .help("How many times larger each side of the picture becomes")
+
+            LabeledContent {
+                HStack(spacing: 6) {
+                    SliderIcon("circle.grid.3x3", help: "None: the picture’s detail as it is", label: "Sharper")
+                    Slider(value: $settings.softness, in: 0...1, step: 0.1)
+                    SliderIcon("drop", help: "More: the picture is reduced first, which smooths noise and harsh edges", label: "Softer")
+                    Text(verbatim: "\(Int((settings.softness * 100).rounded()))%")
+                        .monospacedDigit()
+                        .frame(width: 38, alignment: .trailing)
+                }
+            } label: {
+                Text("Softness")
+                    .help("0% keeps the picture’s own detail. Higher values shrink it first (up to 8 times), for smoother results from a noisy, compressed or over-sharpened picture; 50% is a good start.")
+            }
+
+            if let size = settings.upscaledSize {
+                LabeledContent("Image") {
+                    Text(verbatim: "\(size.width) × \(size.height) px · \(size.megapixels.formatted(.number.precision(.fractionLength(1)))) MP")
+                        .monospacedDigit()
+                }
+                if size.megapixels > Upscale.maxMegapixels {
+                    Label("Too large: at most 4096 × 4096 pixels. Choose a smaller scale.", systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                } else if size.megapixels > 9 {
+                    Label("Large results take minutes and more memory: about 19 GB at 4096 × 4096.", systemImage: "tortoise")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+        }
+    }
+}
+
 /// A symbol at one end of a slider, the same width for every slider so they line up.
 private struct SliderIcon: View {
     let systemImage: String
@@ -1145,7 +1210,10 @@ private struct AdvancedSection: View {
             .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
 
             if isExpanded {
-                SizeRows(settings: $settings, video: family.media == .video)
+                // An upscale's size is its picture's, times the scale.
+                if !family.isUpscaler {
+                    SizeRows(settings: $settings, video: family.media == .video)
+                }
                 OutputRows(settings: $settings, family: family)
                 MemoryRows(settings: $settings, family: family)
             }
@@ -1261,14 +1329,19 @@ private struct MemoryRows: View {
             "Keeps less in memory and, where it doesn’t affect the image, decodes it in tiles."
         case .ltx2:
             "Frees Gemma and the text connector (about 14 GB) once the prompt is read, and the transformer before the clip is decoded. A prompt that was not in the queue yet loads them again."
+        case .seedVR2:
+            "SeedVR2 always reads and writes the picture in tiles."
         }
         return base + " On by default below 64 GB of memory."
     }
 
     var body: some View {
-        Toggle(isOn: $settings.lowMemory) {
-            Text("Save memory")
-            Text(saveMemoryDescription)
+        // SeedVR2 already works in tiles: the switch would change nothing.
+        if !family.isUpscaler {
+            Toggle(isOn: $settings.lowMemory) {
+                Text("Save memory")
+                Text(saveMemoryDescription)
+            }
         }
         if app.backend.loadedModelPath != nil {
             LabeledContent {
@@ -1305,10 +1378,13 @@ private struct GenerateBar: View {
                                 .foregroundStyle(.secondary)
                         }
                         .font(.caption.monospacedDigit())
-                        if let fraction = job.fraction {
-                            ProgressView(value: fraction)
-                        } else {
-                            ProgressView().progressViewStyle(.linear)
+                        // Twice a second: an upscale's bar follows the time.
+                        TimelineView(.periodic(from: .now, by: 0.5)) { context in
+                            if let fraction = job.fraction(at: context.date) {
+                                ProgressView(value: fraction)
+                            } else {
+                                ProgressView().progressViewStyle(.linear)
+                            }
                         }
                     }
                     Button {
@@ -1346,7 +1422,9 @@ private struct GenerateBar: View {
         switch app.blocker {
         case .modelNotDownloaded:
             let size = model?.sizeBytes.map { " · \(Format.bytes($0))" } ?? ""
-            if app.settings.trimmedPrompt.isEmpty {
+            // Nothing to generate yet: a prompt, or for an upscaler its picture.
+            let isEmpty = model?.family.isUpscaler == true ? !app.hasReferenceImage : app.settings.trimmedPrompt.isEmpty
+            if isEmpty {
                 wideButton("Download Model\(size)", systemImage: "arrow.down.circle") {
                     if let model { app.download(model) }
                 }
@@ -1360,7 +1438,7 @@ private struct GenerateBar: View {
             let percent = model.flatMap { app.downloads.active[$0.id]?.fraction }.map { " · \(Int($0 * 100))%" } ?? ""
             wideButton("Downloading\(percent)", systemImage: "arrow.down.circle") {}
                 .disabled(true)
-        case .noModel, .missingReference, .emptyPrompt:
+        case .noModel, .missingReference, .emptyPrompt, .upscaleTooLarge:
             wideButton(generateTitle, systemImage: generateSymbol, note: note) {}
                 .disabled(true)
         case nil:
@@ -1407,6 +1485,7 @@ private struct GenerateBar: View {
     private var generateTitle: String {
         let count = app.settings.batchCount
         if app.isBusy { return count > 1 ? "Add \(count) to Queue" : "Add to Queue" }
+        if app.selectedModel?.family.isUpscaler == true { return count > 1 ? "Upscale \(count) Times" : "Upscale" }
         let things = app.selectedModel?.family.media == .video ? "Clips" : "Images"
         return count > 1 ? "Generate \(count) \(things)" : "Generate"
     }
@@ -1418,6 +1497,7 @@ private struct GenerateBar: View {
     private var caption: String? {
         switch app.blocker {
         case .modelNotDownloaded: "Models download once and stay on this Mac."
+        case .missingReference where app.selectedModel?.family.isUpscaler == true: "Add the picture to upscale."
         case .some(let blocker): blocker.hint
         case nil:
             switch app.pendingJobs.count {

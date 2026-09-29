@@ -105,7 +105,8 @@ public final class Engine {
             let request = FamilyRequest(
                 prompt: params.prompt, seed: params.seed, width: params.width, height: params.height,
                 steps: params.steps, guidance: params.guidance, flattenAlpha: params.flattenAlpha ?? false,
-                frames: params.frames, fps: params.fps, imagePath: params.image
+                frames: params.frames, fps: params.fps, imagePath: params.image,
+                upscale: params.upscale, softness: params.softness
             )
             if let video = model as? VideoFamilyModel {
                 try generateVideo(video, request: request, id: id, spec: spec, params: params, started: started)

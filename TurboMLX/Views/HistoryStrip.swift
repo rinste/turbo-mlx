@@ -202,7 +202,7 @@ private struct HistoryThumbnail: View {
             }
             .onDrop(of: [.historyItem], delegate: HistoryMoveDelegate(target: item.id, app: app))
             .contextMenu { HistoryItemMenu(item: item) }
-            .help(item.prompt)
+            .help(item.caption)
     }
 }
 
@@ -275,6 +275,18 @@ private struct JobThumbnail: View {
                             Image(systemName: "clock")
                                 .foregroundStyle(.secondary)
                             Text("Queued").font(.caption2).foregroundStyle(.secondary)
+                        } else if job.model.family.isUpscaler {
+                            // One step: the ring follows the time instead, as the job's bar does.
+                            TimelineView(.periodic(from: .now, by: 0.5)) { context in
+                                if let fraction = job.fraction(at: context.date) {
+                                    ProgressView(value: fraction)
+                                        .progressViewStyle(.circular)
+                                        .controlSize(.small)
+                                } else {
+                                    ProgressView().controlSize(.small)
+                                }
+                            }
+                            Text("Upscale").font(.caption2).foregroundStyle(.secondary)
                         } else if let fraction = job.fraction {
                             ProgressView(value: fraction)
                                 .progressViewStyle(.circular)
@@ -294,7 +306,7 @@ private struct JobThumbnail: View {
         .contextMenu {
             Button(job.phase == .queued ? "Remove from Queue" : "Stop") { app.cancel(job) }
         }
-        .help(job.request.prompt)
+        .help(job.request.caption)
         .accessibilityLabel(job.statusLabel)
     }
 }

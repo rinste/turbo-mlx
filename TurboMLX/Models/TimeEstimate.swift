@@ -23,7 +23,10 @@ enum TimeEstimate {
                         reference: request.referenceImage)
         let byID = Dictionary(models.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let (rates, _) = rates(for: model, work: work, lowMemory: request.lowMemory, history: history, models: byID)
-        return Plan(steps: work.stepUnits.map { $0 * rates.denoise }, decode: rates.decode * work.decode)
+        // An upscale's decode rate also covers the picture's encode, done before its step: the
+        // decode itself is 72% of the two.
+        let decodeShare = model.family.isUpscaler ? 0.72 : 1
+        return Plan(steps: work.stepUnits.map { $0 * rates.denoise }, decode: rates.decode * work.decode * decodeShare)
     }
 
     /// `count` generations with these settings, after loading the model if it is not in memory.
@@ -59,6 +62,11 @@ enum TimeEstimate {
                 stepUnits = Array(repeating: Self.attended(tokens / 4) / 1000, count: max(steps, 0))
                     + Array(repeating: Self.attended(tokens) / 1000, count: 3)
                 decode = pixels / 1_000_000 * Double(frames)
+            } else if model.family.isUpscaler {
+                // One step over the result's tokens, in windows of a few hundred: no attention
+                // term. Encoding the picture (at the result's size) counts with the decode.
+                stepUnits = [pixels / 256 / 1000]
+                decode = pixels / 1_000_000
             } else {
                 // 16 × 16 pixels per token; FLUX.2 Klein reads a reference image's tokens in every pass
                 // too, and Qwen-Image Edit its picture's, encoded at about the image's size.
@@ -107,6 +115,8 @@ enum TimeEstimate {
         // The 8-bit transformer is slower: 294 s against 231 s for 5 s at 768 × 512.
         case .ltx2 where model.id.contains("q8"): Rates(denoise: 6.93, decode: 0.7, fixed: 12, load: 5)
         case .ltx2: Rates(denoise: 5.3, decode: 0.6, fixed: 12, load: 5)
+        // 1376 × 768 in 18 s, 1344 × 1760 in 34 s (encode and decode 14 and 25 s of it).
+        case .seedVR2: Rates(denoise: 0.97, decode: 8.3, fixed: 5.7, load: 3)
         }
     }
 
@@ -126,7 +136,8 @@ enum TimeEstimate {
                         reference: request.referenceImage)
             guard work.denoise > 0, work.decode > 0 else { return nil }
             self.denoise = denoise
-            decode = timings["decode"] ?? 0
+            // An upscale's encode is the picture's, at the result's size: it counts with the decode.
+            decode = (timings["decode"] ?? 0) + (model.family.isUpscaler ? timings["encode"] ?? 0 : 0)
             load = timings["load"] ?? 0
             fixed = max(0, item.seconds - denoise - decode - load)
             lowMemory = request.lowMemory

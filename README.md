@@ -17,7 +17,10 @@ app downloads it, and that is all the setup there is.
   above the prompt (dropped from Finder or from the history, chosen from a file or among the
   generated images): the clip's first frame, or the picture Klein and Qwen-Image Edit change as the
   prompt says ("make it winter"), in its own proportions (Qwen-Image Edit needs one). For a clip,
-  its duration and frame rate. At the bottom, on a darker tray, *Model:* and its picker (image and
+  its duration and frame rate. With the SeedVR2 upscaler, no prompt and no format: the *Picture to
+  Upscale*, its scale (2×, 3× or 4× each side, up to 4096 × 4096 pixels), a *Softness* that
+  shrinks a noisy or over-sharpened picture first, and the size it comes out at; *Upscale…*, in the
+  menu of any image, sets one up. At the bottom, on a darker tray, *Model:* and its picker (image and
   video models in two groups, each with the memory it wants on a small dark badge; an icon tells the
   models that also take a reference image, a picture, from those that work from the prompt alone,
   lines, with a small arrow while one is not downloaded; then its status) above the main button,
@@ -75,6 +78,7 @@ GitHub whether a newer version is out.
 | [Qwen-Image Edit 2511](https://huggingface.co/mflux-community/qwen-image-edit-2511-mflux-q4) | 32 GB | 29 GB | 33 GB (672 × 880, without *Save memory*) | changes a reference picture as the prompt says and keeps the rest · 20B, 4-bit · 20 steps · Apache 2.0 |
 | [LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q4) | 32 GB | 28.5 GB | 17 GB (768 × 512, 5 s) | video with sound, from a prompt or from an image as the first frame · 22B distilled, 4-bit · 8 + 3 steps · LTX-2 Community |
 | [LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q8) | 64 GB | 37.8 GB | 38 GB (768 × 512, 5 s) | the 8-bit version, closer to the original |
+| [SeedVR2 Upscaler 3B](https://huggingface.co/numz/SeedVR2_comfyUI) | 16 GB | 7.3 GB | 10.5 GB (to 1536 × 1536), 19 GB (to 4096 × 4096) | enlarges a picture 2–4× with sharper, faithful detail, in one step, no prompt · float16 · Apache 2.0 |
 
 Measured on an M1 Max with mflux 0.20, the Python reference the native engine is checked against
 (the 8-bit Z-Image peak adds its larger weights to the measured 4-bit one). A model is listed under
@@ -87,6 +91,10 @@ one from an image 137 s; the 8-bit version, without *Save memory* as on a 64 GB 
 (294 s) for the same 5 seconds. Qwen-Image Edit reads the picture's tokens next to the image's in
 both passes of every step: a 672 × 880 edit in 20 steps took 12.4 minutes with mflux and about 15 with
 the native engine (measured while the Mac was busy building), whose image matched mflux's to 68 dB.
+SeedVR2 encodes and decodes the picture in tiles and runs its transformer once, attending within
+windows: 672 × 880 to 1344 × 1760 takes 34 s (mflux 51 s, peaking at 18 GB), 768 × 768 to
+2304 × 2304 75 s at 11 GB, to 4096 × 4096 about 4 minutes at 19 GB; its images match mflux's to
+57–62 dB.
 
 Ming-Image comes in one version (te5): at 1024 px its memory peak is set by the DiT, which is the
 same in every conversion, and te6/te8 give the same images as te5 with more memory. Qwen-Image
@@ -136,7 +144,7 @@ SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo-engine serve ──▶ 
 
 - **Engine.** `Engine/` is a Swift package that runs every family of the catalog (FLUX.2 Klein,
   Z-Image Turbo, Qwen-Image 2512 and Qwen-Image-Edit 2511, Ming-Image from mflux's checkpoints,
-  LTX-2.3 from dgrauet's) on MLX Swift. The app's
+  LTX-2.3 from dgrauet's, the SeedVR2 upscaler from its original one) on MLX Swift. The app's
   build embeds its `turbo-engine` binary in the bundle (`Contents/MacOS`, signed with the app),
   and every model runs there: nothing is installed on first launch, the engine starts in an
   instant, and no Python process sits between the app and the GPU. The engine keeps the

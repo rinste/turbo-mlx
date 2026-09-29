@@ -2,7 +2,7 @@
 import PackageDescription
 
 // The native engine of Turbo MLX: the catalog's families (FLUX.2 Klein, Z-Image Turbo, Qwen-Image,
-// Qwen-Image Edit, Ming-Image, LTX-2) on MLX Swift, speaking the app's JSON protocol. Build it with Xcode or `xcodebuild`
+// Qwen-Image Edit, Ming-Image, LTX-2, the SeedVR2 upscaler) on MLX Swift, speaking the app's JSON protocol. Build it with Xcode or `xcodebuild`
 // (the Metal shaders of mlx-swift need them), see README.md.
 let package = Package(
     name: "TurboEngine",
@@ -23,6 +23,8 @@ let package = Package(
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
             ],
+            // SeedVR2's fixed text embedding, as mflux ships it.
+            resources: [.copy("Resources/seedvr2_pos_emb.safetensors")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(

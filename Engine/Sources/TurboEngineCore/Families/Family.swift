@@ -16,10 +16,13 @@ public struct FamilyRequest {
     public var frames: Int?
     public var fps: Double?
     public var imagePath: String?
+    /// Upscalers: the factor the picture's shorter side is scaled by, the softening before (0–1).
+    public var upscale: Double?
+    public var softness: Double?
 
     public init(
         prompt: String, seed: Int, width: Int, height: Int, steps: Int, guidance: Double, flattenAlpha: Bool,
-        frames: Int? = nil, fps: Double? = nil, imagePath: String? = nil
+        frames: Int? = nil, fps: Double? = nil, imagePath: String? = nil, upscale: Double? = nil, softness: Double? = nil
     ) {
         self.prompt = prompt
         self.seed = seed
@@ -31,6 +34,8 @@ public struct FamilyRequest {
         self.frames = frames
         self.fps = fps
         self.imagePath = imagePath
+        self.upscale = upscale
+        self.softness = softness
     }
 }
 
@@ -64,7 +69,7 @@ public protocol FamilyModel: AnyObject {
 /// Loads the model a spec names, by family.
 public enum FamilyLoader {
     /// Families this engine implements, as the app names them.
-    public static let families = ["flux2-klein", "z-image-turbo", "qwen-image", "qwen-image-edit", "ming", "ltx-2"]
+    public static let families = ["flux2-klein", "z-image-turbo", "qwen-image", "qwen-image-edit", "ming", "ltx-2", "seedvr2"]
 
     public static func load(_ spec: ModelSpec, loadTokenizer: Bool = true) throws -> FamilyModel {
         let root = URL(fileURLWithPath: spec.path)
@@ -80,6 +85,8 @@ public enum FamilyLoader {
             return try QwenImageEditModel(modelPath: root, config: .qwenImageEdit2511, loadTokenizer: loadTokenizer)
         case "ming":
             return try MingModel(modelPath: root, config: .design, loadTokenizer: loadTokenizer)
+        case "seedvr2":
+            return try SeedVR2Model(modelPath: root, config: .seedVR2_3B)
         case "ltx-2":
             guard let textEncoder = spec.textEncoderPath else { throw EngineError.missingTextEncoder(spec.family) }
             return try LTXVideoModel(pack: root, textEncoder: URL(fileURLWithPath: textEncoder), loadTokenizer: loadTokenizer)
@@ -90,7 +97,7 @@ public enum FamilyLoader {
 
     /// A name for the log: "flux2-klein-4b, 4-bit".
     public static func describe(_ model: FamilyModel, spec: ModelSpec) -> String {
-        let bits = model.bits.map { "\($0)-bit" } ?? "bf16"
+        let bits = model.bits.map { "\($0)-bit" } ?? (model is SeedVR2Model ? "fp16" : "bf16")
         return "\(spec.family), \(bits)"
     }
 }

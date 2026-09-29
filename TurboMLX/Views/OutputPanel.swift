@@ -365,7 +365,7 @@ private struct ItemInfoBar: View {
         VStack(alignment: .leading, spacing: 8) {
             HeightLimit(maxHeight: Self.promptHeight) {
                 ScrollView {
-                    Text(item.prompt)
+                    Text(item.caption)
                         .font(.callout)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -387,13 +387,15 @@ private struct ItemInfoBar: View {
                         MetadataChip(systemImage: "film", text: "\(Format.clipDuration(frames: frames, fps: fps)) · \(fps) fps",
                                      help: "\(frames) frames at \(fps) fps")
                     }
-                    if item.request.referenceImage != nil {
-                        MetadataChip(systemImage: "photo", text: "From an image",
-                                     help: item.kind == .video ? "The clip started from a reference image" : "Made from a reference image")
-                    }
-                    MetadataChip(systemImage: "stairs", text: "\(item.request.steps) steps")
-                    if item.kind == .image {
-                        MetadataChip(systemImage: "dial.medium", text: "CFG \(Format.guidance(item.request.guidance))")
+                    if item.request.upscale == nil {
+                        if item.request.referenceImage != nil {
+                            MetadataChip(systemImage: "photo", text: "From an image",
+                                         help: item.kind == .video ? "The clip started from a reference image" : "Made from a reference image")
+                        }
+                        MetadataChip(systemImage: "stairs", text: "\(item.request.steps) steps")
+                        if item.kind == .image {
+                            MetadataChip(systemImage: "dial.medium", text: "CFG \(Format.guidance(item.request.guidance))")
+                        }
                     }
                     MetadataChip(systemImage: "dice", text: "\(item.request.seed)", help: "Seed \(item.request.seed)")
                     MetadataChip(systemImage: "timer", text: Format.duration(item.seconds), help: timingHelp)
@@ -415,7 +417,8 @@ private struct ItemInfoBar: View {
     /// "Generation time" plus, when the engine reported them, the seconds of each phase.
     private var timingHelp: String {
         let phases: [(key: String, label: String)] = [
-            ("load", "Model load"), ("encode", "Prompt"), ("denoise", "Steps"), ("decode", "Decode"), ("save", "Save"),
+            ("load", "Model load"), ("encode", item.request.upscale == nil ? "Prompt" : "Picture"), ("denoise", "Steps"),
+            ("decode", "Decode"), ("save", "Save"),
         ]
         guard let timings = item.timings else { return "Generation time" }
         let lines = phases.compactMap { phase in timings[phase.key].map { "\(phase.label): \(Format.seconds($0))" } }
@@ -450,15 +453,21 @@ private nonisolated struct HeightLimit: Layout {
 /// Actions shared by the viewer and the thumbnails.
 struct HistoryItemMenu: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.undoManager) private var undoManager
     let item: HistoryItem
 
     var body: some View {
-        if app.selectedModel?.family.takesReferenceImage == true {
+        if let selected = app.selectedModel, selected.family.takesReferenceImage, !selected.family.isUpscaler {
             Button("Use as Reference Image") { app.useAsReference(item) }
         }
-        Button("Copy Prompt") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(item.prompt, forType: .string)
+        if item.kind == .image, app.upscaler != nil {
+            Button("Upscale…") { app.upscale(item, undoManager: undoManager) }
+        }
+        if !item.prompt.isEmpty {
+            Button("Copy Prompt") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(item.prompt, forType: .string)
+            }
         }
         Button(item.kind == .video ? "Copy Video" : "Copy Image") { NSPasteboard.general.copyItem(item, at: app.url(for: item)) }
         Divider()
@@ -579,14 +588,17 @@ private struct JobView: View {
                     .foregroundStyle(.secondary)
                 }
                 if !isQueued {
-                    if let fraction = job.fraction {
-                        ProgressView(value: fraction)
-                    } else {
-                        ProgressView().progressViewStyle(.linear)
+                    // Twice a second: an upscale's bar follows the time.
+                    TimelineView(.periodic(from: .now, by: 0.5)) { context in
+                        if let fraction = job.fraction(at: context.date) {
+                            ProgressView(value: fraction)
+                        } else {
+                            ProgressView().progressViewStyle(.linear)
+                        }
                     }
                 }
                 HStack(alignment: .top) {
-                    Text(job.request.prompt)
+                    Text(job.request.caption)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)

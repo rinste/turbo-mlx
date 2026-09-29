@@ -26,6 +26,8 @@ nonisolated struct HistoryItem: Identifiable, Hashable, Codable, Sendable {
     var timings: [String: Double]?
 
     var prompt: String { request.prompt }
+    /// The prompt, or what an upscale did.
+    var caption: String { request.caption }
     var size: PixelSize { request.size }
     var kind: MediaKind { media ?? .image }
 }

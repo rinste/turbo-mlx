@@ -24,6 +24,7 @@ enum Verify {
             case "qwen-image-edit": ok = try VerifyQwenImageEdit.run(fixture: fixture, json: json, references: references)
             case "ming": ok = try VerifyMing.run(fixture: fixture, json: json, references: references)
             case "ltx-2": ok = try VerifyLTX.run(fixture: fixture, json: json, references: references)
+            case "seedvr2": ok = try VerifySeedVR2.run(fixture: fixture, json: json, references: references)
             default:
                 print("fixture.json names an unknown family: \(family)"); return false
             }

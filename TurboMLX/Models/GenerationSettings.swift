@@ -1,4 +1,6 @@
 import Foundation
+import ImageIO
+import Synchronization
 
 nonisolated struct PixelSize: Hashable, Codable, Sendable {
     var width: Int
@@ -103,6 +105,8 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     static let videoFrameRates = [24, 25, 30]
     static let guidanceRange = 1.0...7.0
     static let maxBatch = 8
+    /// How many times an upscaler enlarges the picture's sides.
+    static let upscaleFactors: [Double] = [2, 3, 4]
 
     var blocks = PromptBlock.defaults()
     var aspect = AspectRatio.square
@@ -123,6 +127,10 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     /// The image a clip starts from, or an image is made from: a file in the references folder
     /// (`HistoryStore`).
     var referenceImage: String?
+    /// Upscalers: the factor, and how much the picture is softened before it is enlarged (0–1),
+    /// which gives smoother results from a noisy or over-sharpened picture.
+    var upscale = 2.0
+    var softness = 0.0
 
     var size: PixelSize {
         usesCustomSize
@@ -138,7 +146,15 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     }
 
     func size(for family: ModelFamily) -> PixelSize {
-        family.media == .video ? videoSize : size
+        if family.isUpscaler {
+            return upscaledSize ?? PixelSize(width: Int(1024 * upscale), height: Int(1024 * upscale))
+        }
+        return family.media == .video ? videoSize : size
+    }
+
+    /// What an upscaler makes of the reference picture, nil without one.
+    var upscaledSize: PixelSize? {
+        referenceImage.flatMap(ReferencePicture.size).map { Upscale.outputSize(of: $0, factor: upscale) }
     }
 
     /// The clip's frames: 8k + 1 (LTX-2's latent frames cover eight), nearest to the duration.
@@ -155,7 +171,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case blocks, aspect, resolution, usesCustomSize, customWidth, customHeight, steps, guidance,
              randomSeed, seed, batchCount, transparentBackground, lowMemory,
-             videoResolution, videoSeconds, videoFrameRate, referenceImage
+             videoResolution, videoSeconds, videoFrameRate, referenceImage, upscale, softness
     }
 
     /// Settings saved before the prompt had blocks kept a single string.
@@ -187,6 +203,8 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         videoSeconds = try values.decodeIfPresent(Double.self, forKey: .videoSeconds) ?? videoSeconds
         videoFrameRate = try values.decodeIfPresent(Int.self, forKey: .videoFrameRate) ?? videoFrameRate
         referenceImage = try values.decodeIfPresent(String.self, forKey: .referenceImage)
+        upscale = try values.decodeIfPresent(Double.self, forKey: .upscale) ?? upscale
+        softness = try values.decodeIfPresent(Double.self, forKey: .softness) ?? softness
     }
 
     /// Seeds for the next batch: consecutive from the fixed seed, or fresh random ones.
@@ -232,4 +250,48 @@ nonisolated struct GenerationRequest: Codable, Hashable, Sendable {
     var fps: Int?
     /// Video only: the image the clip starts from, a file in the references folder.
     var referenceImage: String?
+    /// Upscalers only: the factor and the softening (`GenerationSettings`).
+    var upscale: Double?
+    var softness: Double?
+
+    /// What to show for it: the prompt, or for an upscale, what it did ("Upscaled 2×").
+    var caption: String {
+        guard let upscale else { return prompt }
+        let factor = upscale.rounded() == upscale ? "\(Int(upscale))" : upscale.formatted(.number.precision(.fractionLength(1)))
+        let softened = (softness ?? 0) > 0 ? ", softened \(Int(((softness ?? 0) * 100).rounded()))%" : ""
+        return "Upscaled \(factor)×\(softened)"
+    }
+}
+
+/// The size an upscale comes out at, as the engine computes it (mflux's `ScaleFactor` and
+/// `SeedVR2Util.preprocess_image`): the shorter side times the factor, cut down to a multiple of
+/// 16, the other side in proportion, both even.
+nonisolated enum Upscale {
+    /// The largest result: 4096 × 4096 takes about 4 minutes on an M1 Max and peaks at 19 GB.
+    static let maxMegapixels = 16.8
+
+    static func outputSize(of picture: PixelSize, factor: Double) -> PixelSize {
+        let shorter = Double(min(picture.width, picture.height))
+        let product = factor * shorter
+        let scale = (product - product.truncatingRemainder(dividingBy: 16)).rounded(.towardZero) / shorter
+        return PixelSize(width: Int(Double(picture.width) * scale) / 2 * 2, height: Int(Double(picture.height) * scale) / 2 * 2)
+    }
+}
+
+/// The pixel size of a picture in the references folder, read from its header once.
+nonisolated enum ReferencePicture {
+    private static let sizes = Mutex<[String: PixelSize]>([:])
+
+    static func size(_ name: String) -> PixelSize? {
+        if let known = sizes.withLock({ $0[name] }) { return known }
+        guard let source = CGImageSourceCreateWithURL(HistoryStore.referenceURL(name) as CFURL, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              var width = properties[kCGImagePropertyPixelWidth] as? Int, var height = properties[kCGImagePropertyPixelHeight] as? Int
+        else { return nil }
+        // Turned upright, as the engine reads it.
+        if let orientation = properties[kCGImagePropertyOrientation] as? Int, orientation >= 5 { swap(&width, &height) }
+        let size = PixelSize(width: width, height: height)
+        sizes.withLock { $0[name] = size }
+        return size
+    }
 }

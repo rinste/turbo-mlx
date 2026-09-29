@@ -110,6 +110,8 @@ nonisolated enum WorkerCommand: Sendable {
         ]
         if let frames = request.frames { params["frames"] = frames }
         if let fps = request.fps { params["fps"] = Double(fps) }
+        if let upscale = request.upscale { params["upscale"] = upscale }
+        if let softness = request.softness { params["softness"] = softness }
         if let reference = request.referenceImage {
             let url = HistoryStore.referenceURL(reference)
             if FileManager.default.fileExists(atPath: url.path) { params["image"] = url.path }

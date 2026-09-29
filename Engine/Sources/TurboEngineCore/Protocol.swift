@@ -40,6 +40,10 @@ public struct GenerationParams: Decodable {
     public let frames: Int?
     public let fps: Double?
     public let image: String?
+    /// Upscalers (SeedVR2): the factor the picture's shorter side is scaled by, and how much it is
+    /// softened first (0–1).
+    public let upscale: Double?
+    public let softness: Double?
 }
 
 public enum Wire {
