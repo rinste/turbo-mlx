@@ -101,8 +101,9 @@ enum TimeEstimate {
         // With CFG, Ming-Image takes three times as long, not two.
         case .ming: Rates(denoise: cfg ? 4.25 : 2.75, decode: 3.1, fixed: 1.3, load: 5)
         case .qwenImage: Rates(denoise: 2.85, decode: 6.7, fixed: 3.3, load: 5)
-        // Qwen-Image's transformer over twice the tokens; reading the picture adds to the fixed part.
-        case .qwenImageEdit: Rates(denoise: 2.85, decode: 6.7, fixed: 12, load: 5)
+        // Qwen-Image's transformer over the image's and the picture's tokens: 745 s for 672 × 880 in
+        // 20 steps (mflux; the native engine matched it at 336 × 432), reading the picture ~4 s.
+        case .qwenImageEdit: Rates(denoise: 3.4, decode: 6.7, fixed: 5, load: 5)
         // The 8-bit transformer is slower: 294 s against 231 s for 5 s at 768 × 512.
         case .ltx2 where model.id.contains("q8"): Rates(denoise: 6.93, decode: 0.7, fixed: 12, load: 5)
         case .ltx2: Rates(denoise: 5.3, decode: 0.6, fixed: 12, load: 5)
