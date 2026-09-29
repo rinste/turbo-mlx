@@ -20,8 +20,8 @@ app downloads it, and that is all the setup there is.
   its duration and frame rate. With the SeedVR2 upscaler, no prompt and no format: the *Picture to
   Upscale*, its scale (2×, 3× or 4× each side, up to 4096 × 4096 pixels), a *Softness* that
   shrinks a noisy or over-sharpened picture first, and the size it comes out at; *Upscale…*, in the
-  menu of any image, sets one up. At the bottom, on a darker tray, *Model:* and its picker (image and
-  video models in two groups, each with the memory it wants on a small dark badge; an icon tells the
+  menu of any image, sets one up. At the bottom, on a darker tray, *Model:* and its picker (upscale,
+  image and video models in three groups, each with the memory it wants on a small dark badge; an icon tells the
   models that also take a reference image, a picture, from those that work from the prompt alone,
   lines, with a small arrow while one is not downloaded; then its status) above the main button,
   which does

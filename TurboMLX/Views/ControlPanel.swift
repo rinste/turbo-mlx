@@ -70,9 +70,14 @@ private struct ModelSelection: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Text("Model:")
-                // Images, then videos; within each, the names say the family and the memory.
+                // Upscalers, image models, then video models; within each, the names say the family
+                // and the memory.
                 ModelPopUp(
-                    sections: [section("Image", media: .image), section("Video", media: .video)].filter { !$0.entries.isEmpty },
+                    sections: [
+                        section("Upscale") { $0.family.isUpscaler },
+                        section("Image") { $0.family.media == .image && !$0.family.isUpscaler },
+                        section("Video") { $0.family.media == .video },
+                    ].filter { !$0.entries.isEmpty },
                     selection: $app.selectedModelID,
                     help: "A picture: the model also takes a reference image. Lines: it works from the prompt alone. A small arrow: not downloaded yet."
                 )
@@ -98,8 +103,8 @@ private struct ModelSelection: View {
         }
     }
 
-    private func section(_ title: String, media: MediaKind) -> ModelPopUp.Section {
-        let entries = app.models.filter { $0.family.media == media }.map { model in
+    private func section(_ title: String, including: (ModelDescriptor) -> Bool) -> ModelPopUp.Section {
+        let entries = app.models.filter(including).map { model in
             ModelPopUp.Entry(
                 id: model.id, name: model.shortName != model.name ? model.shortName : model.name,
                 badge: model.shortName != model.name ? model.memoryLabel : nil,
