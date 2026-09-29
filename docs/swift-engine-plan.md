@@ -7,10 +7,17 @@ code refer to the files of the engine in `Engine/Sources/`.*
 
 ## Status
 
-29 September 2026: Phase 0's first item, 1c, 1f and Phase 5 are done, the code side of Phase 2
-(the sealed build) is in the tree, and every result is marked as made with generative AI; the rest
-has not started.
+29 September 2026: Phase 0's first item, 1c, 1f and Phase 5 are done, Phase 4's tools and the
+code side of Phase 2 (the sealed build) are in the tree, and every result is marked as made with
+generative AI; the rest has not started.
 
+- **Phase 4, verification without Python, the tools.** `turbo-engine verify --all` checks every
+  fixture in `build/fixtures` in one run (the 8 in 1.5 minutes), `turbo-engine compare a b` gives
+  the PSNR and the largest difference of two images, or of two clips frame by frame with their
+  sound (the same figures as the Python scripts it replaces, on images to the tenth of a dB),
+  and `verify-tokenizers` (Phase 5) needs no Python either. Python is left for regenerating a
+  reference. Still open: publishing the fixtures (1.1 GB, 860 MB of it LTX's) and frozen mflux
+  images somewhere versioned for other Macs, and a CI job, which needs Metal on the runners.
 - **Phase 5, the dependency diet.** The engine tokenizes on its own (`Tokenizer/BPETokenizer.swift`:
   byte-level BPE for Qwen2/3 and Ling, SentencePiece-style BPE with byte fallback for Gemma 3,
   Qwen3's chat template as the fixed string it renders for one user turn), and swift-transformers

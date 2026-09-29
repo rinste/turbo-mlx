@@ -219,4 +219,4 @@ def main(out: Path) -> None:
 
 
 if __name__ == "__main__":
-    main(Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp/fixtures/seedvr2"))
+    main(Path(sys.argv[1] if len(sys.argv) > 1 else "build/fixtures/seedvr2"))

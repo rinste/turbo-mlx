@@ -8,6 +8,28 @@ import TurboEngineCore
 enum Verify {
     static let tolerance: Float = 0.03
 
+    /// Every fixture in `folder` (the sub-folders with a `fixture.json`), one after the other.
+    static func runAll(folder: URL) -> Bool {
+        let entries = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        let fixtures = entries.filter { FileManager.default.fileExists(atPath: $0.appending(path: "fixture.json").path) }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        guard !fixtures.isEmpty else {
+            print("no fixtures in \(folder.path)")
+            return false
+        }
+        var results: [(name: String, ok: Bool)] = []
+        for fixture in fixtures {
+            print("== \(fixture.lastPathComponent)")
+            results.append((fixture.lastPathComponent, run(fixture: fixture)))
+            Memory.clearCache()
+        }
+        print("")
+        for result in results { print("\(result.ok ? "✓" : "✗") \(result.name)") }
+        let ok = results.allSatisfy(\.ok)
+        print(ok ? "OK: all \(results.count) fixtures pass" : "FAILED: \(results.filter { !$0.ok }.count) of \(results.count)")
+        return ok
+    }
+
     static func run(fixture: URL) -> Bool {
         do {
             let data = try Data(contentsOf: fixture.appending(path: "fixture.json"))

@@ -7,6 +7,9 @@ import TurboEngineCore
 //   turbo-engine serve             the worker the app talks to (JSON lines on stdin/stdout)
 //   turbo-engine verify <fixture>  checks a family's port against mflux's reference outputs; the
 //                                  fixture names the family (see Engine/Fixtures/make_*_fixture.py)
+//   turbo-engine verify --all [folder]
+//                                  every fixture in a folder (build/fixtures by default)
+//   turbo-engine compare <a> <b>   how far two images or clips are apart (PSNR, largest difference)
 //   turbo-engine verify-tokenizers [corpus.json]
 //                                  checks the tokenizers against transformers' ids for a corpus of
 //                                  prompts (Engine/Fixtures/tokenizers.json by default)
@@ -27,14 +30,25 @@ case "serve":
     Server().run()
 case "verify":
     guard let path = arguments.dropFirst().first else {
-        Emitter.shared.log("usage: turbo-engine verify <fixture-folder>")
+        Emitter.shared.log("usage: turbo-engine verify <fixture-folder> | verify --all [folder]")
         exit(2)
     }
+    if path == "--all" {
+        let folder = arguments.dropFirst(2).first ?? "build/fixtures"
+        exit(Verify.runAll(folder: URL(fileURLWithPath: folder)) ? 0 : 1)
+    }
     exit(Verify.run(fixture: URL(fileURLWithPath: path)) ? 0 : 1)
+case "compare":
+    let files = Array(arguments.dropFirst())
+    guard files.count == 2 else {
+        Emitter.shared.log("usage: turbo-engine compare <image-or-clip> <image-or-clip>")
+        exit(2)
+    }
+    exit(Compare.run(URL(fileURLWithPath: files[0]), URL(fileURLWithPath: files[1])) ? 0 : 1)
 case "verify-tokenizers":
     let corpus = arguments.dropFirst().first ?? "Engine/Fixtures/tokenizers.json"
     exit(VerifyTokenizers.run(corpus: URL(fileURLWithPath: corpus)) ? 0 : 1)
 default:
-    Emitter.shared.log("usage: turbo-engine [serve | verify <fixture-folder> | verify-tokenizers [corpus.json]]")
+    Emitter.shared.log("usage: turbo-engine [serve | verify <fixture-folder> | verify --all [folder] | verify-tokenizers [corpus.json] | compare <a> <b>]")
     exit(2)
 }

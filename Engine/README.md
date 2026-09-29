@@ -111,9 +111,9 @@ or `-q8`, with `mlx-community/gemma-3-12b-it-4bit`), recorded stage by stage by 
 own functions:
 
 ```bash
-$PY Engine/Fixtures/make_ltx_fixture.py <pack> <gemma> /tmp/fixtures/ltx          # text to video
-$PY Engine/Fixtures/make_ltx_fixture.py <pack> <gemma> /tmp/fixtures/ltx-i2v --image picture.png
-build/bin/turbo-engine verify /tmp/fixtures/ltx
+$PY Engine/Fixtures/make_ltx_fixture.py <pack> <gemma> build/fixtures/ltx          # text to video
+$PY Engine/Fixtures/make_ltx_fixture.py <pack> <gemma> build/fixtures/ltx-i2v --image picture.png
+build/bin/turbo-engine verify build/fixtures/ltx
 ```
 
 `verify` feeds each stage the reference's own inputs: the tokens (identical), Gemma's states, the
@@ -149,21 +149,18 @@ uv venv --python 3.12 ~/.venvs/mflux
 uv pip install --python ~/.venvs/mflux/bin/python -r Engine/Fixtures/requirements.txt
 PY=~/.venvs/mflux/bin/python
 
-# 1. A tiny checkpoint with random weights, and what mflux computes from it
-$PY Engine/Fixtures/make_klein_fixture.py      /tmp/fixtures/klein
-$PY Engine/Fixtures/make_zimage_fixture.py     /tmp/fixtures/zimage
-$PY Engine/Fixtures/make_qwen_image_fixture.py /tmp/fixtures/qwen-image
-$PY Engine/Fixtures/make_qwen_image_edit_fixture.py /tmp/fixtures/qwen-image-edit
-$PY Engine/Fixtures/make_ming_fixture.py       /tmp/fixtures/ming
-$PY Engine/Fixtures/make_seedvr2_fixture.py    /tmp/fixtures/seedvr2
+# 1. A tiny checkpoint with random weights, and what mflux computes from it (only when a
+#    reference changes: the fixtures are files, kept in build/fixtures, which git ignores)
+$PY Engine/Fixtures/make_klein_fixture.py      build/fixtures/klein
+$PY Engine/Fixtures/make_zimage_fixture.py     build/fixtures/zimage
+$PY Engine/Fixtures/make_qwen_image_fixture.py build/fixtures/qwen-image
+$PY Engine/Fixtures/make_qwen_image_edit_fixture.py build/fixtures/qwen-image-edit
+$PY Engine/Fixtures/make_ming_fixture.py       build/fixtures/ming
+$PY Engine/Fixtures/make_seedvr2_fixture.py    build/fixtures/seedvr2
 
-# 2. The same computations in Swift (the fixture names its family)
-build/bin/turbo-engine verify /tmp/fixtures/klein
-build/bin/turbo-engine verify /tmp/fixtures/zimage
-build/bin/turbo-engine verify /tmp/fixtures/qwen-image
-build/bin/turbo-engine verify /tmp/fixtures/qwen-image-edit
-build/bin/turbo-engine verify /tmp/fixtures/ming
-build/bin/turbo-engine verify /tmp/fixtures/seedvr2
+# 2. The same computations in Swift, no Python: one fixture (it names its family) or all of them
+build/bin/turbo-engine verify build/fixtures/klein
+build/bin/turbo-engine verify --all                        # every fixture in build/fixtures
 ```
 
 `verify` reports, stage by stage, the largest difference relative to the reference's scale (and the
@@ -200,8 +197,9 @@ Then the real thing, which the fixtures cannot stand in for: they are saved stra
 modules, and a published checkpoint can store a tensor in another shape (the Qwen VAE's norms
 are flat in the catalog's checkpoints, for one). Start `build/bin/turbo-engine serve` and
 `$PY Engine/Reference/turbo_worker.py serve`, send both the same `generate` line with the same
-checkpoint, prompt, seed and size, and compare the two PNGs: the same image, with small local
-differences from bf16 rounding. On 29 September 2026, with the same MLX on both sides, at
+checkpoint, prompt, seed and size, and compare the two PNGs with `build/bin/turbo-engine compare
+a.png b.png` (the PSNR and the largest difference; two clips frame by frame, with their sound):
+the same image, with small local differences from bf16 rounding. On 29 September 2026, with the same MLX on both sides, at
 512 × 512: Klein 39 dB, Z-Image 39 dB (4-bit) and 44 dB (8-bit), Qwen-Image 36 dB, Ming 33 dB,
 Qwen-Image Edit 60 dB (27–35 dB before, with mlx-swift 0.31.6).
 
