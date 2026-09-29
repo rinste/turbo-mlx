@@ -7,9 +7,21 @@ code refer to the files of the engine in `Engine/Sources/`.*
 
 ## Status
 
-29 September 2026: Phase 0's first item, 1c and 1f are done, the code side of Phase 2 (the
-sealed build) is in the tree, and every result is marked as made with generative AI; the rest has
-not started.
+29 September 2026: Phase 0's first item, 1c, 1f and Phase 5 are done, the code side of Phase 2
+(the sealed build) is in the tree, and every result is marked as made with generative AI; the rest
+has not started.
+
+- **Phase 5, the dependency diet.** The engine tokenizes on its own (`Tokenizer/BPETokenizer.swift`:
+  byte-level BPE for Qwen2/3 and Ling, SentencePiece-style BPE with byte fallback for Gemma 3,
+  Qwen3's chat template as the fixed string it renders for one user turn), and swift-transformers
+  left the build with its eight packages: the engine resolves mlx-swift and the swift-numerics it
+  brings, nothing else. The gate: `turbo-engine verify-tokenizers` compares every family's pipeline
+  with `transformers` on 64 prompts (`Fixtures/tokenizers.json`, 32,464 ids): identical. Two
+  Foundation traps were in the way: Swift's `String` merges canonically equivalent keys (Gemma's
+  vocabulary has ";" and the Greek question mark as two tokens), so tokens are matched by bytes,
+  and `JSONSerialization` drops a leading U+FEFF, so `tokenizer.json` has a parser of its own.
+  Every fixture passes and real images and clips are bit for bit those of before; loading a Qwen
+  tokenizer takes 0.27 s instead of 0.74.
 
 - **1f, the memory a job needs.** The app refuses a generation this Mac cannot hold
   (`TurboMLX/Models/MemoryEstimate.swift`, the `notEnoughMemory` blocker): its peak is predicted
@@ -178,7 +190,7 @@ organized: the fixtures have to be generated locally in a venv.
 |---|---|---|---|---|
 | App | Sparkle 2.10 | | MIT | updates from the GitHub feed |
 | Engine | mlx-swift 0.32.2 (0.31.6 until 29 September) | (vendors MLX's C++ core and Metal kernels) | MIT (Apple) | everything; not replaceable |
-| Engine | swift-transformers 1.3.4 (`Tokenizers`) | swift-jinja, swift-huggingface, swift-collections, swift-crypto, swift-asn1, swift-numerics, yyjson, EventSource | Apache 2.0 | the tokenizers only; its `Hub` module (network, downloads) is dead weight in an app that downloads by itself |
+| Engine | swift-transformers 1.3.4 (`Tokenizers`), until Phase 5 | swift-jinja, swift-huggingface, swift-collections, swift-crypto, swift-asn1, swift-numerics, yyjson, EventSource | Apache 2.0 | the tokenizers only; its `Hub` module (network, downloads) is dead weight in an app that downloads by itself |
 
 Ten packages resolved for the engine (eleven with mlx-swift 0.31.6, which also pulled
 swift-argument-parser), one of them used for a single thing.
@@ -494,7 +506,7 @@ then Z-Image and Qwen-Image; LoRA merging; "Add Model…" from original reposito
 | Ming te5, 1024 × 576 | 76 s (mflux) | ≤ 76 s | Phase 1 |
 | Qwen / Ming decode | 6.7 / 3.1 s per MP (about half on 29 Sep, 1c) | −30–50 % | Phase 1 (c, d) |
 | Klein peak, 1024² | 12.7 GB | ≤ 10.6 GB | Phases 0–1 |
-| Engine packages | 11 (10 since mlx-swift 0.32.2) | 1 (mlx-swift) | Phase 5 |
+| Engine packages | 11 (10 since mlx-swift 0.32.2; 2 since Phase 5: mlx-swift and its swift-numerics) | 1 (mlx-swift) | Phase 5 |
 | Python in the workflow | fixtures and reference, locally | only to regenerate a reference | Phase 4 |
 | Sealed channel | none (a target since 29 Sep) | a sealed target + a beta build | Phase 2 |
 

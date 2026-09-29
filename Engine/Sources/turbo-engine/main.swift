@@ -7,6 +7,9 @@ import TurboEngineCore
 //   turbo-engine serve             the worker the app talks to (JSON lines on stdin/stdout)
 //   turbo-engine verify <fixture>  checks a family's port against mflux's reference outputs; the
 //                                  fixture names the family (see Engine/Fixtures/make_*_fixture.py)
+//   turbo-engine verify-tokenizers [corpus.json]
+//                                  checks the tokenizers against transformers' ids for a corpus of
+//                                  prompts (Engine/Fixtures/tokenizers.json by default)
 
 setvbuf(stdout, nil, _IOLBF, 0)
 signal(SIGPIPE, SIG_IGN)
@@ -28,7 +31,10 @@ case "verify":
         exit(2)
     }
     exit(Verify.run(fixture: URL(fileURLWithPath: path)) ? 0 : 1)
+case "verify-tokenizers":
+    let corpus = arguments.dropFirst().first ?? "Engine/Fixtures/tokenizers.json"
+    exit(VerifyTokenizers.run(corpus: URL(fileURLWithPath: corpus)) ? 0 : 1)
 default:
-    Emitter.shared.log("usage: turbo-engine [serve | verify <fixture-folder>]")
+    Emitter.shared.log("usage: turbo-engine [serve | verify <fixture-folder> | verify-tokenizers [corpus.json]]")
     exit(2)
 }

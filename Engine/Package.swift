@@ -13,7 +13,6 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.32.2"),
-        .package(url: "https://github.com/huggingface/swift-transformers", from: "1.3.4"),
     ],
     targets: [
         .target(
@@ -21,7 +20,6 @@ let package = Package(
             dependencies: [
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
-                .product(name: "Tokenizers", package: "swift-transformers"),
             ],
             // SeedVR2's fixed text embedding, as mflux ships it.
             resources: [.copy("Resources/seedvr2_pos_emb.safetensors")],

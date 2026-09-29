@@ -1,7 +1,6 @@
 import Foundation
 import MLX
 import MLXNN
-import Tokenizers
 
 // LTX-2's text encoder: Gemma 3 12B read for the hidden states of every layer, as dgrauet's
 // `GemmaLanguageModel.get_all_hidden_states` runs mlx-lm's `gemma3_text` (the embedding, then
@@ -212,22 +211,22 @@ final class Gemma3TextModel: Module {
 
 /// Gemma's tokenizer as the port calls it: `encode(prompt.strip())` (with the leading `<bos>`),
 /// the last `maxLength` tokens kept, left-padded with the pad token.
-final class Gemma3Prompter {
-    private let tokenizer: any Tokenizer
+public final class Gemma3Prompter {
+    private let tokenizer: BPETokenizer
     private let padTokenId: Int
     let maxLength: Int
 
-    init(folder: URL, maxLength: Int) throws {
+    public init(folder: URL, maxLength: Int) throws {
         guard FileManager.default.fileExists(atPath: folder.appending(path: "tokenizer.json").path) else {
             throw Qwen3Prompter.PromptError.noTokenizer(folder)
         }
-        tokenizer = try Blocking.run { try await AutoTokenizer.from(modelFolder: folder) }
-        padTokenId = tokenizer.convertTokenToId("<pad>") ?? 0
+        tokenizer = try BPETokenizer(folder: folder)
+        padTokenId = tokenizer.id(of: "<pad>") ?? 0
         self.maxLength = maxLength
     }
 
-    func tokenIds(_ prompt: String) -> [Int] {
-        var ids = tokenizer.encode(text: prompt.trimmingCharacters(in: .whitespacesAndNewlines), addSpecialTokens: true)
+    public func tokenIds(_ prompt: String) -> [Int] {
+        var ids = tokenizer.encode(prompt.trimmingCharacters(in: .whitespacesAndNewlines), addSpecialTokens: true)
         if ids.count > maxLength { ids = Array(ids.suffix(maxLength)) }
         return ids
     }

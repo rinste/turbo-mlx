@@ -7,8 +7,11 @@ the app speaks to it; the Python engine the app used to ship, `Reference/turbo_w
 it too for the image families (see `docs/native-engine.md` for the why and the plan).
 
 ```
-Sources/turbo-engine/         the executable: `serve` (the worker) and `verify` (parity checks)
+Sources/turbo-engine/         the executable: `serve` (the worker), `verify` and
+                              `verify-tokenizers` (parity checks)
 Sources/TurboEngineCore/      protocol, mflux checkpoint loading, PNG output, the families
+  Tokenizer/                  the tokenizers, read from `tokenizer.json`: byte-level BPE (Qwen,
+                              Ling) and SentencePiece-style BPE with byte fallback (Gemma 3)
   Families/Family.swift       the FamilyModel protocol the engine drives, and the loader by family
   Families/Shared/            what families share: the Qwen3 prompter, the S3-DiT, the schedules,
                               tiled VAE decoding, mixture-of-experts layers, pixels, Pillow's
@@ -33,12 +36,15 @@ Sources/TurboEngineCore/      protocol, mflux checkpoint loading, PNG output, th
   Resources/                  SeedVR2's fixed text embedding, as mflux ships it
 VideoOutput.swift             MP4 (H.264 + AAC) with AVAssetWriter, frames as they are decoded
 Fixtures/make_*_fixture.py    build the checkpoint + references `verify` compares against
+Fixtures/tokenizers.json      transformers' ids for a corpus of prompts, every family's pipeline
+                              (made by make_tokenizer_corpus.py), for `verify-tokenizers`
 Fixtures/requirements.txt     the mflux revision they (and the reference worker) run with
 Fixtures/requirements-ltx.txt the ltx-2-mlx revision the LTX-2 port follows
 Reference/turbo_worker.py     mflux behind the same protocol, to compare real images
 Licenses/                     the licenses of the projects the ports follow (mflux, ltx-2-mlx,
                               mlx-lm with mlx-swift-lm for the mixture-of-experts layers, Pillow
-                              for its resizes), which the app's acknowledgements reproduce
+                              for its resizes, tokenizers for the tokenizer), which the app's
+                              acknowledgements reproduce
 ```
 
 SeedVR2's text embedding ships with the engine, in its resource bundle
@@ -212,6 +218,26 @@ against mflux's `SeedVR2(model_path=…).generate_image(resolution=ScaleFactor(�
 Python worker does not run either, on the original checkpoint's snapshot: 688 × 384 to
 1376 × 768 lands 56.7 dB from mflux (at most 7 levels apart), 672 × 880 to 1344 × 1760 62 dB
 (at most 4), in 18 s and 34 s against mflux's 37 s and 51 s, peaking at 10.4 GB against 18 GB.
+
+## Checking the tokenizers
+
+The engine tokenizes on its own (`Tokenizer/`), with no library: each family's prompt pipeline
+(Qwen3's chat template with thinking off and on, Qwen-Image's and Qwen-Image Edit's templates, Ming's,
+Gemma's with `<bos>`) is checked id for id against `transformers` on a corpus of 64 prompts, from
+empty and whitespace-only to Italian, Chinese, Arabic, Thai, emoji sequences, decomposed accents,
+special tokens typed by hand and prompts past the encoders' limits:
+
+```bash
+build/bin/turbo-engine verify-tokenizers                   # Engine/Fixtures/tokenizers.json
+$PY Engine/Fixtures/make_tokenizer_corpus.py Engine/Fixtures/tokenizers.json   # to regenerate it
+```
+
+It reads the catalog's tokenizers from the Hugging Face cache (a pipeline whose checkpoint is not
+downloaded is skipped); only regenerating the corpus needs Python. Two things Foundation gets in
+the way of, which the tokenizer avoids: Swift's `String` treats canonically equivalent tokens as one
+(";" and the Greek question mark, two combining graves: Gemma's vocabulary has both), so tokens are
+matched by their bytes; and `JSONSerialization` drops a U+FEFF that opens a string, so
+`tokenizer.json` is read by a parser of its own (`TokenizerJSON`).
 
 ## Protocol
 

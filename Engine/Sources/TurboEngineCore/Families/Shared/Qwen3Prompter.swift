@@ -1,8 +1,7 @@
 import Foundation
 import MLX
-import Tokenizers
 
-/// Turns a prompt into what a Qwen3 text encoder expects: the chat template around it (thinking
+/// Turns a prompt into what a Qwen3 text encoder expects: Qwen3's chat template around it (thinking
 /// on or off, as each family's mflux tokenizer definition asks), tokenized, either padded to the
 /// maximum length with its attention mask (FLUX.2 Klein) or just the real tokens (Z-Image).
 public final class Qwen3Prompter {
@@ -16,8 +15,7 @@ public final class Qwen3Prompter {
         }
     }
 
-    private let tokenizer: any Tokenizer
-    private let chatTemplate: String?
+    private let tokenizer: BPETokenizer
     private let padTokenId: Int
     private let maxLength: Int
     private let enableThinking: Bool
@@ -31,12 +29,8 @@ public final class Qwen3Prompter {
         guard FileManager.default.fileExists(atPath: tokenizerFolder.appending(path: "tokenizer.json").path) else {
             throw PromptError.noTokenizer(tokenizerFolder)
         }
-        tokenizer = try Blocking.run { try await AutoTokenizer.from(modelFolder: tokenizerFolder) }
-        // mflux downloads the template next to the tokenizer folder; swift-transformers reads the
-        // one inside it (or the config's). Keep the root one as a fallback.
-        let rootTemplate = modelPath.appending(path: "chat_template.jinja")
-        chatTemplate = (try? String(contentsOf: rootTemplate, encoding: .utf8)).flatMap { $0.isEmpty ? nil : $0 }
-        padTokenId = tokenizer.convertTokenToId("<|endoftext|>") ?? tokenizer.eosTokenId ?? 0
+        tokenizer = try BPETokenizer(folder: tokenizerFolder)
+        padTokenId = tokenizer.id(of: "<|endoftext|>") ?? 0
         self.maxLength = maxLength
         self.enableThinking = enableThinking
     }
@@ -53,39 +47,26 @@ public final class Qwen3Prompter {
 
     /// The real tokens only, truncated to `maxLength` (what the padded form's mask would keep).
     public func tokenIds(_ prompt: String) throws -> [Int] {
-        var ids = try templated(prompt)
+        var ids = templated(prompt)
         if ids.count > maxLength { ids = Array(ids.prefix(maxLength)) }
         return ids
     }
 
     /// `apply_chat_template([{"role": "user", "content": prompt}], add_generation_prompt=True,
-    /// enable_thinking=...)`, tokenized.
-    private func templated(_ prompt: String) throws -> [Int] {
-        let messages: [[String: any Sendable]] = [["role": "user", "content": prompt]]
-        let context: [String: any Sendable] = ["enable_thinking": enableThinking]
-        if tokenizer.hasChatTemplate {
-            return try tokenizer.applyChatTemplate(
-                messages: messages, chatTemplate: nil, addGenerationPrompt: true, truncation: false,
-                maxLength: nil, tools: nil, additionalContext: context
-            )
-        }
-        if let chatTemplate {
-            return try tokenizer.applyChatTemplate(
-                messages: messages, chatTemplate: .literal(chatTemplate), addGenerationPrompt: true,
-                truncation: false, maxLength: nil, tools: nil, additionalContext: context
-            )
-        }
-        // Qwen3's template for one user turn: with thinking disabled it closes an empty think block.
+    /// enable_thinking=...)`, tokenized: what Qwen3's Jinja template renders for one user turn
+    /// (the checkpoints' `chat_template.jinja`), which with thinking off closes an empty think
+    /// block. `turbo-engine verify-tokenizers` checks it against the template itself.
+    private func templated(_ prompt: String) -> [Int] {
         let think = enableThinking ? "" : "<think>\n\n</think>\n\n"
         let text = "<|im_start|>user\n\(prompt)<|im_end|>\n<|im_start|>assistant\n\(think)"
-        return tokenizer.encode(text: text, addSpecialTokens: false)
+        return tokenizer.encode(text, addSpecialTokens: false)
     }
 }
 
 /// A tokenizer read from a folder with `tokenizer.json`, for the families whose prompt is a
 /// literal template around the text rather than a chat template (Qwen-Image, Ming-Image).
 public final class TemplatePrompter {
-    private let tokenizer: any Tokenizer
+    private let tokenizer: BPETokenizer
     private let template: String
     private let maxLength: Int?
     private let addSpecialTokens: Bool
@@ -95,7 +76,7 @@ public final class TemplatePrompter {
         guard FileManager.default.fileExists(atPath: folder.appending(path: "tokenizer.json").path) else {
             throw Qwen3Prompter.PromptError.noTokenizer(folder)
         }
-        tokenizer = try Blocking.run { try await AutoTokenizer.from(modelFolder: folder) }
+        tokenizer = try BPETokenizer(folder: folder)
         self.template = template
         self.maxLength = maxLength
         self.addSpecialTokens = addSpecialTokens
@@ -104,26 +85,8 @@ public final class TemplatePrompter {
     /// The template's tokens with the prompt in place, truncated to the maximum length.
     public func tokenIds(_ prompt: String) -> [Int] {
         let text = template.replacingOccurrences(of: "{}", with: prompt)
-        var ids = tokenizer.encode(text: text, addSpecialTokens: addSpecialTokens)
+        var ids = tokenizer.encode(text, addSpecialTokens: addSpecialTokens)
         if let maxLength, ids.count > maxLength { ids = Array(ids.prefix(maxLength)) }
         return ids
-    }
-}
-
-/// Runs an async operation to completion from synchronous code (the engine is single-threaded).
-enum Blocking {
-    static func run<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) throws -> T {
-        let semaphore = DispatchSemaphore(value: 0)
-        let box = ResultBox<T>()
-        Task.detached {
-            do { box.result = .success(try await operation()) } catch { box.result = .failure(error) }
-            semaphore.signal()
-        }
-        semaphore.wait()
-        return try box.result!.get()
-    }
-
-    private final class ResultBox<T>: @unchecked Sendable {
-        var result: Result<T, any Error>?
     }
 }

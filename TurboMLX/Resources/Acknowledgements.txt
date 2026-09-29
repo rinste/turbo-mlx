@@ -19,6 +19,8 @@ The engine's Swift ports follow these projects:
     https://github.com/ml-explore/mlx-swift-lm
   Pillow: its bicubic and Lanczos resizes, for the pictures edits start from
     https://github.com/python-pillow/Pillow
+  tokenizers: the tokenizer, which follows its BPE
+    https://github.com/huggingface/tokenizers
 
 The engine contains SeedVR2's fixed text embedding (pos_emb), from
 ByteDance's SeedVR2 under the Apache License 2.0, as mflux ships it:
@@ -28,28 +30,12 @@ ByteDance's SeedVR2 under the Apache License 2.0, as mflux ships it:
 
 The app contains these libraries:
 
-  EventSource 1.5.1
-    https://github.com/mattt/EventSource
   mlx-swift 0.32.2
     https://github.com/ml-explore/mlx-swift
   Sparkle 2.10.0
     https://github.com/sparkle-project/Sparkle
-  swift-asn1 1.7.3
-    https://github.com/apple/swift-asn1
-  swift-collections 1.7.1
-    https://github.com/apple/swift-collections
-  swift-crypto 4.5.2
-    https://github.com/apple/swift-crypto
-  swift-huggingface 0.11.0
-    https://github.com/huggingface/swift-huggingface
-  swift-jinja 2.5.1
-    https://github.com/huggingface/swift-jinja
   swift-numerics 1.1.1
     https://github.com/apple/swift-numerics
-  swift-transformers 1.3.4
-    https://github.com/huggingface/swift-transformers
-  yyjson 0.12.0
-    https://github.com/ibireme/yyjson
   MLX
     https://github.com/ml-explore/mlx
   MLX C
@@ -199,30 +185,6 @@ INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
 LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE
 OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
-
-================================================================================
-EventSource
-================================================================================
-
-Copyright 2025 Mattt (https://mat.tt)
-
-Permission is hereby granted, free of charge, to any person obtaining a
-copy of this software and associated documentation files (the "Software"),
-to deal in the Software without restriction, including without limitation
-the rights to use, copy, modify, merge, publish, distribute, sublicense,
-and/or sell copies of the Software, and to permit persons to whom the
-Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
-OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
 
 ================================================================================
 mlx-swift
@@ -390,32 +352,6 @@ IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
 
 ================================================================================
-yyjson
-================================================================================
-
-MIT License
-
-Copyright (c) 2020 YaoYuan <ibireme@gmail.com>
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-================================================================================
 MLX
 ================================================================================
 
@@ -529,8 +465,7 @@ SOFTWARE.
 Apache License 2.0
 ================================================================================
 
-The license of swift-asn1, swift-collections, swift-crypto, swift-huggingface,
-swift-jinja, swift-numerics, swift-transformers, metal-cpp, and SeedVR2's text
+The license of tokenizers, swift-numerics, metal-cpp, and SeedVR2's text
 embedding:
 
 Apache License
@@ -709,97 +644,3 @@ Apache License
       of your accepting any such warranty or additional liability.
 
 END OF TERMS AND CONDITIONS
-
-================================================================================
-NOTICE of swift-asn1
-================================================================================
-
-The SwiftASN1 Project
-                            =====================
-
-Please visit the SwiftASN1 web site for more information:
-
-  * https://github.com/apple/swift-asn1
-
-Copyright 2022 The SwiftASN1 Project
-
-The SwiftASN1 Project licenses this file to you under the Apache License,
-version 2.0 (the "License"); you may not use this file except in compliance
-with the License. You may obtain a copy of the License at:
-
-  https://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
-WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
-License for the specific language governing permissions and limitations
-under the License.
-
-Also, please refer to each LICENSE.txt file, which is located in
-the 'license' directory of the distribution file, for the license terms of the
-components that this product depends on.
-
----
-
-This product contains derivations of various scripts from SwiftNIO.
-
-  * LICENSE (Apache License 2.0):
-    * https://www.apache.org/licenses/LICENSE-2.0
-  * HOMEPAGE:
-    * https://github.com/apple/swift-nio
-    
----
-
-This product contains derivations of various scripts from Swift OpenAPI Generator.
-
-  * LICENSE (Apache License 2.0):
-    * https://www.apache.org/licenses/LICENSE-2.0
-  * HOMEPAGE:
-    * https://github.com/apple/swift-openapi-generator
-
-================================================================================
-NOTICE of swift-crypto
-================================================================================
-
-The SwiftCrypto Project
-                            =======================
-
-Please visit the SwiftCrypto web site for more information:
-
-  * https://github.com/apple/swift-crypto
-
-Copyright 2019 The SwiftCrypto Project
-
-The SwiftCrypto Project licenses this file to you under the Apache License,
-version 2.0 (the "License"); you may not use this file except in compliance
-with the License. You may obtain a copy of the License at:
-
-  https://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
-WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
-License for the specific language governing permissions and limitations
-under the License.
-
-Also, please refer to each LICENSE.<component>.txt file, which is located in
-the 'license' directory of the distribution file, for the license terms of the
-components that this product depends on.
-
--------------------------------------------------------------------------------
-
-This product contains test vectors from Google's wycheproof project.
-
-  * LICENSE (Apache License 2.0):
-    * https://github.com/C2SP/wycheproof/blob/31387e2cd596587c859c611027b6a44d2e2b65ff/LICENSE
-  * HOMEPAGE:
-    * https://github.com/google/wycheproof
-
----
-
-This product contains a derivation of various files from SwiftNIO.
-
-  * LICENSE (Apache License 2.0):
-    * https://www.apache.org/licenses/LICENSE-2.0
-  * HOMEPAGE:
-    * https://github.com/apple/swift-nio

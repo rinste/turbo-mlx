@@ -299,7 +299,6 @@ private struct AboutSettings: View {
             #endif
             Section("Components") {
                 LabeledContent("MLX Swift", value: "MIT · Apple")
-                LabeledContent("swift-transformers", value: "Apache 2.0 · Hugging Face")
                 #if !SEALED
                 LabeledContent("Sparkle", value: "MIT · the updates")
                 #endif

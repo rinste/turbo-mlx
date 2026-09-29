@@ -113,7 +113,10 @@ still image's VAE runs its single frame through one 2D convolution (Qwen-Image a
 bit-identical, SeedVR2 with its kernel frames summed: 60.6 dB from mflux, as before), and the
 engine asks MLX for one frame per Winograd step. The 5-second clip now takes 206 s at 18 GB,
 SeedVR2 goes from 768 × 768 to 3072 × 3072 in 80 s instead of 136 at the same 13 GB. The details
-and the table are in [swift-engine-plan.md](swift-engine-plan.md) (Status).
+and the table are in [swift-engine-plan.md](swift-engine-plan.md) (Status). The same day the
+engine got tokenizers of its own (`Tokenizer/`, checked id for id against `transformers` on a
+corpus with `turbo-engine verify-tokenizers`), and swift-transformers left it: the engine's only
+package is now mlx-swift.
 
 ## The question
 

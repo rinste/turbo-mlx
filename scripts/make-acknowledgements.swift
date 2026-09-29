@@ -54,6 +54,7 @@ let ported: [(name: String, url: String, use: String)] = [
     ("mlx-lm", "https://github.com/ml-explore/mlx-lm", "the mixture-of-experts layers"),
     ("mlx-swift-lm", "https://github.com/ml-explore/mlx-swift-lm", "the mixture-of-experts layers"),
     ("Pillow", "https://github.com/python-pillow/Pillow", "its bicubic and Lanczos resizes, for the pictures edits start from"),
+    ("tokenizers", "https://github.com/huggingface/tokenizers", "the tokenizer, which follows its BPE"),
 ]
 
 /// The packages a Package.resolved pins, with their licenses in `checkouts`.
@@ -128,7 +129,16 @@ var notices: [(String, String)] = []
 var sections: [(String, String)] = []
 
 for project in ported {
-    sections.append((project.name, read("Engine/Licenses/\(project.name).txt")))
+    let license = read("Engine/Licenses/\(project.name).txt")
+    if isApache(license) {
+        // Written out once below with the packages under it.
+        apacheText = apacheText ?? license.components(separatedBy: "END OF TERMS AND CONDITIONS").first.map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\nEND OF TERMS AND CONDITIONS"
+        }
+        apacheUsers.append(project.name)
+    } else {
+        sections.append((project.name, license))
+    }
 }
 for component in packages + bundled {
     guard let path = file(in: component.licensePath, named: ["LICENSE", "COPYING"]) else {
