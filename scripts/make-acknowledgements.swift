@@ -51,6 +51,7 @@ func isApache(_ text: String) -> Bool {
 let ported: [(name: String, url: String, use: String)] = [
     ("mflux", "https://github.com/mflux-community/mflux", "the image families, module for module"),
     ("ltx-2-mlx", "https://github.com/dgrauet/ltx-2-mlx", "LTX-2.3, video and sound"),
+    ("SenseNova-U1", "https://github.com/OpenSenseNova/SenseNova-U1", "SenseNova-U1.5, from SenseTime's own code"),
     ("mlx-lm", "https://github.com/ml-explore/mlx-lm", "the mixture-of-experts layers"),
     ("mlx-swift-lm", "https://github.com/ml-explore/mlx-swift-lm", "the mixture-of-experts layers"),
     ("Pillow", "https://github.com/python-pillow/Pillow", "its bicubic and Lanczos resizes, for the pictures edits start from"),

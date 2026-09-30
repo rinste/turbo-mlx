@@ -83,6 +83,7 @@ prompt and settings, an MP4 in an XMP box.
 | [FLUX.2 Klein 4B](https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4) | 24 GB | 4.6 GB | 14.1 GB | the fastest: 4 steps; edits a reference image as the prompt says · Apache 2.0 |
 | [Qwen-Image 2512](https://huggingface.co/mflux-community/qwen-image-2512-mflux-q4) | 32 GB | 27.6 GB | 21.3 GB | 20B, rich scenes and long text · 4-bit · 20 steps · Apache 2.0 |
 | [Qwen-Image Edit 2511](https://huggingface.co/mflux-community/qwen-image-edit-2511-mflux-q4) | 32 GB | 29 GB | 33 GB (672 × 880, without *Save memory*) | changes a reference picture as the prompt says and keeps the rest · 20B, 4-bit · 20 steps · Apache 2.0 |
+| [SenseNova-U1.5](https://huggingface.co/mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit) | 16 GB | 11.8 GB | 11.6 GB, 6.9 GB with *Save memory* | photos, posters and infographics with legible text, in pixels (no VAE) · 8B + 8B, 4-bit · 8 steps · Apache 2.0 |
 | [LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q4) | 32 GB | 28.5 GB | 18 GB (768 × 512, 5 s) | video with sound, from a prompt or from an image as the first frame · 22B distilled, 4-bit · 8 + 3 steps · LTX-2 Community |
 | [LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q8) | 64 GB | 37.8 GB | 37 GB (768 × 512, 5 s) | the 8-bit version, closer to the original |
 | [SeedVR2 Upscaler 3B](https://huggingface.co/numz/SeedVR2_comfyUI) | 16 GB | 7.3 GB | 11 GB (to 2304 × 2304), 18 GB (to 4096 × 4096) | enlarges a picture 2–4× with sharper, faithful detail, in one step, no prompt · float16 · Apache 2.0 |
@@ -98,6 +99,10 @@ one from an image 122 s; the 8-bit version, without *Save memory* as on a 64 GB 
 3.6 minutes (219 s) for the same 5 seconds. Qwen-Image Edit reads the picture's tokens next to the image's in
 both passes of every step: a 672 × 880 edit in 20 steps took 12.4 minutes with mflux and about 15 with
 the native engine (measured while the Mac was busy building), whose image matched mflux's to 68 dB.
+SenseNova-U1.5 is measured with the native engine against SenseTime's own PyTorch code, run on
+the same weights: 1024 × 1024 in 28–31 s, 512 × 512 in 7 s, 2048 × 2048 in 2½ minutes, with
+images that match the reference's to 37 dB at 512 px and 29 dB at 1024 px (a model this
+sensitive drifts as far from itself when its noise changes by 0.2%).
 SeedVR2 encodes and decodes the picture in tiles and runs its transformer once, attending within
 windows: 672 × 880 to 1344 × 1760 takes 29 s (mflux 51 s, peaking at 18 GB), 768 × 768 to
 2304 × 2304 41 s at 11 GB, to 4096 × 4096 about 2 minutes at 18 GB; its images match mflux's to
@@ -161,7 +166,8 @@ SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo-engine serve ──▶ 
 
 - **Engine.** `Engine/` is a Swift package that runs every family of the catalog (FLUX.2 Klein,
   Z-Image Turbo, Qwen-Image 2512 and Qwen-Image-Edit 2511, Ming-Image from mflux's checkpoints,
-  LTX-2.3 from dgrauet's, the SeedVR2 upscaler from its original one) on MLX Swift. The app's
+  SenseNova-U1.5 from mlx-community's, LTX-2.3 from dgrauet's, the SeedVR2 upscaler from its
+  original one) on MLX Swift. The app's
   build embeds its `turbo-engine` binary in the bundle (`Contents/MacOS`, signed with the app),
   and every model runs there: nothing is installed on first launch, the engine starts in an
   instant, and no Python process sits between the app and the GPU. The engine keeps the
@@ -174,11 +180,14 @@ SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo-engine serve ──▶ 
   (Python + MLX) module for module: `Engine/Fixtures` builds the references `verify` compares
   each stage against, and `Engine/Reference/turbo_worker.py`, the Python engine the app used to
   ship, runs a real checkpoint through mflux behind the same protocol, to compare the images.
-  Neither is part of the app.
-- **Save memory.** Frees the text encoder of Ming-Image, Qwen-Image and Qwen-Image Edit once the
-  prompt is read (a new prompt reloads only the text side, with the transformer released first,
-  so the two are never in memory together), decodes the image in tiles where the VAE allows it
-  (not FLUX.2, whose tiles would show seams), and keeps MLX's buffer cache small.
+  Neither is part of the app. SenseNova-U1.5, which mflux does not run, follows SenseTime's own
+  PyTorch code the same way (`Engine/Fixtures/make_sensenova_fixture.py`,
+  `Engine/Reference/sensenova_reference.py`).
+- **Save memory.** Frees the text encoder of Ming-Image, Qwen-Image and Qwen-Image Edit (and the
+  half of SenseNova-U1.5 that reads the prompt) once the prompt is read (a new prompt reloads
+  only the text side, with the transformer released first, so the two are never in memory
+  together), decodes the image in tiles where the VAE allows it (not FLUX.2, whose tiles would
+  show seams), and keeps MLX's buffer cache small.
 - **Downloads.** The app downloads models itself (`Services/HubDownloader.swift`) into the
   Hugging Face cache, in the same layout huggingface_hub uses, so mflux and other tools share
   them. Each catalog model comes at the commit it was checked with (`revision` in

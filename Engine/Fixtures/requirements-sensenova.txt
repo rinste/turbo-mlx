@@ -1,0 +1,15 @@
+# SenseNova-U1.5 has no MLX port to follow: its reference is SenseTime's own PyTorch code
+# (https://github.com/OpenSenseNova/SenseNova-U1, Apache 2.0, branch feat/u1.5), run on the CPU or
+# MPS. Clone it at this commit and give make_sensenova_fixture.py / sensenova_reference.py its
+# path; the Python that runs them needs these packages (a venv of its own: the mflux venv has no
+# torchvision, and mlx is only there to dequantize the MLX pack for sensenova_reference.py).
+#   git clone --branch feat/u1.5 https://github.com/OpenSenseNova/SenseNova-U1.git && git -C SenseNova-U1 checkout 48bf827
+torch==2.14.0
+torchvision==0.29.0
+transformers==5.17.0
+safetensors
+pillow==12.0.0
+numpy
+packaging
+accelerate
+mlx==0.32.2

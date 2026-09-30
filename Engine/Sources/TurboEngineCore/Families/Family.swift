@@ -69,7 +69,7 @@ public protocol FamilyModel: AnyObject {
 /// Loads the model a spec names, by family.
 public enum FamilyLoader {
     /// Families this engine implements, as the app names them.
-    public static let families = ["flux2-klein", "z-image-turbo", "qwen-image", "qwen-image-edit", "ming", "ltx-2", "seedvr2"]
+    public static let families = ["flux2-klein", "z-image-turbo", "qwen-image", "qwen-image-edit", "ming", "sensenova", "ltx-2", "seedvr2"]
 
     public static func load(_ spec: ModelSpec, loadTokenizer: Bool = true) throws -> FamilyModel {
         let root = URL(fileURLWithPath: spec.path)
@@ -85,6 +85,8 @@ public enum FamilyLoader {
             return try QwenImageEditModel(modelPath: root, config: .qwenImageEdit2511, loadTokenizer: loadTokenizer)
         case "ming":
             return try MingModel(modelPath: root, config: .design, loadTokenizer: loadTokenizer)
+        case "sensenova":
+            return try SenseNovaModel(modelPath: root, loadTokenizer: loadTokenizer)
         case "seedvr2":
             return try SeedVR2Model(modelPath: root, config: .seedVR2_3B)
         case "ltx-2":

@@ -1,6 +1,6 @@
 # turbo-engine
 
-The engine of Turbo MLX: the catalog's seven families (five image models, LTX-2 for video and the
+The engine of Turbo MLX: the catalog's eight families (six image models, LTX-2 for video and the
 SeedVR2 upscaler) on
 [MLX Swift](https://github.com/ml-explore/mlx-swift), behind a JSON-lines protocol (below) that
 the app speaks to it; the Python engine the app used to ship, `Reference/turbo_worker.py`, speaks
@@ -26,6 +26,9 @@ Sources/TurboEngineCore/      protocol, mflux checkpoint loading, PNG output, th
                               picture an image is edited from
   Families/Ming/              Ming-Image: the Ling MoE encoder, the Qwen2 connector and heads,
                               the S3-DiT in bf16, the RGBA decoder
+  Families/SenseNova/         SenseNova-U1.5: the two Qwen3 stacks (the prompt's, read once into a
+                              key–value cache, and the image's), the pixel-space patch embedding
+                              and pixel decoder, the flow loop; checkpoints are MLX packs
   Families/LTX/               LTX-2.3: Gemma 3 12B and the text connector, the audio–video
                               transformer, the video VAE (tiled decode, image encoder), the ×2
                               latent upsampler, the audio VAE and the 48 kHz vocoder, the
@@ -40,11 +43,13 @@ Fixtures/tokenizers.json      transformers' ids for a corpus of prompts, every f
                               (made by make_tokenizer_corpus.py), for `verify-tokenizers`
 Fixtures/requirements.txt     the mflux revision they (and the reference worker) run with
 Fixtures/requirements-ltx.txt the ltx-2-mlx revision the LTX-2 port follows
+Fixtures/requirements-sensenova.txt  SenseTime's code and the Python the SenseNova checks run with
 Reference/turbo_worker.py     mflux behind the same protocol, to compare real images
+Reference/sensenova_reference.py  SenseTime's code on an MLX pack's weights, for SenseNova's
 Licenses/                     the licenses of the projects the ports follow (mflux, ltx-2-mlx,
-                              mlx-lm with mlx-swift-lm for the mixture-of-experts layers, Pillow
-                              for its resizes, tokenizers for the tokenizer), which the app's
-                              acknowledgements reproduce
+                              SenseNova-U1, mlx-lm with mlx-swift-lm for the mixture-of-experts
+                              layers, Pillow for its resizes, tokenizers for the tokenizer), which
+                              the app's acknowledgements reproduce
 ```
 
 SeedVR2's text embedding ships with the engine, in its resource bundle
@@ -68,6 +73,7 @@ names its tensors instead, and only the VAE's convolutions are transposed on loa
 | Qwen-Image 2512 | Qwen2.5-VL 7B (bf16, unquantized), the template's 34 tokens dropped | 60 dual-stream blocks, float32 stream, modulation producers at 8 bits | Wan-derived causal 3D, 16 channels, tiles | true CFG, rescaled to the conditional norm; the unconditional pass is skipped at 1 |
 | Qwen-Image-Edit 2511 | Qwen2.5-VL 7B with its vision tower: the picture at ~384 × 384 (Pillow's bicubic twice, as mflux) in 14-pixel patches, windowed attention, 2 × 2 merged; its tokens replace the placeholders of a 64-token template, everything in float32, then float16 | Qwen-Image's; the picture's latents follow the image's (frame position 1), only the image's come out | Qwen-Image's, plus the encoder for the picture at the image's size (its own proportions when they differ; Pillow's Lanczos) | as Qwen-Image, negative prompt empty |
 | Ming-Image 0.1 Design | Ling-mini-2.0 MoE (256 experts, 8 routed with group-limited top-k, bf16 router as upstream), Qwen2 connector over 256 query tokens, direct-VLM head | S3-DiT in bf16, no padding, two caption streams | Qwen VAE for RGBA, one scaling factor, tiles | zeroed conditions |
+| SenseNova-U1.5 8B-MoT (8-step) | the understanding stack (Qwen3, 42 layers of 4096, each head's first half rotated by text position, the rest by row and column, separate norms) reads the "neo1_0" query with SenseTime's system message into a key–value cache; guidance above 1 adds an unconditional query | the generation stack (the same layers' `_mot_gen` weights) over the image's tokens (32 × 32 pixels: a 16-pixel patch embedding with a 2D rotation, merged 2 × 2) plus time and noise-scale embeddings, attending to the cache without a mask; activations bf16 as the reference | none: a convolutional pixel head (pixel shuffles, two 3 × 3 convolutions) predicts the clean image, the velocity is derived from it; Euler steps from t = 0 on a schedule shifted by 3, noise scaled with the image's size | off (the distilled packs); true CFG otherwise |
 | LTX-2.3 distilled | Gemma 3 12B (4-bit, all 49 hidden states, prompt left-padded to 1024), per-token RMS, two projections and two 8-block connectors with learnable registers | 48 audio–video blocks (4096 + 2048 wide, cross-modal attention both ways), block linears 4 or 8 bits, float32 activations | causal-3D conv VAE (non-causal decoder, 32 × 32 × 8, 128 channels), tiled over frames and pixels; audio VAE + BigVGAN vocoder with bandwidth extension to 48 kHz | none (distilled); two stages: 8 steps at half size, ×2 latent upsampler, 3 steps |
 | SeedVR2 3B (upscaler) | none: a fixed 58 × 5120 embedding | 32 blocks of 2560 (10 with separate video and text weights, then shared), the video's 2 × 2 patches attending in windows (shifted every other block) with the whole text, rotary frequencies read from the checkpoint, float16 weights and float32 activations; input: noise, the picture's latent and a mask of ones; one Euler step from t = 1000 | causal 3D VAE, 16 channels, encode and decode in 512-pixel tiles; then the picture's low frequencies under the result's detail (five-level wavelet) and its Lab a/b (and 20% of L) histograms | none |
 
@@ -217,11 +223,38 @@ Python worker does not run either, on the original checkpoint's snapshot: 688 ×
 1376 × 768 lands 56.7 dB from mflux (at most 7 levels apart), 672 × 880 to 1344 × 1760 62 dB
 (at most 4), in 18 s and 34 s against mflux's 37 s and 51 s, peaking at 10.4 GB against 18 GB.
 
+## Checking SenseNova-U1.5 against SenseTime's code
+
+mflux does not run SenseNova-U1.5: its reference is SenseTime's own PyTorch code
+([SenseNova-U1](https://github.com/OpenSenseNova/SenseNova-U1), branch `feat/u1.5`, the commit in
+`Fixtures/requirements-sensenova.txt`), in a venv of its own. The fixture is a small model with
+random weights (2 layers of 256, the original's structure) saved in the MLX pack's layout, and what
+the reference's unchanged `t2i_generate` computes from it in float32, recorded by wrapping its
+methods: the prompt caches layer by layer, the schedule, the first step's input and both
+velocities, and the whole loop with guidance 2 and without. The port matches all of it within
+1e-5.
+
+```bash
+build/sensenova-venv/bin/python Engine/Fixtures/make_sensenova_fixture.py <SenseNova-U1 clone> build/fixtures/sensenova
+build/bin/turbo-engine verify build/fixtures/sensenova
+```
+
+For real images, `Reference/sensenova_reference.py` dequantizes an MLX pack into bf16, puts it back
+in the original's layout and runs the reference on MPS (about 40 GB of memory) from the engine's
+own noise for the seed; `--record <dir>` also writes the stages of that run, which `verify` then
+compares with the pack's weights (`--perturb` shows how far the reference moves by itself). On 30
+September 2026, with the 4-bit pack at 8 steps: 37.3 dB at 512 × 512 and 29.4 dB at 1024 × 1024,
+while every step's velocity, from the reference's own image, is within 0.2–0.5% (RMS) of it and the
+prompt's cache within 1–3% at the deepest layers (bf16 rounding over 42 layers, the same with
+the dequantized weights). The distilled model is that sensitive by itself: noise 0.2% off moves
+the reference's own image to 32.9 dB.
+
 ## Checking the tokenizers
 
 The engine tokenizes on its own (`Tokenizer/`), with no library: each family's prompt pipeline
 (Qwen3's chat template with thinking off and on, Qwen-Image's and Qwen-Image Edit's templates, Ming's,
-Gemma's with `<bos>`) is checked id for id against `transformers` on a corpus of 64 prompts, from
+Gemma's with `<bos>`, SenseNova's queries, against the tokenizer its code builds from the original's
+vocabulary and merges) is checked id for id against `transformers` on a corpus of 64 prompts, from
 empty and whitespace-only to Italian, Chinese, Arabic, Thai, emoji sequences, decomposed accents,
 special tokens typed by hand and prompts past the encoders' limits:
 

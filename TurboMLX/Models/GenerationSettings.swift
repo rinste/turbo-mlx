@@ -149,7 +149,13 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         if family.isUpscaler {
             return upscaledSize ?? PixelSize(width: Int(1024 * upscale), height: Int(1024 * upscale))
         }
-        return family.media == .video ? videoSize : size
+        if family.media == .video { return videoSize }
+        let multiple = family.sizeMultiple
+        guard multiple != 16 else { return size }
+        return usesCustomSize
+            ? PixelSize(width: PixelSize.snapped(Double(customWidth), multiple: multiple),
+                        height: PixelSize.snapped(Double(customHeight), multiple: multiple))
+            : aspect.size(base: resolution, multiple: multiple)
     }
 
     /// What an upscaler makes of the reference picture, nil without one.

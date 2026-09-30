@@ -13,6 +13,8 @@ The engine's Swift ports follow these projects:
     https://github.com/mflux-community/mflux
   ltx-2-mlx: LTX-2.3, video and sound
     https://github.com/dgrauet/ltx-2-mlx
+  SenseNova-U1: SenseNova-U1.5, from SenseTime's own code
+    https://github.com/OpenSenseNova/SenseNova-U1
   mlx-lm: the mixture-of-experts layers
     https://github.com/ml-explore/mlx-lm
   mlx-swift-lm: the mixture-of-experts layers
@@ -465,8 +467,8 @@ SOFTWARE.
 Apache License 2.0
 ================================================================================
 
-The license of tokenizers, swift-numerics, metal-cpp, and SeedVR2's text
-embedding:
+The license of SenseNova-U1, tokenizers, swift-numerics, metal-cpp, and
+SeedVR2's text embedding:
 
 Apache License
                            Version 2.0, January 2004

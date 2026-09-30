@@ -1217,7 +1217,7 @@ private struct AdvancedSection: View {
             if isExpanded {
                 // An upscale's size is its picture's, times the scale.
                 if !family.isUpscaler {
-                    SizeRows(settings: $settings, video: family.media == .video)
+                    SizeRows(settings: $settings, family: family)
                 }
                 OutputRows(settings: $settings, family: family)
                 MemoryRows(settings: $settings, family: family)
@@ -1232,11 +1232,14 @@ private struct AdvancedSection: View {
     }
 }
 
-/// The image's size: a resolution for the aspect ratio above, or a width and height of its own.
-/// A clip's sides are multiples of 64, from its own, smaller resolutions.
+/// The image's size: a resolution for the aspect ratio above, or a width and height of its own,
+/// sides rounded to the family's multiple. A clip's sides are multiples of 64, from its own,
+/// smaller resolutions.
 private struct SizeRows: View {
     @Binding var settings: GenerationSettings
-    let video: Bool
+    let family: ModelFamily
+
+    private var video: Bool { family.media == .video }
 
     var body: some View {
         Picker("Resolution", selection: video ? $settings.videoResolution : $settings.resolution) {
@@ -1259,7 +1262,7 @@ private struct SizeRows: View {
             .labelsHidden()
         }
 
-        let size = video ? settings.videoSize : settings.size
+        let size = settings.size(for: family)
         LabeledContent(video ? "Clip" : "Image") {
             Text(verbatim: video
                 ? "\(size.width) × \(size.height) px · \(settings.videoFrames) frames"
@@ -1332,6 +1335,8 @@ private struct MemoryRows: View {
             "Frees the text encoder (about 15 GB) once the prompt and the picture are read, and decodes the image in tiles. Each new prompt or picture loads it again."
         case .zImageTurbo, .flux2Klein:
             "Keeps less in memory and, where it doesn’t affect the image, decodes it in tiles."
+        case .senseNova:
+            "Frees the half of the model that reads the prompt (about 6 GB) once it is read: about 6 GB instead of 11 GB. A prompt that was not in the queue yet loads it again, in place of the other half."
         case .ltx2:
             "Frees Gemma and the text connector (about 14 GB) once the prompt is read, and the transformer before the clip is decoded. A prompt that was not in the queue yet loads them again."
         case .seedVR2:

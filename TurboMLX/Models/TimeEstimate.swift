@@ -115,6 +115,9 @@ enum TimeEstimate {
         // Qwen-Image's transformer over the image's and the picture's tokens: 745 s for 672 × 880 in
         // 20 steps (mflux; the native engine matched it at 336 × 432), reading the picture ~4 s.
         case .qwenImageEdit: Rates(denoise: 3.2, decode: 3.4, fixed: 5, load: 5)
+        // 8 steps at 512 / 1024 / 2048 px in 7, 27–31 and 150 s; the pixel head is part of each
+        // step, so there is no decode to speak of.
+        case .senseNova: Rates(denoise: 0.72, decode: 0.05, fixed: 1.3, load: 3)
         // The 8-bit transformer is as fast as the 4-bit one since mlx-swift 0.32.2: 5 s at
         // 768 × 512 in 219 s without Save memory, against 206 s with it for the 4-bit one.
         case .ltx2 where model.id.contains("q8"): Rates(denoise: 5.4, decode: 0.28, fixed: 12, load: 5)

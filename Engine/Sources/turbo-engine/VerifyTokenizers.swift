@@ -84,6 +84,12 @@ enum VerifyTokenizers {
         case "gemma3":
             let prompter = try Gemma3Prompter(folder: folder, maxLength: .max)
             return { prompter.tokenIds($0) }
+        case "sensenova":
+            let prompter = try SenseNovaPrompter(folder: folder)
+            return { prompter.tokenIds($0) }
+        case "sensenova-unconditional":
+            let prompter = try SenseNovaPrompter(folder: folder)
+            return { _ in prompter.unconditionalIds }
         default:
             throw BPETokenizer.TokenizerError.unsupported("the pipeline \(name)")
         }

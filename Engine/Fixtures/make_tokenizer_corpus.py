@@ -9,8 +9,14 @@ catalog names) with `transformers`' fast tokenizers, which mflux and ltx-2-mlx c
 for each pipeline, the folder it read and the ids of every prompt, built as the families build
 them: FLUX.2 Klein and Z-Image with Qwen3's chat template (thinking off and on), Qwen-Image and
 Qwen-Image Edit with their templates around the prompt, Ming-Image with its template and no
-special tokens, LTX-2's Gemma 3 with `<bos>` and the prompt stripped.
+special tokens, LTX-2's Gemma 3 with `<bos>` and the prompt stripped, SenseNova-U1.5 with its
+"neo1_0" generation query (and the unconditional one, the same for every prompt). SenseNova's
+reference is the tokenizer SenseTime's code builds from `vocab.json` and `merges.txt` (the original
+checkpoint has no `tokenizer.json`): the MLX pack's `tokenizer.json`, which the engine reads, was
+made from them by the pack's author, so it is left out here and checked against them.
 """
+
+import tempfile
 
 import json
 import sys
@@ -31,6 +37,36 @@ MING_TEMPLATE = (
 )
 
 
+SENSENOVA_SYSTEM = (
+    "You are an image generation and editing assistant that accurately understands and executes "
+    "user intent.\n\nYou support two modes:\n\n1. Think Mode:\nIf the task requires reasoning, you "
+    "MUST start with a <think></think> block. Put all reasoning inside the block using plain text. "
+    "DO NOT include any image tags. Keep it reasonable and directly useful for producing the final "
+    "image.\n\n2. Non-Think Mode:\nIf no reasoning is needed, directly produce the final image.\n\n"
+    "Task Types:\n\nA. Text-to-Image Generation:\n"
+    "- Generate a high-quality image based on the user's description.\n"
+    "- Ensure visual clarity, semantic consistency, and completeness.\n"
+    "- DO NOT introduce elements that contradict or override the user's intent.\n\n"
+    "B. Image Editing:\n"
+    "- Use the provided image(s) as input or reference for modification or transformation.\n"
+    "- The result can be an edited image or a new image based on the reference(s).\n"
+    "- Preserve all unspecified attributes unless explicitly changed.\n\n"
+    "General Rules:\n"
+    "- For any visible text in the image, follow the language specified for the rendered text in "
+    "the user's description, not the language of the prompt. If no language is specified, use the "
+    "user's input language."
+)
+
+
+def sensenova_query(prompt: str) -> str:
+    """`_build_t2i_query` with `SYSTEM_MESSAGE_FOR_GEN`, thinking off, up to `<img>`."""
+    return (f"<|im_start|>system\n{SENSENOVA_SYSTEM}<|im_end|>\n<|im_start|>user\n{prompt}<|im_end|>\n"
+            "<|im_start|>assistant\n<think>\n\n</think>\n\n<img>")
+
+
+SENSENOVA_UNCONDITIONAL = "<|im_start|>user\n<|im_end|>\n<|im_start|>assistant\n<img>"
+
+
 def edit_text(prompt: str, image_tokens: int) -> str:
     return (
         "<|im_start|>system\nDescribe the key features of the input image (color, shape, size, texture, objects, "
@@ -49,6 +85,8 @@ PIPELINES = [
     ("qwen-image-edit", "mflux-community/qwen-image-edit-2511-mflux-q4", "720ad94d982b3dc22f9122ee96af31221d542d47", "tokenizer"),
     ("ming", "joeynyc/Ming-Image-0.1-Design-mflux-q8-te5", "3adb8aaef779f9b3fa4621acebeba97bb4010d42", "mllm"),
     ("gemma3", "mlx-community/gemma-3-12b-it-4bit", "86cc6a8dedbc456dd0e4af01a9d09f396f77e558", ""),
+    ("sensenova", "mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit", "ff6d0c2dfe21b19891ae4551e11fcc99f6aa82ae", ""),
+    ("sensenova-unconditional", "mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit", "ff6d0c2dfe21b19891ae4551e11fcc99f6aa82ae", ""),
 ]
 
 PROMPTS = [
@@ -136,7 +174,22 @@ def pipeline_ids(name: str, tokenizer, prompt: str) -> list[int]:
         return tokenizer(MING_TEMPLATE.replace("{}", prompt), add_special_tokens=False)["input_ids"]
     if name == "gemma3":
         return tokenizer(prompt.strip(), add_special_tokens=True)["input_ids"]
+    if name == "sensenova":
+        return tokenizer(sensenova_query(prompt))["input_ids"]
+    if name == "sensenova-unconditional":
+        return tokenizer(SENSENOVA_UNCONDITIONAL)["input_ids"]
     raise ValueError(name)
+
+
+def load_tokenizer(name: str, folder: Path):
+    """The pipeline's reference tokenizer; for SenseNova, the one built from the original's files
+    (the vocabulary, the merges and the tokenizer's configuration, not `tokenizer.json`)."""
+    if not name.startswith("sensenova"):
+        return AutoTokenizer.from_pretrained(str(folder))
+    with tempfile.TemporaryDirectory() as original:
+        for file in ["vocab.json", "merges.txt", "tokenizer_config.json", "added_tokens.json", "special_tokens_map.json"]:
+            (Path(original) / file).symlink_to((folder / file).resolve())
+        return AutoTokenizer.from_pretrained(original)
 
 
 def main() -> None:
@@ -144,7 +197,7 @@ def main() -> None:
     corpus = {"prompts": PROMPTS, "pipelines": []}
     for name, repo, commit, sub in PIPELINES:
         folder = HUB / f"models--{repo.replace('/', '--')}" / "snapshots" / commit / sub
-        tokenizer = AutoTokenizer.from_pretrained(str(folder))
+        tokenizer = load_tokenizer(name, folder)
         ids = [pipeline_ids(name, tokenizer, p) for p in PROMPTS]
         corpus["pipelines"].append({"name": name, "repo": repo, "commit": commit, "folder": sub, "ids": ids})
         print(f"{name:24} {sum(map(len, ids)):7d} ids  ({type(tokenizer).__name__})")

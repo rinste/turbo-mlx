@@ -7,6 +7,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     case flux2Klein = "flux2-klein"
     case qwenImage = "qwen-image"
     case qwenImageEdit = "qwen-image-edit"
+    case senseNova = "sensenova"
     case ltx2 = "ltx-2"
     case seedVR2 = "seedvr2"
 
@@ -17,6 +18,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .flux2Klein: "FLUX.2 Klein"
         case .qwenImage: "Qwen-Image"
         case .qwenImageEdit: "Qwen-Image Edit"
+        case .senseNova: "SenseNova-U1.5"
         case .ltx2: "LTX-2"
         case .seedVR2: "SeedVR2"
         }
@@ -26,6 +28,10 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     var producesAlpha: Bool { self == .ming }
 
     var media: MediaKind { self == .ltx2 ? .video : .image }
+
+    /// The sides of an image are multiples of this: 16 for most (a DiT's 2 × 2 patches of 8-pixel
+    /// latents), 32 for SenseNova, whose tokens are 32 × 32 pixels; a clip's, 64 (`videoSize`).
+    var sizeMultiple: Int { self == .senseNova ? 32 : 16 }
 
     /// A reference image: the first frame of a clip (LTX-2), the picture an image is edited from
     /// as the prompt says (FLUX.2 Klein, Qwen-Image Edit), the picture an upscaler enlarges.
@@ -37,11 +43,13 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     /// Enlarges the reference picture instead of following a prompt: no prompt, no format, a scale.
     var isUpscaler: Bool { self == .seedVR2 }
 
-    /// Checkpoint sub-folders that must hold complete safetensors shards.
+    /// Checkpoint sub-folders that must hold complete safetensors shards (SenseNova's MLX packs keep
+    /// theirs, and the index naming them, at the top).
     var components: [String] {
         switch self {
         case .ming: ["mllm", "connector", "mlp", "transformer", "vae"]
         case .zImageTurbo, .flux2Klein, .qwenImage, .qwenImageEdit: ["transformer", "text_encoder", "vae"]
+        case .senseNova: ["."]
         case .ltx2, .seedVR2: []
         }
     }
@@ -54,6 +62,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
             ["embedded_config.json", "transformer-distilled*.safetensors", "connector.safetensors", "vae_decoder.safetensors",
              "vae_encoder.safetensors", "audio_vae.safetensors", "vocoder.safetensors", "spatial_upscaler_x2_v1_1.safetensors"]
         case .seedVR2: Self.seedVR2Files
+        case .senseNova: ["config.json", "model.safetensors.index.json"]
         default: []
         }
     }
@@ -62,6 +71,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         switch self {
         case .ming: "mllm/tokenizer.json"
         case .zImageTurbo, .flux2Klein, .qwenImage, .qwenImageEdit: "tokenizer/tokenizer.json"
+        case .senseNova: "tokenizer.json"
         case .ltx2: nil // in the text encoder's checkpoint
         case .seedVR2: nil // no prompt: the engine has the fixed text embedding
         }
@@ -72,7 +82,8 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     static let seedVR2Files = ["seedvr2_ema_3b_fp16.safetensors", "ema_vae_fp16.safetensors"]
 
     /// Hugging Face files to download; mirrors each mflux weight definition (for LTX-2, the files
-    /// of dgrauet's packs that the distilled pipeline reads).
+    /// of dgrauet's packs that the distilled pipeline reads; for SenseNova, the MLX pack's weights,
+    /// configuration and tokenizer, not the vocabulary and merges it was made from).
     var downloadPatterns: [String] {
         let weights = components.flatMap { ["\($0)/*.safetensors", "\($0)/*.json"] }
         switch self {
@@ -85,6 +96,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
                     "vae_encoder.safetensors", "audio_vae.safetensors", "vocoder.safetensors",
                     "spatial_upscaler_x2_v1_1.safetensors", "spatial_upscaler_x2_v1_1_config.json"]
         case .seedVR2: return ["README.md"] + Self.seedVR2Files
+        case .senseNova: return ["README.md", "config.json", "model.safetensors.index.json", "model-*.safetensors", "tokenizer.json"]
         }
     }
 
@@ -172,7 +184,8 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
     var supportsGuidance: Bool {
         switch family {
         case .ming, .qwenImage, .qwenImageEdit: true
-        case .zImageTurbo, .ltx2, .seedVR2: false
+        // The catalog's SenseNova packs are the 8-step distillation, which runs without guidance.
+        case .zImageTurbo, .senseNova, .ltx2, .seedVR2: false
         case .flux2Klein: isKleinBase
         }
     }
@@ -184,6 +197,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .zImageTurbo: 9
         case .flux2Klein: isKleinBase ? 50 : 4
         case .qwenImage, .qwenImageEdit: 20
+        case .senseNova: 8
         case .ltx2: 8
         case .seedVR2: 1
         }
@@ -201,6 +215,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .zImageTurbo: 4...20
         case .flux2Klein: isKleinBase ? 10...60 : 2...12
         case .qwenImage, .qwenImageEdit: 10...50
+        case .senseNova: 4...16
         case .ltx2: 4...8
         case .seedVR2: 1...1
         }
@@ -278,6 +293,21 @@ enum ModelCatalog {
             variant: "flux2-klein-4b",
             license: "Apache 2.0",
             recommendedMemoryGB: 24,
+            isBuiltIn: true
+        ),
+        // SenseNova-U1.5 8B-MoT (SenseTime) with its official 8-step LoRA merged, in 4 bits: the MLX
+        // pack mlx-community publishes, made from the original checkpoint for xocialize's Swift
+        // runtime. Two 8B stacks (the prompt's and the image's) and a pixel decoder, no VAE.
+        // Measured on an M1 Max: 1024 × 1024 in 28 s, peaking at 11.6 GB.
+        ModelDescriptor(
+            name: "SenseNova-U1.5 · 16 GB RAM",
+            detail: "SenseTime's unified model: photos, posters and infographics with legible text, in 8 steps. The 4-bit version.",
+            family: .senseNova,
+            source: .huggingFace(repo: "mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit"),
+            revision: "ff6d0c2dfe21b19891ae4551e11fcc99f6aa82ae",
+            sizeBytes: 11_780_443_196,
+            license: "Apache 2.0",
+            recommendedMemoryGB: 16,
             isBuiltIn: true
         ),
         // LTX-2.3 distilled from dgrauet's MLX packs, the files its two-stage pipeline reads (the
