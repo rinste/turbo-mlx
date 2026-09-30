@@ -20,13 +20,15 @@ struct ControlPanel: View {
                     UpscaleSection(settings: $app.settings)
                 } else {
                     PromptSection(settings: $app.settings, focus: $focusedBlock)
-                    FormatSection(settings: $app.settings)
+                    FormatSection(settings: $app.settings, family: model.family)
                     if model.family.media == .video {
                         ClipSection(settings: $app.settings, picksDuration: model.family.picksDuration)
                     }
-                    ParametersSection(settings: $app.settings, model: model)
+                    if model.supportsGuidance {
+                        ParametersSection(settings: $app.settings, model: model)
+                    }
                 }
-                AdvancedSection(isExpanded: $showsAdvanced, settings: $app.settings, family: model.family)
+                AdvancedSection(isExpanded: $showsAdvanced, settings: $app.settings, model: model)
             }
         }
         .formStyle(.grouped)
@@ -1060,8 +1062,13 @@ private struct ClipSection: View {
 
 // MARK: - Format
 
+/// The aspect ratio, then the resolution it is drawn at (a clip's, smaller); a custom size, set
+/// under Advanced, takes the place of both.
 private struct FormatSection: View {
     @Binding var settings: GenerationSettings
+    let family: ModelFamily
+
+    private var video: Bool { family.media == .video }
 
     var body: some View {
         Section("Format") {
@@ -1090,58 +1097,44 @@ private struct FormatSection: View {
                     .help("\(aspect.rawValue) · \(aspect.usage)")
                 }
             }
+            Picker("Resolution", selection: video ? $settings.videoResolution : $settings.resolution) {
+                ForEach(video ? GenerationSettings.videoResolutions : GenerationSettings.resolutions, id: \.self) { resolution in
+                    Text(verbatim: "\(resolution)").tag(resolution)
+                }
+            }
+            .pickerStyle(.segmented)
+            .disabled(settings.usesCustomSize)
+            .help(settings.usesCustomSize
+                ? "Custom size is on, under Advanced."
+                : "The side of a square image of the same area, in pixels.")
         }
     }
 }
 
 // MARK: - Parameters
 
+/// Guidance, for the models that run it; the steps are under Advanced.
 private struct ParametersSection: View {
     @Binding var settings: GenerationSettings
     let model: ModelDescriptor
 
     var body: some View {
-        let range = model.stepRange
         Section("Parameters") {
             LabeledContent {
                 HStack(spacing: 6) {
-                    // Steps trade speed for refinement: hare for fewer, tortoise for more.
-                    SliderIcon("hare", help: "Fewer steps: faster", label: "Faster")
-                    Slider(
-                        value: Binding(
-                            get: { Double(min(max(settings.steps, range.lowerBound), range.upperBound)) },
-                            set: { settings.steps = Int($0.rounded()) }
-                        ),
-                        in: Double(range.lowerBound)...Double(range.upperBound),
-                        step: 1
-                    )
-                    SliderIcon("tortoise", help: "More steps: slower, sometimes more refined", label: "Slower")
-                    Text(verbatim: "\(settings.steps)")
+                    // Low guidance lets the model interpret; high guidance sticks to the words.
+                    SliderIcon("wand.and.stars", help: "Lower: a freer interpretation of the prompt", label: "Freer")
+                    Slider(value: $settings.guidance, in: GenerationSettings.guidanceRange, step: 0.5)
+                    SliderIcon("text.quote", help: "Higher: follows the prompt more literally", label: "Stricter")
+                    Text(Format.guidance(settings.guidance))
                         .monospacedDigit()
                         .frame(width: 30, alignment: .trailing)
                 }
             } label: {
-                Text("Steps")
-                    .help("Recommended for this model: \(model.defaultSteps). More steps take longer and don’t always improve the result.")
-            }
-
-            if model.supportsGuidance {
-                LabeledContent {
-                    HStack(spacing: 6) {
-                        // Low guidance lets the model interpret; high guidance sticks to the words.
-                        SliderIcon("wand.and.stars", help: "Lower: a freer interpretation of the prompt", label: "Freer")
-                        Slider(value: $settings.guidance, in: GenerationSettings.guidanceRange, step: 0.5)
-                        SliderIcon("text.quote", help: "Higher: follows the prompt more literally", label: "Stricter")
-                        Text(Format.guidance(settings.guidance))
-                            .monospacedDigit()
-                            .frame(width: 30, alignment: .trailing)
-                    }
-                } label: {
-                    Text("Guidance")
-                        .help(model.family == .qwenImage || model.family == .qwenImageEdit
-                              ? "How strictly to follow the prompt. 4 is the recommended value."
-                              : "How strictly to follow the prompt. 1 = off; higher values double the time of each step.")
-                }
+                Text("Guidance")
+                    .help(model.family == .qwenImage || model.family == .qwenImageEdit
+                          ? "How strictly to follow the prompt. 4 is the recommended value."
+                          : "How strictly to follow the prompt. 1 = off; higher values double the time of each step.")
             }
         }
     }
@@ -1225,7 +1218,9 @@ private struct SliderIcon: View {
 private struct AdvancedSection: View {
     @Binding var isExpanded: Bool
     @Binding var settings: GenerationSettings
-    let family: ModelFamily
+    let model: ModelDescriptor
+
+    private var family: ModelFamily { model.family }
 
     var body: some View {
         Section {
@@ -1253,8 +1248,9 @@ private struct AdvancedSection: View {
             .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
 
             if isExpanded {
-                // An upscale's size is its picture's, times the scale.
+                // An upscale has one step, and its size is its picture's, times the scale.
                 if !family.isUpscaler {
+                    StepsRow(settings: $settings, model: model)
                     SizeRows(settings: $settings, family: family)
                 }
                 OutputRows(settings: $settings, family: family)
@@ -1263,16 +1259,52 @@ private struct AdvancedSection: View {
         }
     }
 
+    /// What the closed section holds: the steps, the size, a fixed seed.
     private var summary: String {
         let size = settings.size(for: family)
-        let dimensions = "\(size.width) × \(size.height) px"
-        return settings.randomSeed ? dimensions : "\(dimensions) · seed \(settings.seed)"
+        var parts = ["\(size.width) × \(size.height) px"]
+        if !family.isUpscaler {
+            let range = model.stepRange
+            parts.insert("\(min(max(settings.steps, range.lowerBound), range.upperBound)) steps", at: 0)
+        }
+        if !settings.randomSeed { parts.append("seed \(settings.seed)") }
+        return parts.joined(separator: " · ")
     }
 }
 
-/// The image's size: a resolution for the aspect ratio above, or a width and height of its own,
-/// sides rounded to the family's multiple. A clip's sides are multiples of 64, from its own,
-/// smaller resolutions.
+/// How many steps: fewer is faster, more sometimes more refined (LTX-2: those of the first stage).
+private struct StepsRow: View {
+    @Binding var settings: GenerationSettings
+    let model: ModelDescriptor
+
+    var body: some View {
+        let range = model.stepRange
+        LabeledContent {
+            HStack(spacing: 6) {
+                // Steps trade speed for refinement: hare for fewer, tortoise for more.
+                SliderIcon("hare", help: "Fewer steps: faster", label: "Faster")
+                Slider(
+                    value: Binding(
+                        get: { Double(min(max(settings.steps, range.lowerBound), range.upperBound)) },
+                        set: { settings.steps = Int($0.rounded()) }
+                    ),
+                    in: Double(range.lowerBound)...Double(range.upperBound),
+                    step: 1
+                )
+                SliderIcon("tortoise", help: "More steps: slower, sometimes more refined", label: "Slower")
+                Text(verbatim: "\(settings.steps)")
+                    .monospacedDigit()
+                    .frame(width: 30, alignment: .trailing)
+            }
+        } label: {
+            Text("Steps")
+                .help("Recommended for this model: \(model.defaultSteps). More steps take longer and don’t always improve the result.")
+        }
+    }
+}
+
+/// A width and height of the image's own in place of the format's aspect ratio and resolution,
+/// sides rounded to the family's multiple (a clip's to 64), and the size that makes.
 private struct SizeRows: View {
     @Binding var settings: GenerationSettings
     let family: ModelFamily
@@ -1280,14 +1312,6 @@ private struct SizeRows: View {
     private var video: Bool { family.media == .video }
 
     var body: some View {
-        Picker("Resolution", selection: video ? $settings.videoResolution : $settings.resolution) {
-            ForEach(video ? GenerationSettings.videoResolutions : GenerationSettings.resolutions, id: \.self) { resolution in
-                Text(verbatim: "\(resolution)").tag(resolution)
-            }
-        }
-        .pickerStyle(.segmented)
-        .disabled(settings.usesCustomSize)
-
         Toggle("Custom size", isOn: $settings.usesCustomSize)
 
         if settings.usesCustomSize {
