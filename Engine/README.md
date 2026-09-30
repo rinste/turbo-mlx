@@ -144,7 +144,9 @@ tower, the ancestral sampler of stage 1 (each noise draw is recorded and matches
 keyframe marker on the first latent frame of both stages; every transformer pass is again within
 3e-4. Its connector is more sensitive to bfloat16 than 2.3's: the reference itself moves by about
 1 in 20 between bfloat16 and float32, so the connector is shown in bfloat16 and decided in float32
-(`connector_f32.safetensors`, within 5e-5).
+(`connector_f32.safetensors`, within 5e-5). Its DurationHead, which picks a clip's length from the
+prompt's contexts (`auto_duration` in a request, `frames` then the longest), gives the reference's
+seconds exactly on its contexts, and the seconds-to-frames rule matches on a table of 26 cases.
 
 The whole pipeline, same prompt and seed through the app's protocol, 768 × 512 × 49 frames with
 the 4-bit pack: the same clip as the reference (PSNR 29–35 dB per frame, 32.6 on average, through

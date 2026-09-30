@@ -15,6 +15,8 @@ public struct FamilyRequest {
     /// from, or an image is edited from (FLUX.2 Klein, Qwen-Image Edit).
     public var frames: Int?
     public var fps: Double?
+    /// LTX-2.5: the model picks the length the prompt describes, `frames` being the longest.
+    public var autoDuration = false
     public var imagePath: String?
     /// Upscalers: the factor the picture's shorter side is scaled by, the softening before (0–1).
     public var upscale: Double?

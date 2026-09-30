@@ -17,7 +17,8 @@ app downloads it, and that is all the setup there is.
   *Reference Image* above the prompt (dropped from Finder or from the history, chosen from a file
   or among the generated images): the clip's first frame, or the picture the image models change
   as the prompt says ("make it winter"), in its own proportions (Qwen-Image Edit needs one). For a clip,
-  its duration and frame rate. With the SeedVR2 upscaler, no prompt and no format: the *Picture to
+  its duration and frame rate; LTX-2.5 can instead pick the length the prompt describes, up to the
+  longest set. With the SeedVR2 upscaler, no prompt and no format: the *Picture to
   Upscale*, its scale (2×, 3× or 4× each side, up to 4096 × 4096 pixels), a *Softness* that
   shrinks a noisy or over-sharpened picture first, and the size it comes out at; *Upscale…*, in the
   menu of any image, sets one up. At the bottom, on a darker tray, *Model:* and its picker (upscale,

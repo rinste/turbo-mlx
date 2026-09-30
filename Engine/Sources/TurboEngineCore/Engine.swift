@@ -114,6 +114,8 @@ public final class Engine {
                 upscale: params.upscale, softness: params.softness
             )
             if let video = model as? VideoFamilyModel {
+                var request = request
+                request.autoDuration = params.autoDuration ?? false
                 try generateVideo(video, request: request, id: id, spec: spec, params: params, started: started)
                 return
             }
@@ -181,6 +183,11 @@ public final class Engine {
         let output = URL(fileURLWithPath: params.output)
         var writer: VideoOutput?
         var sound: (samples: MLXArray?, rate: Int) = (nil, 48000)
+        // A length left to the model is settled now that the prompt is encoded, and reported with
+        // the first step so the app can plan the clip it will get.
+        var request = request
+        request.frames = try model.resolvedFrames(request)
+        request.autoDuration = false
         let totalSteps = model.totalSteps(request)
         // A clip stopped or failed halfway leaves no partial MP4 behind.
         var clip: GeneratedClip?
@@ -191,7 +198,9 @@ public final class Engine {
                 switch phase {
                 case .denoising:
                     mark("denoise_start")
-                    emitter.emit("phase", ["id": id, "phase": "denoising", "total": totalSteps])
+                    var fields: [String: Any] = ["id": id, "phase": "denoising", "total": totalSteps]
+                    if let frames = request.frames { fields["frames"] = frames }
+                    emitter.emit("phase", fields)
                 case .decoding:
                     mark("denoise_end")
                     emitter.emit("phase", ["id": id, "phase": "decoding"])

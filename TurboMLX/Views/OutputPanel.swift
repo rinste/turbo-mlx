@@ -496,13 +496,16 @@ private struct GenerationFrame: View {
     let size: PixelSize
     let frames: Int?
     let fps: Int?
+    /// The model picks the clip's length, `frames` being the longest.
+    var isLongest = false
     var isPulsing = false
 
-    /// "768 × 512", and the duration for a clip.
+    /// "768 × 512", and the duration for a clip ("up to 5 s" while the model has to pick it).
     private var sizeLabel: String {
         let dimensions = "\(size.width) × \(size.height)"
         guard let frames, let fps, fps > 0 else { return dimensions }
-        return "\(dimensions) · \(Format.clipDuration(frames: frames, fps: fps))"
+        let duration = Format.clipDuration(frames: frames, fps: fps)
+        return "\(dimensions) · \(isLongest ? "up to \(duration)" : duration)"
     }
 
     var body: some View {
@@ -546,7 +549,8 @@ private struct DraftView: View {
                     model: model,
                     size: app.settings.size(for: model.family),
                     frames: video ? app.settings.videoFrames : nil,
-                    fps: video ? app.settings.videoFrameRate : nil
+                    fps: video ? app.settings.videoFrameRate : nil,
+                    isLongest: video && app.settings.autoDuration(for: model.family)
                 )
                 VStack(spacing: 6) {
                     Text(video ? "New Clip" : "New Image").font(.headline)
@@ -572,7 +576,7 @@ private struct JobView: View {
         let isQueued = job.phase == .queued
         VStack(spacing: 22) {
             GenerationFrame(model: job.model, size: job.request.size, frames: job.request.frames, fps: job.request.fps,
-                            isPulsing: !isQueued && !job.isCancelling)
+                            isLongest: job.framesAreLongest, isPulsing: !isQueued && !job.isCancelling)
 
             VStack(spacing: 10) {
                 HStack {

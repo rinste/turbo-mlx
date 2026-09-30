@@ -64,6 +64,26 @@ enum VerifyLTX {
         let wantedVideoText = try reference("video_embeds")
         let wantedAudioText = try reference("audio_embeds")
 
+        // 2.5: the DurationHead on the reference's contexts, and its seconds-to-frames rule.
+        if let wanted = references["duration_seconds"] {
+            let got = try model.durationSeconds(video: wantedVideoText, audio: wantedAudioText)
+            ok = Verify.report("duration seconds", got: got.asType(.float32), want: wanted) && ok
+            print("    predicted \(got.asType(.float32).item(Float.self)) s")
+        }
+        if let table = references["duration_frames_table"] {
+            let rows = table.asArray(Float.self)
+            var mismatches = 0
+            for row in stride(from: 0, to: rows.count, by: 3) {
+                let fps = Double(rows[row])
+                let got = LTXVideoModel.durationFrames(seconds: Double(rows[row + 1]), fps: fps,
+                                                       minFrames: Int(fps.rounded(.toNearestOrEven)),
+                                                       maxFrames: Int((10 * fps).rounded(.toNearestOrEven)))
+                if got != Int(rows[row + 2]) { mismatches += 1 }
+            }
+            print("  \(mismatches == 0 ? "✓" : "✗") duration frames    \(rows.count / 3) durations\(mismatches == 0 ? "" : ", \(mismatches) DIFFERENT")")
+            ok = mismatches == 0 && ok
+        }
+
         // 4. Noise and positions.
         let videoInit = try reference("stage1_video_init")
         let audioInit = try reference("stage1_audio_init")

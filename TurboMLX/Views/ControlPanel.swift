@@ -22,7 +22,7 @@ struct ControlPanel: View {
                     PromptSection(settings: $app.settings, focus: $focusedBlock)
                     FormatSection(settings: $app.settings)
                     if model.family.media == .video {
-                        ClipSection(settings: $app.settings)
+                        ClipSection(settings: $app.settings, picksDuration: model.family.picksDuration)
                     }
                     ParametersSection(settings: $app.settings, model: model)
                 }
@@ -991,11 +991,21 @@ private struct HistoryImagePicker: View {
 // MARK: - Clip
 
 /// How long the clip runs and at what frame rate (the frames are 8k + 1, nearest the duration).
+/// A model that can pick the length from the prompt (LTX-2.5) offers to, the slider then setting
+/// the longest it may choose.
 private struct ClipSection: View {
     @Binding var settings: GenerationSettings
+    let picksDuration: Bool
 
     var body: some View {
+        let automatic = picksDuration && settings.videoAutoDuration
         Section("Clip") {
+            if picksDuration {
+                Toggle(isOn: $settings.videoAutoDuration) {
+                    Text("Duration from the prompt")
+                    Text("The model makes the clip as long as the prompt describes, from 1 second up to the longest set below.")
+                }
+            }
             LabeledContent {
                 HStack(spacing: 6) {
                     Slider(value: $settings.videoSeconds, in: GenerationSettings.videoDurations, step: 1)
@@ -1004,8 +1014,10 @@ private struct ClipSection: View {
                         .frame(width: 34, alignment: .trailing)
                 }
             } label: {
-                Text("Duration")
-                    .help("\(settings.videoFrames) frames. Longer clips take longer and need more memory.")
+                Text(automatic ? "Longest" : "Duration")
+                    .help(automatic
+                        ? "At most \(settings.videoFrames) frames. Longer clips take longer and need more memory."
+                        : "\(settings.videoFrames) frames. Longer clips take longer and need more memory.")
             }
             Picker("Frame rate", selection: $settings.videoFrameRate) {
                 ForEach(GenerationSettings.videoFrameRates, id: \.self) { rate in

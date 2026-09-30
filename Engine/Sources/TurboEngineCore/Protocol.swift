@@ -39,6 +39,8 @@ public struct GenerationParams: Decodable {
     /// Video families: frame count, frame rate, and the image the clip starts from.
     public let frames: Int?
     public let fps: Double?
+    /// LTX-2.5: the length predicted from the prompt, at most `frames`.
+    public let autoDuration: Bool?
     public let image: String?
     /// Upscalers (SeedVR2): the factor the picture's shorter side is scaled by, and how much it is
     /// softened first (0–1).

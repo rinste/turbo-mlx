@@ -44,6 +44,18 @@ extension LTXVideoModel {
         return shapes.map { sequence.normal($0) }
     }
 
+    /// The DurationHead's seconds for given connector contexts.
+    public func durationSeconds(video: MLXArray, audio: MLXArray) throws -> MLXArray {
+        let head = try LTXDurationHead.load(pack.appending(path: "duration_head.safetensors"))
+        let seconds = head(video: video, audio: audio)
+        eval(seconds)
+        return seconds
+    }
+
+    public static func durationFrames(seconds: Double, fps: Double, minFrames: Int, maxFrames: Int) -> Int {
+        LTXDurationHead.frames(seconds: seconds, fps: fps, minFrames: minFrames, maxFrames: maxFrames)
+    }
+
     public static func positions(frames: Int, height: Int, width: Int, fps: Double, audioTokens: Int) -> (video: MLXArray, audio: MLXArray) {
         (videoPositions(frames: frames, height: height, width: width, fps: fps), audioPositions(audioTokens))
     }

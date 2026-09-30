@@ -124,6 +124,8 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     var videoResolution = 640
     var videoSeconds = 5.0
     var videoFrameRate = 24
+    /// A model that picks the length from the prompt does so, `videoSeconds` being the longest.
+    var videoAutoDuration = false
     /// The image a clip starts from, or an image is made from: a file in the references folder
     /// (`HistoryStore`).
     var referenceImage: String?
@@ -168,6 +170,11 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         Int((videoSeconds * Double(videoFrameRate) / 8).rounded()) * 8 + 1
     }
 
+    /// Whether this family picks the clip's length, as the settings ask it to.
+    func autoDuration(for family: ModelFamily) -> Bool {
+        videoAutoDuration && family.picksDuration
+    }
+
     /// The prompt sent to the model: the blocks joined in order, already trimmed.
     var prompt: String { PromptBlock.joined(blocks) }
     var trimmedPrompt: String { prompt }
@@ -177,7 +184,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case blocks, aspect, resolution, usesCustomSize, customWidth, customHeight, steps, guidance,
              randomSeed, seed, batchCount, transparentBackground, lowMemory,
-             videoResolution, videoSeconds, videoFrameRate, referenceImage, upscale, softness
+             videoResolution, videoSeconds, videoFrameRate, videoAutoDuration, referenceImage, upscale, softness
     }
 
     /// Settings saved before the prompt had blocks kept a single string.
@@ -208,6 +215,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         videoResolution = try values.decodeIfPresent(Int.self, forKey: .videoResolution) ?? videoResolution
         videoSeconds = try values.decodeIfPresent(Double.self, forKey: .videoSeconds) ?? videoSeconds
         videoFrameRate = try values.decodeIfPresent(Int.self, forKey: .videoFrameRate) ?? videoFrameRate
+        videoAutoDuration = try values.decodeIfPresent(Bool.self, forKey: .videoAutoDuration) ?? videoAutoDuration
         referenceImage = try values.decodeIfPresent(String.self, forKey: .referenceImage)
         upscale = try values.decodeIfPresent(Double.self, forKey: .upscale) ?? upscale
         softness = try values.decodeIfPresent(Double.self, forKey: .softness) ?? softness
@@ -223,10 +231,10 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     }
 
     /// Picks the preset that produced `size`, or switches to a custom size.
-    mutating func apply(size: PixelSize, video: Bool = false) {
+    mutating func apply(size: PixelSize, video: Bool = false, multiple: Int = 16) {
         for aspect in AspectRatio.allCases {
             for resolution in video ? Self.videoResolutions : Self.resolutions
-            where aspect.size(base: resolution, multiple: video ? 64 : 16) == size {
+            where aspect.size(base: resolution, multiple: video ? 64 : multiple) == size {
                 self.aspect = aspect
                 if video { videoResolution = resolution } else { self.resolution = resolution }
                 usesCustomSize = false
@@ -251,9 +259,11 @@ nonisolated struct GenerationRequest: Codable, Hashable, Sendable {
     var guidance: Double
     var transparentBackground: Bool
     var lowMemory: Bool
-    /// Video only: how many frames and at what rate; nil for an image.
+    /// Video only: how many frames and at what rate; nil for an image. With `autoDuration` the
+    /// model picks the length, `frames` being the longest until the engine says which it chose.
     var frames: Int?
     var fps: Int?
+    var autoDuration: Bool?
     /// Video only: the image the clip starts from, a file in the references folder.
     var referenceImage: String?
     /// Upscalers only: the factor and the softening (`GenerationSettings`).

@@ -17,6 +17,8 @@ nonisolated struct WorkerEvent: Decodable, Sendable {
     var height: Int?
     var seconds: Double?
     var peakMemory: Int64?
+    /// A clip's frames: in "done", and in the "denoising" phase once the model picked the length.
+    var frames: Int?
     /// Seconds per phase of a finished image: load, encode, denoise, decode, save.
     var timings: [String: Double]?
     var message: String?
@@ -110,6 +112,7 @@ nonisolated enum WorkerCommand: Sendable {
         ]
         if let frames = request.frames { params["frames"] = frames }
         if let fps = request.fps { params["fps"] = Double(fps) }
+        if request.autoDuration == true { params["auto_duration"] = true }
         if let upscale = request.upscale { params["upscale"] = upscale }
         if let softness = request.softness { params["softness"] = softness }
         if let reference = request.referenceImage {

@@ -30,8 +30,11 @@ final class GenerationJob: Identifiable {
 
     let id = UUID()
     let model: ModelDescriptor
-    let request: GenerationRequest
+    private(set) var request: GenerationRequest
     let outputURL: URL
+    /// A clip whose length the model picks: whether the engine has said which (until then
+    /// `request.frames` is the longest it may be).
+    private(set) var framesSettled = false
 
     var phase = Phase.queued {
         didSet { if phase == .decoding, oldValue != .decoding { decodeStartedAt = Date() } }
@@ -110,6 +113,14 @@ final class GenerationJob: Identifiable {
             return nil
         }
     }
+
+    func settleFrames(_ frames: Int) {
+        request.frames = frames
+        framesSettled = true
+    }
+
+    /// A clip whose length the model has yet to pick: its frames are only the longest it may be.
+    var framesAreLongest: Bool { request.autoDuration == true && !framesSettled }
 
     func beginDenoising() {
         phase = .denoising

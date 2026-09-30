@@ -478,6 +478,7 @@ final class AppModel {
                 lowMemory: settings.lowMemory,
                 frames: isVideo ? settings.videoFrames : nil,
                 fps: isVideo ? settings.videoFrameRate : nil,
+                autoDuration: isVideo && settings.autoDuration(for: model.family) ? true : nil,
                 referenceImage: model.family.takesReferenceImage ? reference : nil,
                 upscale: upscales ? settings.upscale : nil,
                 softness: upscales ? settings.softness : nil
@@ -595,7 +596,13 @@ final class AppModel {
             switch event.phase {
             case "loading": job.phase = .loadingModel
             case "encoding": job.phase = .encodingPrompt
-            case "denoising": job.beginDenoising()
+            case "denoising":
+                // A length the model picked: the clip it will make, planned again.
+                if job.request.autoDuration == true, let frames = event.frames {
+                    job.settleFrames(frames)
+                    job.plan = TimeEstimate.plan(model: job.model, request: job.request, history: history.items, models: models)
+                }
+                job.beginDenoising()
             case "decoding": job.phase = .decoding
             case "encoding_video": job.phase = .encodingVideo
             case "saving": job.phase = .saving
@@ -628,6 +635,9 @@ final class AppModel {
         var request = job.request
         if let width = event.width, let height = event.height {
             request.size = PixelSize(width: width, height: height)
+        }
+        if job.model.family.media == .video, let frames = event.frames {
+            request.frames = frames
         }
         // The job's ID, so that a job being looked at stays in view as its image or clip.
         history.add(HistoryItem(
@@ -774,10 +784,13 @@ final class AppModel {
             } else {
                 updated.blocks = PromptBlock.defaults(subject: request.prompt)
             }
-            updated.apply(size: request.size, video: isVideo)
+            // Sides in the family's multiple: SenseNova's 16:9 at 2048 is 2720 wide (32), not 2736
+            // (16), and must not turn Custom size on, which locks the resolution.
+            updated.apply(size: request.size, video: isVideo, multiple: model?.family.sizeMultiple ?? 16)
         }
         if isVideo, let frames = request.frames, let fps = request.fps, fps > 0 {
             updated.videoFrameRate = fps
+            updated.videoAutoDuration = request.autoDuration ?? false
             updated.videoSeconds = min(max((Double(frames - 1) / Double(fps)).rounded(), GenerationSettings.videoDurations.lowerBound),
                                        GenerationSettings.videoDurations.upperBound)
         }

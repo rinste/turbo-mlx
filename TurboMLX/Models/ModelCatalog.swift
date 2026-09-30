@@ -34,6 +34,9 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     /// Lightricks' video models: LTX-2.3 with Gemma 3 beside it, LTX-2.5 with its own Gemma 4.
     var isLTX: Bool { self == .ltx2 || self == .ltx25 }
 
+    /// LTX-2.5 can pick a clip's length from its prompt (its DurationHead).
+    var picksDuration: Bool { self == .ltx25 }
+
     /// The sides of an image are multiples of this: 16 for most (a DiT's 2 × 2 patches of 8-pixel
     /// latents), 32 for SenseNova, whose tokens are 32 × 32 pixels; a clip's, 64 (`videoSize`).
     var sizeMultiple: Int { self == .senseNova ? 32 : 16 }

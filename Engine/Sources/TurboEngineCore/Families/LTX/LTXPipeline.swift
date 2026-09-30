@@ -16,6 +16,9 @@ public struct GeneratedClip {
 public protocol VideoFamilyModel: FamilyModel {
     /// The steps `progress` will count to for this request.
     func totalSteps(_ request: FamilyRequest) -> Int
+    /// The clip's frame count, once the prompt is encoded: the request's, or the model's pick when
+    /// it chooses the length (`autoDuration`).
+    func resolvedFrames(_ request: FamilyRequest) throws -> Int?
     func generateVideo(
         _ request: FamilyRequest,
         phase: (GenerationPhase) -> Void,
@@ -90,6 +93,7 @@ public final class LTXVideoModel: VideoFamilyModel {
     /// The transformer has generated since it was loaded: its weights are resident.
     private var transformerUsed = false
     private var encoderStatistics: LTXEncoderStatistics?
+    private var durationHead: LTXDurationHead?
     /// Embeddings per prompt: video [1, T, 4096] and audio [1, T, 2048].
     private var promptCache: [String: (video: MLXArray, audio: MLXArray)] = [:]
 
@@ -277,6 +281,29 @@ public final class LTXVideoModel: VideoFamilyModel {
         throw LTXError.videoOnly
     }
 
+    /// LTX-2.5 packs carry the DurationHead, which picks a clip's length from its prompt.
+    public var predictsDuration: Bool {
+        FileManager.default.fileExists(atPath: pack.appending(path: "duration_head.safetensors").path)
+    }
+
+    /// `DurationPredictor`: the length the prompt describes, in seconds as the head says it and in
+    /// frames at `fps`, clamped to [1 s, `maxFrames`] on the 8k + 1 grid. The prompt is encoded first.
+    public func predictedDuration(_ prompt: String, fps: Double, maxFrames: Int) throws -> (seconds: Double, frames: Int) {
+        try encode(prompt)
+        guard let (video, audio) = promptCache[prompt] else { throw GenerationError.cancelled }
+        if durationHead == nil { durationHead = try LTXDurationHead.load(file("duration_head.safetensors")) }
+        let seconds = durationHead!(video: video, audio: audio)
+        let value = Double(seconds.asType(.float32).item(Float.self))
+        let minFrames = Int(fps.rounded(.toNearestOrEven))
+        return (value, LTXDurationHead.frames(seconds: value, fps: fps, minFrames: min(minFrames, maxFrames), maxFrames: maxFrames))
+    }
+
+    public func resolvedFrames(_ request: FamilyRequest) throws -> Int? {
+        guard request.autoDuration, predictsDuration else { return request.frames }
+        let fps = request.fps ?? 24
+        return try predictedDuration(request.prompt, fps: fps, maxFrames: request.frames ?? Int(20 * fps)).frames
+    }
+
     public func totalSteps(_ request: FamilyRequest) -> Int {
         Self.shortened(LTXConfig.distilledSigmas, steps: request.steps).count - 1 + LTXConfig.stage2Sigmas.count - 1
     }
@@ -294,7 +321,6 @@ public final class LTXVideoModel: VideoFamilyModel {
         let previousLimit = Memory.cacheLimit
         Memory.cacheLimit = min(previousLimit, 4 << 30)
         defer { Memory.cacheLimit = previousLimit }
-        let geometry = LTXGeometry(width: request.width, height: request.height, frames: request.frames ?? 121, fps: request.fps ?? 24)
         let stage1Sigmas = Self.shortened(LTXConfig.distilledSigmas, steps: request.steps)
         let stage2Sigmas = LTXConfig.stage2Sigmas
         let totalSteps = stage1Sigmas.count - 1 + stage2Sigmas.count - 1
@@ -304,6 +330,9 @@ public final class LTXVideoModel: VideoFamilyModel {
         promptsEncoded()
         guard let (videoText, audioText) = promptCache[request.prompt] else { throw GenerationError.cancelled }
         if isCancelled() { throw GenerationError.cancelled }
+        // The length, which the model may pick from the encoded prompt.
+        let frames = try resolvedFrames(request) ?? 121
+        let geometry = LTXGeometry(width: request.width, height: request.height, frames: frames, fps: request.fps ?? 24)
 
         let transformer = try loadedTransformer()
         let reference = try request.imagePath.map { try LTXReferenceImage(path: $0) }

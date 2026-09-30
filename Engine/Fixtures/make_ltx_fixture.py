@@ -30,7 +30,7 @@ import ltx_core_mlx.model.transformer.model as transformer_model
 import ltx_pipelines_mlx.distilled as distilled
 import ltx_pipelines_mlx.utils._orchestration as orchestration
 import ltx_pipelines_mlx.utils.media_io as media_io
-from ltx_pipelines_mlx.utils.blocks import PromptEncoder
+from ltx_pipelines_mlx.utils.blocks import DurationPredictor, PromptEncoder, seconds_to_clamped_num_frames
 
 refs: dict[str, mx.array] = {}
 # Every Gemma state, to check the connector on its own (gemma_states.safetensors, ~385 MB).
@@ -239,6 +239,19 @@ def main() -> None:
     video_f32, audio_f32 = connector(states, attention_mask=refs["attention_mask"])
     mx.eval(video_f32, audio_f32)
     mx.save_safetensors(str(out / "connector_f32.safetensors"), {"video_embeds_f32": video_f32, "audio_embeds_f32": audio_f32})
+
+    # 2.5: the DurationHead's seconds on the recorded contexts, and the seconds-to-frames rule on
+    # a table of durations (clamped to 1–10 s at 24 and 25 fps).
+    predictor = DurationPredictor.from_checkpoint(Path(args.pack))
+    if predictor is not None:
+        seconds = predictor._head(video_tokens=refs["video_embeds"], audio_tokens=refs["audio_embeds"])
+        record("duration_seconds", seconds.astype(mx.float32))
+        table = []
+        for fps in (24.0, 25.0):
+            for value in (0.2, 0.9, 1.0, 1.02, 2.5, 3.3125, 4.99, 5.0, 7.7, 9.99, 10.0, 12.0, 30.0):
+                frames = seconds_to_clamped_num_frames(value, frame_rate=fps, min_frames=round(fps), max_frames=round(10 * fps))
+                table.append([fps, value, frames])
+        refs["duration_frames_table"] = mx.array(table, dtype=mx.float32)
 
     mx.save_safetensors(str(out / "references.safetensors"), refs)
     (out / "fixture.json").write_text(json.dumps({
