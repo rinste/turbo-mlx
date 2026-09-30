@@ -290,6 +290,8 @@ final class LTXTransformer: Module {
     @ModuleInfo(key: "av_ca_a2v_gate_adaln_single") var gateToVideoAdaln: LTXAdaLayerNormSingle
     @ModuleInfo(key: "av_ca_v2a_gate_adaln_single") var gateToAudioAdaln: LTXAdaLayerNormSingle
     @ModuleInfo(key: "transformer_blocks") var blocks: [LTXTransformerBlock]
+    /// LTX-2.5: the learned marker added to the tokens of single-pixel latent frames.
+    @ParameterInfo(key: "keyframes_abs_pos_embedding") var keyframesEmbedding: MLXArray?
 
     let config: LTXConfig.Transformer
     /// Blocks run between two evaluations (`LTX2_DIT_EVAL_EVERY`): short Metal command buffers.
@@ -313,6 +315,7 @@ final class LTXTransformer: Module {
         _gateToVideoAdaln.wrappedValue = LTXAdaLayerNormSingle(dim: c.videoDim, count: 1, timestepDim: t)
         _gateToAudioAdaln.wrappedValue = LTXAdaLayerNormSingle(dim: c.audioDim, count: 1, timestepDim: t)
         _blocks.wrappedValue = (0 ..< c.numLayers).map { _ in LTXTransformerBlock(config: c) }
+        _keyframesEmbedding.wrappedValue = c.keyframesEmbedding ? MLXArray.zeros([1, c.videoDim]) : nil
         super.init()
     }
 
@@ -345,12 +348,23 @@ final class LTXTransformer: Module {
     ///   - sigma: [B] bfloat16, the step's noise level.
     ///   - videoTimesteps: [B, Nv] per-token timesteps when some tokens are conditioning (nil: all
     ///     at `sigma`).
+    ///   - keyframeTokens: the first tokens, which get the keyframe marker (2.5: the first latent
+    ///     frame, one pixel frame); ignored by a model without it.
     func callAsFunction(
         video: MLXArray, audio: MLXArray, sigma: MLXArray, videoTimesteps: MLXArray?,
-        videoText: MLXArray, audioText: MLXArray, videoPositions: MLXArray, audioPositions: MLXArray
+        videoText: MLXArray, audioText: MLXArray, videoPositions: MLXArray, audioPositions: MLXArray,
+        keyframeTokens: Int = 0
     ) -> (video: MLXArray, audio: MLXArray) {
         let c = config
         var videoHidden = patchifyProj(video.asType(.bfloat16))
+        // `apply_keyframes_absolute_embedding`: the marker times a 0/1 mask, added to every token.
+        if let keyframesEmbedding, keyframeTokens > 0 {
+            let count = videoHidden.shape[1]
+            let marked = min(keyframeTokens, count)
+            let mask = concatenated([MLXArray.ones([videoHidden.shape[0], marked, 1], dtype: videoHidden.dtype),
+                                     MLXArray.zeros([videoHidden.shape[0], count - marked, 1], dtype: videoHidden.dtype)], axis: 1)
+            videoHidden = videoHidden + mask * keyframesEmbedding.asType(videoHidden.dtype)
+        }
         var audioHidden = audioPatchifyProj(audio.asType(.bfloat16))
 
         let timestep = sigma.asType(.bfloat16)

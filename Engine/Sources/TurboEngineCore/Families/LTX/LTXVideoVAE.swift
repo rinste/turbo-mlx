@@ -235,8 +235,8 @@ final class LTXVideoDecoder: Module {
         return result
     }
 
-    static func weights(_ tensors: [String: MLXArray]) -> [String: MLXArray] {
-        stripping("vae_decoder.", from: tensors)
+    static func weights(_ tensors: [String: MLXArray], prefix: String = "vae_decoder.") -> [String: MLXArray] {
+        stripping(prefix, from: tensors)
     }
 }
 
@@ -303,8 +303,8 @@ final class LTXVideoEncoder: Module {
         return x.transposed(0, 4, 1, 2, 3)
     }
 
-    static func weights(_ tensors: [String: MLXArray]) -> [String: MLXArray] {
-        remappingStatistics(stripping("vae_encoder.", from: tensors))
+    static func weights(_ tensors: [String: MLXArray], prefix: String = "vae_encoder.") -> [String: MLXArray] {
+        remappingStatistics(stripping(prefix, from: tensors))
     }
 }
 

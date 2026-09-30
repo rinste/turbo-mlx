@@ -40,6 +40,20 @@ public enum LTXError: LocalizedError {
     }
 }
 
+/// `mx.random.seed(seed)` then successive float32 `mx.random.normal` draws: MLX's global key
+/// sequence, each draw taking the second half of a split and keeping the first.
+struct LTXNoiseSequence {
+    private var key: MLXArray
+
+    init(seed: Int) { key = MLXRandom.key(UInt64(seed)) }
+
+    mutating func normal(_ shape: [Int]) -> MLXArray {
+        let (next, draw) = MLXRandom.split(key: key)
+        key = next
+        return MLXRandom.normal(shape, key: draw)
+    }
+}
+
 /// A latent being denoised with the conditioning that pins some of its tokens
 /// (`LatentState`: the tokens, their clean values, and 1 where they are generated).
 struct LTXLatentState {
@@ -50,19 +64,28 @@ struct LTXLatentState {
     var uniform: Bool
 }
 
-/// LTX-2.3 distilled, the two-stage pipeline of dgrauet's `DistilledPipeline`: the prompt through
-/// Gemma 3 and the connector, eight steps at half resolution, the latent upsampled ×2, three
-/// steps at full resolution, then the video and audio decoders. A reference image pins the first
-/// frame (`VideoConditionByLatentIndex`) in both stages.
+/// The Gemma tower whose hidden states feed the connector: Gemma 3 (LTX-2.3) or Gemma 4 (LTX-2.5).
+protocol LTXTextTower: Module {
+    func allHiddenStates(tokens: MLXArray, attentionMask: MLXArray) -> [MLXArray]
+}
+
+extension Gemma3TextModel: LTXTextTower {}
+
+/// LTX-2.3 and LTX-2.5 distilled, the two-stage pipeline of dgrauet's `DistilledPipeline`: the
+/// prompt through Gemma and the connector, eight steps at half resolution, the latent upsampled
+/// ×2, three steps at full resolution, then the video and audio decoders. A reference image pins
+/// the first frame (`VideoConditionByLatentIndex`) in both stages. LTX-2.5 packs carry their own
+/// Gemma 4, run stage 1 with the ancestral sampler and mark the first latent frame as a keyframe.
 public final class LTXVideoModel: VideoFamilyModel {
     public let config: LTXConfig
     public let pack: URL
+    /// Where the tokenizer and the Gemma weights are: the pack itself for LTX-2.5.
     public let textEncoderFolder: URL
     public private(set) var bits: Int?
     public var lowRam = false
 
     private var prompter: Gemma3Prompter?
-    private var textSide: (gemma: Gemma3TextModel, connector: LTXTextConnector)?
+    private var textSide: (gemma: LTXTextTower, connector: LTXTextConnector)?
     private var transformer: LTXTransformer?
     /// The transformer has generated since it was loaded: its weights are resident.
     private var transformerUsed = false
@@ -70,18 +93,59 @@ public final class LTXVideoModel: VideoFamilyModel {
     /// Embeddings per prompt: video [1, T, 4096] and audio [1, T, 2048].
     private var promptCache: [String: (video: MLXArray, audio: MLXArray)] = [:]
 
-    /// `pack` is a dgrauet LTX-2.3 folder; `textEncoder` the Gemma 3 12B folder.
-    public init(pack: URL, textEncoder: URL, loadTokenizer: Bool = true) throws {
+    /// `pack` is a dgrauet LTX-2.3 or LTX-2.5 folder; `textEncoder` the Gemma 3 12B folder, which
+    /// LTX-2.5 packs do not need (`select_text_encoder`: they have their own Gemma 4).
+    public init(pack: URL, textEncoder: URL?, loadTokenizer: Bool = true) throws {
         self.pack = pack
-        textEncoderFolder = textEncoder
         config = LTXConfig.load(pack: pack)
+        if Self.hasOwnTextEncoder(pack) {
+            textEncoderFolder = pack
+        } else {
+            guard let textEncoder else { throw LTXError.missingFile("text encoder (Gemma 3 12B)", pack) }
+            textEncoderFolder = textEncoder
+        }
         if loadTokenizer {
-            prompter = try Gemma3Prompter(folder: textEncoder, maxLength: LTXConfig.maxPromptTokens)
+            prompter = try Gemma3Prompter(folder: textEncoderFolder, maxLength: LTXConfig.maxPromptTokens)
         }
         try loadTransformer()
     }
 
     // MARK: Loading
+
+    /// LTX-2.5 packs carry their Gemma 4 text encoder.
+    public static func hasOwnTextEncoder(_ pack: URL) -> Bool {
+        ["text_encoder.safetensors", "text_encoder_config.json"].allSatisfy {
+            FileManager.default.fileExists(atPath: pack.appending(path: $0).path)
+        }
+    }
+
+    private var ownTextEncoder: Bool { textEncoderFolder == pack }
+
+    /// `_video_vae_names`: LTX-2.5 packs name their conv VAE `vae_decoder_conv` / `vae_encoder_conv`
+    /// (next to the diffusion decoder's `_av` files), keyed under the same names.
+    private var videoVAENames: (decoder: String, encoder: String) {
+        FileManager.default.fileExists(atPath: pack.appending(path: "vae_decoder_conv.safetensors").path)
+            ? ("vae_decoder_conv", "vae_encoder_conv") : ("vae_decoder", "vae_encoder")
+    }
+
+    private func videoDecoder() throws -> LTXVideoDecoder {
+        let name = videoVAENames.decoder
+        return try loadModule(LTXVideoDecoder(), file: "\(name).safetensors") { LTXVideoDecoder.weights($0, prefix: "\(name).") }
+    }
+
+    private func videoEncoder() throws -> LTXVideoEncoder {
+        let name = videoVAENames.encoder
+        return try loadModule(LTXVideoEncoder(), file: "\(name).safetensors") { LTXVideoEncoder.weights($0, prefix: "\(name).") }
+    }
+
+    /// `_resolve_upsampler_path`: the ×2 spatial upscaler, `v1_0` first on LTX-2.5, `v1_1` on 2.3.
+    private func upsamplerStem() throws -> String {
+        let stems = config.isLTX25 ? ["spatial_upscaler_x2_v1_0", "spatial_upscaler_x2_v1_1"] : ["spatial_upscaler_x2_v1_1"]
+        for stem in stems where FileManager.default.fileExists(atPath: pack.appending(path: "\(stem).safetensors").path) {
+            return stem
+        }
+        throw LTXError.missingFile("\(stems[0]).safetensors", pack)
+    }
 
     private func file(_ name: String) throws -> URL {
         let url = pack.appending(path: name)
@@ -122,22 +186,36 @@ public final class LTXVideoModel: VideoFamilyModel {
     }
 
     private func loadTextSide() throws {
-        let gemmaConfig = try Gemma3Config.load(folder: textEncoderFolder)
-        let gemma = Gemma3TextModel(config: gemmaConfig)
-        var tensors: [String: MLXArray] = [:]
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: textEncoderFolder.path)) ?? []
-        for name in names.sorted() where name.hasSuffix(".safetensors") {
-            tensors.merge(try loadArrays(url: textEncoderFolder.appending(path: name))) { _, new in new }
+        var connectorTensors = try loadArrays(url: file("connector.safetensors"))
+        let gemma: LTXTextTower
+        if ownTextEncoder {
+            // The pack's text encoder file also holds the connector's projection (`PromptEncoder.load`).
+            let tower = Gemma4TextModel(config: try Gemma4Config.load(pack: pack))
+            let tensors = try loadArrays(url: file("text_encoder.safetensors"))
+            try WeightLoading.apply(Gemma4TextModel.weights(tensors), to: tower)
+            let projection = "text_encoder.text_embedding_projection."
+            for (key, value) in tensors where key.hasPrefix(projection) {
+                connectorTensors["connector.text_embedding_projection." + key.dropFirst(projection.count)] = value
+            }
+            gemma = tower
+        } else {
+            let tower = Gemma3TextModel(config: try Gemma3Config.load(folder: textEncoderFolder))
+            var tensors: [String: MLXArray] = [:]
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: textEncoderFolder.path)) ?? []
+            for name in names.sorted() where name.hasSuffix(".safetensors") {
+                tensors.merge(try loadArrays(url: textEncoderFolder.appending(path: name))) { _, new in new }
+            }
+            try WeightLoading.apply(Gemma3TextModel.weights(tensors), to: tower)
+            gemma = tower
         }
-        try WeightLoading.apply(Gemma3TextModel.weights(tensors), to: gemma)
         let connector = LTXTextConnector(config: config)
-        try WeightLoading.apply(LTXTextConnector.weights(try loadArrays(url: file("connector.safetensors"))), to: connector)
+        try WeightLoading.apply(LTXTextConnector.weights(connectorTensors), to: connector)
         textSide = (gemma, connector)
     }
 
     /// Gemma and the connector, reloaded if they had been released. In low-RAM mode a resident
     /// transformer goes first, so the two sides are never in memory together.
-    private func loadedTextSide() throws -> (gemma: Gemma3TextModel, connector: LTXTextConnector) {
+    private func loadedTextSide() throws -> (gemma: LTXTextTower, connector: LTXTextConnector) {
         if let textSide { return textSide }
         if lowRam, transformerUsed {
             transformer = nil
@@ -151,7 +229,8 @@ public final class LTXVideoModel: VideoFamilyModel {
     private func statistics() throws -> LTXEncoderStatistics {
         if let encoderStatistics { return encoderStatistics }
         let module = LTXEncoderStatistics(channels: LTXConfig.latentChannels)
-        let tensors = LTXVideoEncoder.weights(try loadArrays(url: file("vae_encoder.safetensors")))
+        let name = videoVAENames.encoder
+        let tensors = LTXVideoEncoder.weights(try loadArrays(url: file("\(name).safetensors")), prefix: "\(name).")
         try WeightLoading.apply(stripping("per_channel_statistics.", from: tensors), to: module)
         encoderStatistics = module
         return module
@@ -228,8 +307,7 @@ public final class LTXVideoModel: VideoFamilyModel {
 
         let transformer = try loadedTransformer()
         let reference = try request.imagePath.map { try LTXReferenceImage(path: $0) }
-        var encoder: LTXVideoEncoder? = reference == nil ? nil
-            : try loadModule(LTXVideoEncoder(), file: "vae_encoder.safetensors", weights: LTXVideoEncoder.weights)
+        var encoder: LTXVideoEncoder? = reference == nil ? nil : try videoEncoder()
 
         // Stage 1: half resolution, from noise.
         phase(.denoising)
@@ -247,7 +325,8 @@ public final class LTXVideoModel: VideoFamilyModel {
             transformer: transformer, video: video1, audio: audio1, sigmas: stage1Sigmas,
             videoText: videoText, audioText: audioText,
             videoPositions: Self.videoPositions(frames: f, height: h1, width: w1, fps: geometry.fps),
-            audioPositions: Self.audioPositions(audioTokens),
+            audioPositions: Self.audioPositions(audioTokens), keyframeTokens: h1 * w1,
+            ancestralSeed: config.isLTX25 ? request.seed + LTXConfig.ancestralSeedOffset : nil,
             onStep: { step += 1; progress(step, totalSteps) }, isCancelled: isCancelled
         )
         transformerUsed = true
@@ -270,7 +349,7 @@ public final class LTXVideoModel: VideoFamilyModel {
             transformer: transformer, video: video2, audio: audio2, sigmas: stage2Sigmas,
             videoText: videoText, audioText: audioText,
             videoPositions: Self.videoPositions(frames: f, height: h2, width: w2, fps: geometry.fps),
-            audioPositions: Self.audioPositions(audioTokens),
+            audioPositions: Self.audioPositions(audioTokens), keyframeTokens: h2 * w2,
             onStep: { step += 1; progress(step, totalSteps) }, isCancelled: isCancelled
         )
 
@@ -298,8 +377,8 @@ public final class LTXVideoModel: VideoFamilyModel {
 
     /// `mx.random.seed(seed); mx.random.normal(shape)`: the global key split once.
     static func seededNormal(_ shape: [Int], seed: Int) -> MLXArray {
-        let key = MLXRandom.split(key: MLXRandom.key(UInt64(seed))).1
-        return MLXRandom.normal(shape, key: key)
+        var sequence = LTXNoiseSequence(seed: seed)
+        return sequence.normal(shape)
     }
 
     /// Stage 1: pure noise in bfloat16 (`legacy_scalar_blend` at σ = 1 over a zero latent).
@@ -365,21 +444,26 @@ public final class LTXVideoModel: VideoFamilyModel {
 
     // MARK: Denoising
 
-    /// `denoise_loop`: x0 from the velocity, the preserved tokens put back, an Euler step.
+    /// `denoise_loop`: x0 from the velocity, the preserved tokens put back, an Euler step. With an
+    /// `ancestralSeed`, `euler_ancestral_denoising_loop` instead (LTX-2.5's stage 1): each step goes
+    /// down past the next sigma and is renoised back up with noise drawn from that seed, video then
+    /// audio; the last step is x0 itself. `keyframeTokens` get the transformer's keyframe marker.
     private func denoise(
         transformer: LTXTransformer, video: LTXLatentState, audio: LTXLatentState, sigmas: [Double],
         videoText: MLXArray, audioText: MLXArray, videoPositions: MLXArray, audioPositions: MLXArray,
-        onStep: () -> Void, isCancelled: () -> Bool
+        keyframeTokens: Int = 0, ancestralSeed: Int? = nil, onStep: () -> Void, isCancelled: () -> Bool
     ) throws -> (video: MLXArray, audio: MLXArray) {
         var videoX = video.latent
         var audioX = audio.latent
+        var noise = ancestralSeed.map { LTXNoiseSequence(seed: $0) }
         for index in 0 ..< sigmas.count - 1 {
             let (sigma, next) = (sigmas[index], sigmas[index + 1])
             let sigmaArray = MLXArray([Float(sigma)]).asType(.bfloat16)
             let videoTimesteps: MLXArray? = video.uniform ? nil : (video.mask * Float(sigma)).squeezed(axis: -1)
             let (videoVelocity, audioVelocity) = transformer(
                 video: videoX, audio: audioX, sigma: sigmaArray, videoTimesteps: videoTimesteps,
-                videoText: videoText, audioText: audioText, videoPositions: videoPositions, audioPositions: audioPositions
+                videoText: videoText, audioText: audioText, videoPositions: videoPositions, audioPositions: audioPositions,
+                keyframeTokens: keyframeTokens
             )
             let videoSigma = (videoTimesteps?.expandedDimensions(axis: -1) ?? sigmaArray.reshaped([1, 1, 1])).asType(.float32)
             let audioSigma = sigmaArray.reshaped([1, 1, 1]).asType(.float32)
@@ -387,8 +471,24 @@ public final class LTXVideoModel: VideoFamilyModel {
             var audioX0 = (audioX.asType(.float32) - audioSigma * audioVelocity.asType(.float32)).asType(audioX.dtype)
             videoX0 = videoX0 * video.mask + video.clean * (1 - video.mask)
             audioX0 = audioX0 * audio.mask + audio.clean * (1 - audio.mask)
-            videoX = Self.eulerStep(videoX, x0: videoX0, sigma: sigma, next: next)
-            audioX = Self.eulerStep(audioX, x0: audioX0, sigma: sigma, next: next)
+            if noise != nil {
+                if next == 0 {
+                    videoX = videoX0
+                    audioX = audioX0
+                } else {
+                    let videoNoise = noise!.normal(videoX.shape)
+                    let audioNoise = noise!.normal(audioX.shape)
+                    var videoNext = Self.ancestralStep(videoX, x0: videoX0, sigma: sigma, next: next, noise: videoNoise)
+                    var audioNext = Self.ancestralStep(audioX, x0: audioX0, sigma: sigma, next: next, noise: audioNoise)
+                    videoNext = videoNext * video.mask + video.clean * (1 - video.mask)
+                    audioNext = audioNext * audio.mask + audio.clean * (1 - audio.mask)
+                    videoX = videoNext.asType(videoX.dtype)
+                    audioX = audioNext.asType(audioX.dtype)
+                }
+            } else {
+                videoX = Self.eulerStep(videoX, x0: videoX0, sigma: sigma, next: next)
+                audioX = Self.eulerStep(audioX, x0: audioX0, sigma: sigma, next: next)
+            }
             eval(videoX, audioX)
             onStep()
             if isCancelled() { throw GenerationError.cancelled }
@@ -402,13 +502,26 @@ public final class LTXVideoModel: VideoFamilyModel {
         return x + Float(next - sigma) * derivative
     }
 
+    /// `EulerAncestralDiffusionStep.step` with eta = s_noise = 1, in float32 (the coefficients in
+    /// double precision, as the reference computes them from the Python sigma list).
+    static func ancestralStep(_ x: MLXArray, x0: MLXArray, sigma: Double, next: Double, noise: MLXArray) -> MLXArray {
+        let sample = x.asType(.float32)
+        let denoised = x0.asType(.float32)
+        let down = next * (1 + (next / sigma - 1))
+        let ratio = down / sigma
+        let stepped = Float(ratio) * sample + Float(1 - ratio) * denoised
+        let (alphaNext, alphaDown) = (1 - next, 1 - down)
+        let renoise = Foundation.pow(max(next * next - (down * down) * (alphaNext * alphaNext) / (alphaDown * alphaDown), 0), 0.5)
+        return Float(alphaNext / alphaDown) * stepped + noise.asType(.float32) * Float(1) * Float(renoise)
+    }
+
     // MARK: Upsampling and decoding
 
     /// `_upsample_latent`: stage-1 tokens [1, F·h·w, 128] → normalized upsampled latent tokens.
     private func upsample(_ tokens: MLXArray, frames: Int, height: Int, width: Int) throws -> MLXArray {
         let stats = try statistics()
-        let upsampler = try loadModule(LTXLatentUpsampler(), file: "spatial_upscaler_x2_v1_1.safetensors",
-                                       weights: LTXLatentUpsampler.weights)
+        let stem = try upsamplerStem()
+        let upsampler = try loadModule(LTXLatentUpsampler(), file: "\(stem).safetensors") { LTXLatentUpsampler.weights($0, stem: stem) }
         let latent = tokens.reshaped([1, frames, height, width, 128])
         let denormalized = stats.denormalize(latent).transposed(0, 4, 1, 2, 3)
         let upscaled = upsampler(denormalized).transposed(0, 2, 3, 4, 1)
@@ -420,7 +533,7 @@ public final class LTXVideoModel: VideoFamilyModel {
     /// Latent [1, 128, F, H, W] → frames handed to `sink` in order, decoded in tiles when the whole
     /// clip would not fit the decode budget.
     private func decodeVideo(_ latent: MLXArray, fps: Double, isCancelled: () -> Bool, sink: (MLXArray) throws -> Void) throws {
-        let decoder = try loadModule(LTXVideoDecoder(), file: "vae_decoder.safetensors", weights: LTXVideoDecoder.weights)
+        let decoder = try videoDecoder()
         let previousLimit = Memory.cacheLimit
         Memory.cacheLimit = 0
         defer { Memory.cacheLimit = previousLimit }
@@ -440,25 +553,21 @@ public final class LTXVideoModel: VideoFamilyModel {
     // MARK: Stages, for verify (LTXVerification.swift)
 
     var prompterForVerification: Gemma3Prompter? { prompter }
-    func textModels() throws -> (gemma: Gemma3TextModel, connector: LTXTextConnector) { try loadedTextSide() }
+    func textModels() throws -> (gemma: LTXTextTower, connector: LTXTextConnector) { try loadedTextSide() }
     func transformerForVerification() throws -> LTXTransformer { try loadedTransformer() }
     func denoiseForVerification(
         video: LTXLatentState, audio: LTXLatentState, sigmas: [Double], videoText: MLXArray, audioText: MLXArray,
-        videoPositions: MLXArray, audioPositions: MLXArray
+        videoPositions: MLXArray, audioPositions: MLXArray, keyframeTokens: Int = 0, ancestralSeed: Int? = nil
     ) throws -> (video: MLXArray, audio: MLXArray) {
         try denoise(transformer: try loadedTransformer(), video: video, audio: audio, sigmas: sigmas,
                     videoText: videoText, audioText: audioText, videoPositions: videoPositions, audioPositions: audioPositions,
-                    onStep: {}, isCancelled: { false })
+                    keyframeTokens: keyframeTokens, ancestralSeed: ancestralSeed, onStep: {}, isCancelled: { false })
     }
     func upsampleForVerification(_ tokens: MLXArray, frames: Int, height: Int, width: Int) throws -> MLXArray {
         try upsample(tokens, frames: frames, height: height, width: width)
     }
-    func encoderForVerification() throws -> LTXVideoEncoder {
-        try loadModule(LTXVideoEncoder(), file: "vae_encoder.safetensors", weights: LTXVideoEncoder.weights)
-    }
-    func videoDecoderForVerification() throws -> LTXVideoDecoder {
-        try loadModule(LTXVideoDecoder(), file: "vae_decoder.safetensors", weights: LTXVideoDecoder.weights)
-    }
+    func encoderForVerification() throws -> LTXVideoEncoder { try videoEncoder() }
+    func videoDecoderForVerification() throws -> LTXVideoDecoder { try videoDecoder() }
     func audioDecoderForVerification() throws -> LTXAudioDecoder {
         try loadModule(LTXAudioDecoder(), file: "audio_vae.safetensors", weights: LTXAudioDecoder.weights)
     }

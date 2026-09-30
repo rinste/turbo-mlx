@@ -9,6 +9,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     case qwenImageEdit = "qwen-image-edit"
     case senseNova = "sensenova"
     case ltx2 = "ltx-2"
+    case ltx25 = "ltx-2.5"
     case seedVR2 = "seedvr2"
 
     var displayName: String {
@@ -20,6 +21,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .qwenImageEdit: "Qwen-Image Edit"
         case .senseNova: "SenseNova-U1.5"
         case .ltx2: "LTX-2"
+        case .ltx25: "LTX-2.5"
         case .seedVR2: "SeedVR2"
         }
     }
@@ -27,7 +29,10 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     /// Whether the model outputs RGBA, so a transparent background can be kept.
     var producesAlpha: Bool { self == .ming }
 
-    var media: MediaKind { self == .ltx2 ? .video : .image }
+    var media: MediaKind { isLTX ? .video : .image }
+
+    /// Lightricks' video models: LTX-2.3 with Gemma 3 beside it, LTX-2.5 with its own Gemma 4.
+    var isLTX: Bool { self == .ltx2 || self == .ltx25 }
 
     /// The sides of an image are multiples of this: 16 for most (a DiT's 2 × 2 patches of 8-pixel
     /// latents), 32 for SenseNova, whose tokens are 32 × 32 pixels; a clip's, 64 (`videoSize`).
@@ -35,7 +40,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
 
     /// A reference image: the first frame of a clip (LTX-2), the picture an image is edited from
     /// as the prompt says (FLUX.2 Klein, Qwen-Image Edit, SenseNova), the picture an upscaler enlarges.
-    var takesReferenceImage: Bool { self == .ltx2 || self == .flux2Klein || self == .qwenImageEdit || self == .senseNova || isUpscaler }
+    var takesReferenceImage: Bool { isLTX || self == .flux2Klein || self == .qwenImageEdit || self == .senseNova || isUpscaler }
 
     /// Qwen-Image Edit only edits and SeedVR2 only upscales: they need the picture.
     var requiresReferenceImage: Bool { self == .qwenImageEdit || isUpscaler }
@@ -50,7 +55,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .ming: ["mllm", "connector", "mlp", "transformer", "vae"]
         case .zImageTurbo, .flux2Klein, .qwenImage, .qwenImageEdit: ["transformer", "text_encoder", "vae"]
         case .senseNova: ["."]
-        case .ltx2, .seedVR2: []
+        case .ltx2, .ltx25, .seedVR2: []
         }
     }
 
@@ -61,6 +66,11 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .ltx2:
             ["embedded_config.json", "transformer-distilled*.safetensors", "connector.safetensors", "vae_decoder.safetensors",
              "vae_encoder.safetensors", "audio_vae.safetensors", "vocoder.safetensors", "spatial_upscaler_x2_v1_1.safetensors"]
+        // LTX-2.5 packs carry the text encoder and its tokenizer, and name the conv VAE `_conv`.
+        case .ltx25:
+            ["embedded_config.json", "transformer-distilled.safetensors", "connector.safetensors", "text_encoder.safetensors",
+             "text_encoder_config.json", "tokenizer.json", "vae_decoder_conv.safetensors", "vae_encoder_conv.safetensors",
+             "audio_vae.safetensors", "vocoder.safetensors", "spatial_upscaler_x2_v1_0.safetensors"]
         case .seedVR2: Self.seedVR2Files
         case .senseNova: ["config.json", "model.safetensors.index.json"]
         default: []
@@ -73,6 +83,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .zImageTurbo, .flux2Klein, .qwenImage, .qwenImageEdit: "tokenizer/tokenizer.json"
         case .senseNova: "tokenizer.json"
         case .ltx2: nil // in the text encoder's checkpoint
+        case .ltx25: "tokenizer.json"
         case .seedVR2: nil // no prompt: the engine has the fixed text embedding
         }
     }
@@ -95,6 +106,13 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
                     "transformer-distilled-1.1.safetensors", "connector.safetensors", "vae_decoder.safetensors",
                     "vae_encoder.safetensors", "audio_vae.safetensors", "vocoder.safetensors",
                     "spatial_upscaler_x2_v1_1.safetensors", "spatial_upscaler_x2_v1_1_config.json"]
+        // Not the dev transformer, its LoRA, the diffusion decoder (`_av`) or the temporal upscaler.
+        case .ltx25:
+            return ["LICENSE", "README.md", "embedded_config.json", "quantize_config.json", "split_model.json",
+                    "transformer-distilled.safetensors", "connector.safetensors", "text_encoder.safetensors",
+                    "text_encoder_config.json", "tokenizer.json", "tokenizer_config.json", "vae_decoder_conv.safetensors",
+                    "vae_encoder_conv.safetensors", "audio_vae.safetensors", "vocoder.safetensors",
+                    "spatial_upscaler_x2_v1_0.safetensors", "spatial_upscaler_x2_v1_0_config.json"]
         case .seedVR2: return ["README.md"] + Self.seedVR2Files
         case .senseNova: return ["README.md", "config.json", "model.safetensors.index.json", "model-*.safetensors", "tokenizer.json"]
         }
@@ -185,7 +203,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         switch family {
         case .ming, .qwenImage, .qwenImageEdit: true
         // The catalog's SenseNova packs are the 8-step distillation, which runs without guidance.
-        case .zImageTurbo, .senseNova, .ltx2, .seedVR2: false
+        case .zImageTurbo, .senseNova, .ltx2, .ltx25, .seedVR2: false
         case .flux2Klein: isKleinBase
         }
     }
@@ -198,7 +216,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .flux2Klein: isKleinBase ? 50 : 4
         case .qwenImage, .qwenImageEdit: 20
         case .senseNova: 8
-        case .ltx2: 8
+        case .ltx2, .ltx25: 8
         case .seedVR2: 1
         }
     }
@@ -216,7 +234,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .flux2Klein: isKleinBase ? 10...60 : 2...12
         case .qwenImage, .qwenImageEdit: 10...50
         case .senseNova: 4...16
-        case .ltx2: 4...8
+        case .ltx2, .ltx25: 4...8
         case .seedVR2: 1...1
         }
     }
@@ -335,6 +353,20 @@ enum ModelCatalog {
             sizeBytes: 29_754_522_642 + 8_068_018_787,
             license: "LTX-2 Community",
             recommendedMemoryGB: 64,
+            isBuiltIn: true
+        ),
+        // LTX-2.5 distilled from dgrauet's 4-bit MLX pack: the same 22B transformer layout, with its
+        // own Gemma 4 12B text encoder (4-bit) in the pack, the ancestral sampler in stage 1, and a
+        // new conv VAE and upscaler. The repo is gated: its licence is accepted on Hugging Face.
+        ModelDescriptor(
+            name: "LTX-2.5 · 32 GB RAM",
+            detail: "Lightricks' newer video model, with sound: a clip from a prompt, or from an image as its first frame; follows prompts with several shots. The 4-bit version.",
+            family: .ltx25,
+            source: .huggingFace(repo: "dgrauet/ltx-2.5-mlx-q4"),
+            revision: "e9a20add8c5937fcab635fb8e7a52926487a5776",
+            sizeBytes: 28_760_512_454,
+            license: "LTX-2 Community",
+            recommendedMemoryGB: 32,
             isBuiltIn: true
         ),
         ModelDescriptor(

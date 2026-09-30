@@ -33,6 +33,8 @@ public struct LTXConfig {
         public var audioFFBias = true
         /// `frequencies_precision: float64`: the RoPE frequency grid is computed in float64.
         public var doublePrecisionRope = true
+        /// LTX-2.5: `use_keyframes_abs_pos_embedding`, a learned marker on the first latent frame.
+        public var keyframesEmbedding = false
     }
 
     /// `GemmaFeaturesExtractorV2` and its two `Embeddings1DConnector`s (fixed in the port).
@@ -63,8 +65,14 @@ public struct LTXConfig {
     /// Audio latents per second: 16 kHz, hop 160, downsampled 4 times.
     public static let audioLatentsPerSecond = 25.0
     public static let latentChannels = 128
-    /// The noise of stage 2 and of the ancestral sampler are drawn from these seed offsets.
+    /// The noise of stage 2 and of the ancestral sampler (LTX-2.5's stage 1) are drawn from these
+    /// seed offsets.
     public static let stage2SeedOffset = 2
+    public static let ancestralSeedOffset = 10000
+
+    /// LTX-2.5 (`is_ltx25_pack`: the video feed-forward has no bias): its own Gemma 4 text encoder,
+    /// the ancestral sampler in stage 1, the keyframe marker, renamed VAE and upsampler files.
+    public var isLTX25: Bool { !transformer.ffBias }
 
     public init() {}
 
@@ -98,6 +106,7 @@ public struct LTXConfig {
             c.ffBias = t["ff_bias"] as? Bool ?? c.ffBias
             c.audioFFBias = t["audio_ff_bias"] as? Bool ?? c.audioFFBias
             c.doublePrecisionRope = (t["frequencies_precision"] as? String) == "float64"
+            c.keyframesEmbedding = t["use_keyframes_abs_pos_embedding"] as? Bool ?? false
             config.transformer = c
             return config
         }

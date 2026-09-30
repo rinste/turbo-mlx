@@ -1342,6 +1342,8 @@ private struct MemoryRows: View {
             "Frees the half of the model that reads the prompt (about 6 GB) once it is read: about 6 GB instead of 11 GB. A prompt that was not in the queue yet loads it again, in place of the other half."
         case .ltx2:
             "Frees Gemma and the text connector (about 14 GB) once the prompt is read, and the transformer before the clip is decoded. A prompt that was not in the queue yet loads them again."
+        case .ltx25:
+            "Frees Gemma 4 and the text connector (about 15 GB) once the prompt is read, and the transformer before the clip is decoded. A prompt that was not in the queue yet loads them again."
         case .seedVR2:
             "SeedVR2 always reads and writes the picture in tiles."
         }

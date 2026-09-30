@@ -123,6 +123,8 @@ enum TimeEstimate {
         // 768 × 512 in 219 s without Save memory, against 206 s with it for the 4-bit one.
         case .ltx2 where model.id.contains("q8"): Rates(denoise: 5.4, decode: 0.28, fixed: 12, load: 5)
         case .ltx2: Rates(denoise: 5.3, decode: 0.28, fixed: 12, load: 5)
+        // Not measured yet: LTX-2.3's rates, the same transformer and decoder.
+        case .ltx25: Rates(denoise: 5.3, decode: 0.28, fixed: 12, load: 5)
         // 1280 × 1024 in 10 s, 2304 × 2304 in 41 s, 4096 × 4096 in 125 s (encode and decode 5, 20
         // and 62 s of it).
         case .seedVR2: Rates(denoise: 0.97, decode: 4, fixed: 1, load: 3)

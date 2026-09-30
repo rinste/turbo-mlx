@@ -3,7 +3,7 @@ import MLX
 import MLXNN
 
 // The spatial ×2 latent upsampler between the two stages (dgrauet's `LatentUpsampler`, the
-// `spatial_upscaler_x2_v1_1` weights): 3D residual blocks with group norms around a per-frame 2D
+// `spatial_upscaler_x2_v1_1` weights, `_v1_0` on LTX-2.5, the same shapes): 3D residual blocks with group norms around a per-frame 2D
 // convolution and a pixel shuffle. It works on un-normalized latents; the pipeline denormalizes
 // before and normalizes after with the video encoder's statistics.
 
@@ -62,7 +62,8 @@ final class LTXLatentUpsampler: Module {
         return x.transposed(0, 4, 1, 2, 3)
     }
 
-    static func weights(_ tensors: [String: MLXArray]) -> [String: MLXArray] {
-        stripping("spatial_upscaler_x2_v1_1.", from: tensors)
+    /// The keys under the file's stem (`spatial_upscaler_x2_v1_1` on LTX-2.3, `_v1_0` on 2.5).
+    static func weights(_ tensors: [String: MLXArray], stem: String = "spatial_upscaler_x2_v1_1") -> [String: MLXArray] {
+        stripping("\(stem).", from: tensors)
     }
 }

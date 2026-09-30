@@ -24,7 +24,7 @@ nonisolated enum MemoryEstimate {
     /// Gigabytes the engine should peak at for this request on a Mac with `memory` GB, nil when the
     /// model is not measured.
     static func peak(model: ModelDescriptor, size: PixelSize, frames: Int?, lowMemory: Bool, memory: Double = installedGigabytes) -> Double? {
-        if model.family == .ltx2, model.isBuiltIn {
+        if model.family.isLTX, model.isBuiltIn {
             return clipPeak(model: model, size: size, frames: frames ?? 121, lowMemory: lowMemory, memory: memory)
         }
         return peaks(model.id, lowMemory: lowMemory)?.gigabytes(size.megapixels)
@@ -75,8 +75,12 @@ nonisolated enum MemoryEstimate {
     // decoders get a budget from the engine (`LTXDecodeTiling.budget`: half the memory, within three
     // quarters of it less what is resident), smaller on a smaller Mac, where the clip therefore
     // peaks at most at the transformer's phase or at the decoders plus that budget.
+    // LTX-2.5 4-bit (30 September 2026), its Gemma 4 larger than Gemma 3 in 4 bits: 19.1 GB with
+    // Save memory for 5 s at 768 × 512, 33.8 GB without it for 5 s at 640 × 640, the formula's
+    // 18.2 and 30.7 plus about 1 and 3 GB.
     private static func clipPeak(model: ModelDescriptor, size: PixelSize, frames: Int, lowMemory: Bool, memory: Double) -> Double {
-        let heavier = model.id.contains("q8") ? (lowMemory ? 8.6 : 7.1) : 0
+        let heavier = (model.id.contains("q8") ? (lowMemory ? 8.6 : 7.1) : 0)
+            + (model.family == .ltx25 ? (lowMemory ? 1 : 3.1) : 0)
         let megapixels = size.megapixels
         let latentFrames = Double((max(frames, 1) - 1) / 8 + 1)
         let fitted = lowMemory

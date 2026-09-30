@@ -69,7 +69,7 @@ public protocol FamilyModel: AnyObject {
 /// Loads the model a spec names, by family.
 public enum FamilyLoader {
     /// Families this engine implements, as the app names them.
-    public static let families = ["flux2-klein", "z-image-turbo", "qwen-image", "qwen-image-edit", "ming", "sensenova", "ltx-2", "seedvr2"]
+    public static let families = ["flux2-klein", "z-image-turbo", "qwen-image", "qwen-image-edit", "ming", "sensenova", "ltx-2", "ltx-2.5", "seedvr2"]
 
     public static func load(_ spec: ModelSpec, loadTokenizer: Bool = true) throws -> FamilyModel {
         let root = URL(fileURLWithPath: spec.path)
@@ -89,9 +89,10 @@ public enum FamilyLoader {
             return try SenseNovaModel(modelPath: root, loadTokenizer: loadTokenizer)
         case "seedvr2":
             return try SeedVR2Model(modelPath: root, config: .seedVR2_3B)
-        case "ltx-2":
-            guard let textEncoder = spec.textEncoderPath else { throw EngineError.missingTextEncoder(spec.family) }
-            return try LTXVideoModel(pack: root, textEncoder: URL(fileURLWithPath: textEncoder), loadTokenizer: loadTokenizer)
+        case "ltx-2", "ltx-2.5":
+            // LTX-2.5 packs carry their text encoder; LTX-2.3 needs the Gemma 3 folder.
+            if spec.textEncoderPath == nil, !LTXVideoModel.hasOwnTextEncoder(root) { throw EngineError.missingTextEncoder(spec.family) }
+            return try LTXVideoModel(pack: root, textEncoder: spec.textEncoderPath.map { URL(fileURLWithPath: $0) }, loadTokenizer: loadTokenizer)
         default:
             throw EngineError.unsupportedFamily(spec.family)
         }

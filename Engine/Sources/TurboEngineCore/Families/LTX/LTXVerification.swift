@@ -14,9 +14,14 @@ extension LTXVideoModel {
         try textModels().gemma.allHiddenStates(tokens: tokens, attentionMask: mask)
     }
 
-    /// The connector's video and audio contexts from Gemma's states.
-    public func connect(states: [MLXArray], mask: MLXArray) throws -> (video: MLXArray, audio: MLXArray) {
-        let result = try textModels().connector(hiddenStates: states, attentionMask: mask)
+    /// The connector's video and audio contexts from Gemma's states; `float32` upcasts the
+    /// connector for good (the states are the caller's).
+    public func connect(states: [MLXArray], mask: MLXArray, float32: Bool = false) throws -> (video: MLXArray, audio: MLXArray) {
+        let connector = try textModels().connector
+        if float32 {
+            connector.update(parameters: connector.parameters().mapValues { $0.asType(.float32) })
+        }
+        let result = connector(hiddenStates: states, attentionMask: mask)
         eval(result.video, result.audio)
         return result
     }
@@ -33,34 +38,44 @@ extension LTXVideoModel {
         renoisedMasked(latent, sigma: LTXConfig.stage2Sigmas[0], seed: seed + LTXConfig.stage2SeedOffset).latent
     }
 
+    /// The ancestral sampler's draws from `seed` (the loop's own, offset already added), in order.
+    public static func ancestralNoise(shapes: [[Int]], seed: Int) -> [MLXArray] {
+        var sequence = LTXNoiseSequence(seed: seed)
+        return shapes.map { sequence.normal($0) }
+    }
+
     public static func positions(frames: Int, height: Int, width: Int, fps: Double, audioTokens: Int) -> (video: MLXArray, audio: MLXArray) {
         (videoPositions(frames: frames, height: height, width: width, fps: fps), audioPositions(audioTokens))
     }
 
-    /// One forward pass: the velocities.
+    /// One forward pass: the velocities. `keyframeTokens`: the first latent frame's tokens, which
+    /// LTX-2.5 marks.
     public func transformerPass(
         video: MLXArray, audio: MLXArray, sigma: MLXArray, videoTimesteps: MLXArray?,
-        videoText: MLXArray, audioText: MLXArray, videoPositions: MLXArray, audioPositions: MLXArray
+        videoText: MLXArray, audioText: MLXArray, videoPositions: MLXArray, audioPositions: MLXArray, keyframeTokens: Int = 0
     ) throws -> (video: MLXArray, audio: MLXArray) {
         let result = try transformerForVerification()(
             video: video, audio: audio, sigma: sigma, videoTimesteps: videoTimesteps,
-            videoText: videoText, audioText: audioText, videoPositions: videoPositions, audioPositions: audioPositions
+            videoText: videoText, audioText: audioText, videoPositions: videoPositions, audioPositions: audioPositions,
+            keyframeTokens: keyframeTokens
         )
         eval(result.video, result.audio)
         return result
     }
 
-    /// A whole stage's loop from given states.
+    /// A whole stage's loop from given states; with `ancestralSeed`, the ancestral one.
     public func denoiseStage(
         video: (latent: MLXArray, clean: MLXArray, mask: MLXArray), audio: (latent: MLXArray, clean: MLXArray, mask: MLXArray),
-        sigmas: [Double], videoText: MLXArray, audioText: MLXArray, videoPositions: MLXArray, audioPositions: MLXArray
+        sigmas: [Double], videoText: MLXArray, audioText: MLXArray, videoPositions: MLXArray, audioPositions: MLXArray,
+        keyframeTokens: Int = 0, ancestralSeed: Int? = nil
     ) throws -> (video: MLXArray, audio: MLXArray) {
         let videoUniform = video.mask.asType(.float32).min().item(Float.self) == 1
         let audioUniform = audio.mask.asType(.float32).min().item(Float.self) == 1
         return try denoiseForVerification(
             video: LTXLatentState(latent: video.latent, clean: video.clean, mask: video.mask, uniform: videoUniform),
             audio: LTXLatentState(latent: audio.latent, clean: audio.clean, mask: audio.mask, uniform: audioUniform),
-            sigmas: sigmas, videoText: videoText, audioText: audioText, videoPositions: videoPositions, audioPositions: audioPositions
+            sigmas: sigmas, videoText: videoText, audioText: audioText, videoPositions: videoPositions, audioPositions: audioPositions,
+            keyframeTokens: keyframeTokens, ancestralSeed: ancestralSeed
         )
     }
 

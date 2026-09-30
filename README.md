@@ -13,7 +13,7 @@ app downloads it, and that is all the setup there is.
 - **Left column:** the prompt as blocks (Subject and Style to start with, each one a piece of the
   final text; renamable, resizable, and put in order by dragging), aspect ratio, steps and guidance;
   under *Advanced*, the resolution or a custom size, seed, number of images, transparent or white
-  background, memory saving. For LTX-2.3, FLUX.2 Klein, Qwen-Image Edit and SenseNova-U1.5, a
+  background, memory saving. For LTX-2.3 and LTX-2.5, FLUX.2 Klein, Qwen-Image Edit and SenseNova-U1.5, a
   *Reference Image* above the prompt (dropped from Finder or from the history, chosen from a file
   or among the generated images): the clip's first frame, or the picture the image models change
   as the prompt says ("make it winter"), in its own proportions (Qwen-Image Edit needs one). For a clip,
@@ -86,6 +86,7 @@ prompt and settings, an MP4 in an XMP box.
 | [SenseNova-U1.5](https://huggingface.co/mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit) | 16 GB | 11.8 GB | 11.6 GB, 6.9 GB with *Save memory* | photos, posters and infographics with legible text, in pixels (no VAE); edits a reference image as the prompt says · 8B + 8B, 4-bit · 8 steps · Apache 2.0 |
 | [LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q4) | 32 GB | 28.5 GB | 18 GB (768 × 512, 5 s) | video with sound, from a prompt or from an image as the first frame · 22B distilled, 4-bit · 8 + 3 steps · LTX-2 Community |
 | [LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q8) | 64 GB | 37.8 GB | 37 GB (768 × 512, 5 s) | the 8-bit version, closer to the original |
+| [LTX-2.5](https://huggingface.co/dgrauet/ltx-2.5-mlx-q4) | 32 GB | 28.8 GB | 19 GB (768 × 512, 5 s) | Lightricks' newer model: video with sound, several shots in one prompt, from a prompt or an image · 22B distilled with its own Gemma 4, 4-bit · 8 + 3 steps · LTX-2 Community, gated: accept its terms on Hugging Face |
 | [SeedVR2 Upscaler 3B](https://huggingface.co/numz/SeedVR2_comfyUI) | 16 GB | 7.3 GB | 11 GB (to 2304 × 2304), 18 GB (to 4096 × 4096) | enlarges a picture 2–4× with sharper, faithful detail, in one step, no prompt · float16 · Apache 2.0 |
 
 Measured on an M1 Max with mflux 0.20, the Python reference the native engine is checked against
@@ -96,7 +97,8 @@ the smallest common Mac memory size it peaks under 80% of. Times at 1024 × 1024
 measured with the native engine against dgrauet's [ltx-2-mlx](https://github.com/dgrauet/ltx-2-mlx),
 with *Save memory*: a 5-second 768 × 512 clip with sound takes about 3½ minutes (206 s), a 3-second
 one from an image 122 s; the 8-bit version, without *Save memory* as on a 64 GB Mac, takes
-3.6 minutes (219 s) for the same 5 seconds. Qwen-Image Edit reads the picture's tokens next to the image's in
+3.6 minutes (219 s) for the same 5 seconds. LTX-2.5, checked the same way, takes 197 s with
+*Save memory* for that clip (216 s for 640 × 640 without it, peaking at 34 GB). Qwen-Image Edit reads the picture's tokens next to the image's in
 both passes of every step: a 672 × 880 edit in 20 steps took 12.4 minutes with mflux and about 15 with
 the native engine (measured while the Mac was busy building), whose image matched mflux's to 68 dB.
 SenseNova-U1.5 is measured with the native engine against SenseTime's own PyTorch code, run on
@@ -168,7 +170,7 @@ SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo-engine serve ──▶ 
 
 - **Engine.** `Engine/` is a Swift package that runs every family of the catalog (FLUX.2 Klein,
   Z-Image Turbo, Qwen-Image 2512 and Qwen-Image-Edit 2511, Ming-Image from mflux's checkpoints,
-  SenseNova-U1.5 from mlx-community's, LTX-2.3 from dgrauet's, the SeedVR2 upscaler from its
+  SenseNova-U1.5 from mlx-community's, LTX-2.3 and LTX-2.5 from dgrauet's, the SeedVR2 upscaler from its
   original one) on MLX Swift. The app's
   build embeds its `turbo-engine` binary in the bundle (`Contents/MacOS`, signed with the app),
   and every model runs there: nothing is installed on first launch, the engine starts in an

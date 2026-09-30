@@ -113,12 +113,13 @@ with the arguments below.
 LTX-2 has no mflux port: its reference is dgrauet's [ltx-2-mlx](https://github.com/dgrauet/ltx-2-mlx)
 (MIT, the revision in `Fixtures/requirements-ltx.txt`), and its fixture is not a small random
 checkpoint but a tiny run of the reference's distilled pipeline on a real pack (`dgrauet/ltx-2.3-mlx-q4`
-or `-q8`, with `mlx-community/gemma-3-12b-it-4bit`), recorded stage by stage by hooks around its
-own functions:
+or `-q8`, with `mlx-community/gemma-3-12b-it-4bit`, or `dgrauet/ltx-2.5-mlx-q4`, which carries its
+own Gemma 4), recorded stage by stage by hooks around its own functions:
 
 ```bash
-$PY Engine/Fixtures/make_ltx_fixture.py <pack> <gemma> build/fixtures/ltx          # text to video
-$PY Engine/Fixtures/make_ltx_fixture.py <pack> <gemma> build/fixtures/ltx-i2v --image picture.png
+$PY Engine/Fixtures/make_ltx_fixture.py <pack> build/fixtures/ltx --gemma <gemma>   # 2.3, text to video
+$PY Engine/Fixtures/make_ltx_fixture.py <pack> build/fixtures/ltx-i2v --gemma <gemma> --image picture.png
+$PY Engine/Fixtures/make_ltx_fixture.py <2.5 pack> build/fixtures/ltx25             # 2.5: no --gemma
 build/bin/turbo-engine verify build/fixtures/ltx
 ```
 
@@ -137,6 +138,13 @@ Since the engine's mlx-swift carries the reference's MLX (0.32.2 on both sides, 
 the fixture; the text connector, bit-identical before, now differs by about 1.5% (the two builds
 of the same MLX round a kernel differently), well within the tolerance. Both packs pass, the
 4-bit one from a prompt and from an image.
+
+LTX-2.5 (30 September 2026, the 4-bit pack, from a prompt and from an image) adds its Gemma 4
+tower, the ancestral sampler of stage 1 (each noise draw is recorded and matches exactly), and the
+keyframe marker on the first latent frame of both stages; every transformer pass is again within
+3e-4. Its connector is more sensitive to bfloat16 than 2.3's: the reference itself moves by about
+1 in 20 between bfloat16 and float32, so the connector is shown in bfloat16 and decided in float32
+(`connector_f32.safetensors`, within 5e-5).
 
 The whole pipeline, same prompt and seed through the app's protocol, 768 × 512 × 49 frames with
 the 4-bit pack: the same clip as the reference (PSNR 29–35 dB per frame, 32.6 on average, through
