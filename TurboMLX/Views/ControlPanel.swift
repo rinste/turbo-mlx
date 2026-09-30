@@ -108,7 +108,8 @@ private struct ModelSelection: View {
             ModelPopUp.Entry(
                 id: model.id, name: model.shortName != model.name ? model.shortName : model.name,
                 badge: model.shortName != model.name ? model.memoryLabel : nil,
-                icon: ModelIcon.image(takesPicture: model.family.takesReferenceImage, installed: app.isInstalled(model))
+                icon: ModelIcon.image(takesPicture: model.family.takesReferenceImage, installed: app.isInstalled(model)),
+                installed: app.isInstalled(model)
             )
         }
         return ModelPopUp.Section(title: title, entries: entries)
@@ -118,13 +119,14 @@ private struct ModelSelection: View {
 /// The model picker: a pop-up button whose menu opens whole above it, out of the tray at the bottom
 /// of the window. A standard pop-up would center the chosen model on the button, and on a short
 /// screen the models below it then went off the edge, behind a scroll arrow. Each model shows its
-/// icon, its name and its memory on a badge centered on the name.
+/// icon, its name and its memory on a badge centered on the name, dimmed while it is not downloaded.
 private struct ModelPopUp: NSViewRepresentable {
     struct Entry {
         let id: String
         let name: String
         let badge: String?
         let icon: NSImage
+        let installed: Bool
     }
 
     struct Section {
@@ -161,7 +163,9 @@ private struct ModelPopUp: NSViewRepresentable {
                 item.target = context.coordinator
                 item.representedObject = entry.id
                 item.image = entry.icon
-                if let badge = entry.badge { item.attributedTitle = Self.title(entry.name, badge: badge, font: font) }
+                if entry.badge != nil || !entry.installed {
+                    item.attributedTitle = Self.title(entry.name, badge: entry.badge, font: font, dimmed: !entry.installed)
+                }
                 menu.addItem(item)
                 if entry.id == selection { chosen = item }
             }
@@ -176,10 +180,13 @@ private struct ModelPopUp: NSViewRepresentable {
     }
 
     /// The name, then the badge, lowered from the baseline (where a picture in a text stands) so
-    /// its middle meets the middle of the capitals.
-    static func title(_ name: String, badge: String, font: NSFont) -> NSAttributedString {
-        let text = NSMutableAttributedString(string: name + "  ", attributes: [.font: font])
-        let image = MemoryBadge.image(badge)
+    /// its middle meets the middle of the capitals; both in grey for a model not downloaded.
+    static func title(_ name: String, badge: String?, font: NSFont, dimmed: Bool) -> NSAttributedString {
+        var attributes: [NSAttributedString.Key: Any] = [.font: font]
+        if dimmed { attributes[.foregroundColor] = NSColor.secondaryLabelColor }
+        let text = NSMutableAttributedString(string: name + (badge == nil ? "" : "  "), attributes: attributes)
+        guard let badge else { return text }
+        let image = MemoryBadge.image(badge, dimmed: dimmed)
         let attachment = NSTextAttachment()
         attachment.image = image
         attachment.bounds = CGRect(x: 0, y: ((font.capHeight - image.size.height) / 2).rounded(), width: image.size.width, height: image.size.height)
@@ -250,10 +257,14 @@ private enum ModelIcon {
                 NSBezierPath(ovalIn: corner.insetBy(dx: -1.5, dy: -1.5)).fill()
                 NSGraphicsContext.current?.compositingOperation = .sourceOver
                 badge.draw(in: corner)
+                // In the grey of the name beside it, not the menu's tint.
+                NSColor.secondaryLabelColor.set()
+                rect.fill(using: .sourceAtop)
             }
             return true
         }
-        image.isTemplate = true
+        // A downloaded model's icon is a template, tinted by the menu like its own symbols.
+        image.isTemplate = installed
         image.accessibilityDescription = (takesPicture ? "Takes a reference image" : "Prompt only") + (installed ? "" : ", not downloaded")
         cache[key] = image
         return image
@@ -266,8 +277,20 @@ private enum MemoryBadge {
     private static var cache: [String: NSImage] = [:]
     private static let height: CGFloat = 15
 
-    static func image(_ text: String) -> NSImage {
-        if let cached = cache[text] { return cached }
+    static func image(_ text: String, dimmed: Bool = false) -> NSImage {
+        let key = dimmed ? "dimmed:" + text : text
+        if let cached = cache[key] { return cached }
+        if dimmed {
+            // The badge faded, as the name next to it is.
+            let solid = image(text)
+            let faded = NSImage(size: solid.size, flipped: false) { rect in
+                solid.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 0.5)
+                return true
+            }
+            faded.accessibilityDescription = text
+            cache[key] = faded
+            return faded
+        }
         let font = NSFont.systemFont(ofSize: 8, weight: .semibold)
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white, .kern: 0.3]
         let textWidth = ceil((text as NSString).size(withAttributes: attributes).width)
