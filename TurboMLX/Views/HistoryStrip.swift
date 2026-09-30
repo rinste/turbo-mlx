@@ -206,6 +206,9 @@ private struct HistoryThumbnail: View {
             .contentShape(Rectangle())
             .onTapGesture { app.select(item, undoManager: undoManager) }
             .onHover { inside in
+                // While the button is down the item under the pointer is the one being dragged:
+                // leaving it, or passing over the others, must not change which one moves.
+                guard NSEvent.pressedMouseButtons & 1 == 0 else { return }
                 if inside {
                     app.pointedHistoryItem = item.id
                 } else if app.pointedHistoryItem == item.id {
@@ -232,8 +235,9 @@ private struct HistoryThumbnail: View {
 /// Moves the dragged item into place as it passes over the others, so the strip shows where it
 /// will land. While the drag lasts, its data cannot be read (`itemProviders` is only valid in
 /// `performDrop`), and SwiftUI does not run `onDrag` again for a view dragged before: the item under
-/// the pointer when the drag began names it, since the pointer's hover does not change during a
-/// drag. Should hover say nothing, the drop moves the item, read from its `UTType.historyItem` data.
+/// the pointer when the button went down names it (the tiles ignore hover while it is down: leaving
+/// the dragged tile used to clear it, and the item stopped after a place or two). Should hover say
+/// nothing, the drop moves the item, read from its `UTType.historyItem` data.
 private struct HistoryMoveDelegate: DropDelegate {
     let target: HistoryItem.ID
     let app: AppModel
