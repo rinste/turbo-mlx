@@ -262,15 +262,15 @@ public final class QwenImageEditModel: PreviewingFamilyModel {
         let guidance = Float(request.guidance)
         var latents = QwenImageModel.initialLatents(width: width, height: height, seed: request.seed)
         // As in Qwen-Image: the 16-bit option starts the latents, and the picture's, in bf16.
-        var picture = referenceTokens
+        var pictureTokens = referenceTokens
         if request.halfPrecision {
             latents = latents.asType(.bfloat16)
-            picture = picture.asType(.bfloat16)
+            pictureTokens = pictureTokens.asType(.bfloat16)
         }
         let imageTokens = latents.shape[1]
         for t in 0 ..< request.steps {
             let sigma = schedule.sigmas[t]
-            let input = concatenated([latents, picture], axis: 1)
+            let input = concatenated([latents, pictureTokens], axis: 1)
             var noise = transformer(latents: input, prompt: prompt, timestep: sigma, grids: grids)[0..., 0 ..< imageTokens]
             // At guidance 1 the unconditional pass would cancel out exactly: skip it.
             if guidance > 1 {

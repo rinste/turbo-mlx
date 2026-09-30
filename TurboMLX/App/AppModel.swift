@@ -476,13 +476,13 @@ final class AppModel {
                 guidance: upscales ? 1 : settings.guidance,
                 transparentBackground: settings.transparentBackground && model.family.producesAlpha,
                 lowMemory: settings.lowMemory,
-                halfPrecision: model.family.supportsHalfPrecision && settings.halfPrecision ? true : nil,
                 frames: isVideo ? settings.videoFrames : nil,
                 fps: isVideo ? settings.videoFrameRate : nil,
                 autoDuration: isVideo && settings.autoDuration(for: model.family) ? true : nil,
                 referenceImage: model.family.takesReferenceImage ? reference : nil,
                 upscale: upscales ? settings.upscale : nil,
-                softness: upscales ? settings.softness : nil
+                softness: upscales ? settings.softness : nil,
+                halfPrecision: model.family.supportsHalfPrecision && settings.halfPrecision ? true : nil
             )
             let output = isVideo ? history.newVideoURL(seed: seed) : history.newImageURL(seed: seed)
             let job = GenerationJob(model: model, request: request, outputURL: output)

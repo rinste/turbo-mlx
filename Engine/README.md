@@ -316,12 +316,16 @@ and the images and clips it made):
 build/bin/turbo-engine bench                                  # the rows of docs/swift-engine-plan.md's tables
 build/bin/turbo-engine bench --only z-image --sizes 512,1024,2048 --save-memory on   # a memory sweep
 build/bin/turbo-engine bench --only z-image --only qwen-image --half                 # the 16-bit option
+build/bin/turbo-engine bench --only klein --preview                                   # the live preview's cost
+build/bin/turbo-engine bench --only qwen-image-2512 --sizes 1024 --prompt "A sign that reads …"   # small text
 ```
 
 By default the requests are those of the Status tables in `docs/swift-engine-plan.md`, so a run
 compares with them; `--sizes` replaces the text-to-image rows with squares of those sides at each
 model's default steps, the sweep `TurboMLX/Models/MemoryEstimate.swift` is fitted on;
-`--save-memory on|off` sets Save memory for every row, `--repeat N` keeps the median of N runs
+`--save-memory on|off` sets Save memory for every row, `--half` asks for the 16-bit stream where a
+model has it, `--preview` for the live preview, `--prompt` replaces the text-to-image rows' prompt
+(so `compare` can put the two precisions side by side on small text), `--repeat N` keeps the median of N runs
 (and the highest peak), `--hub` names another cache, `--out` another folder. A model that is not in
 the cache is skipped. The pictures the edits and upscales start from are drawn by the bench. It is
 what to run after an mlx-swift update, before the peaks in `MemoryEstimate.swift` are trusted again.

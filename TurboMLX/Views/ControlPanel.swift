@@ -1423,7 +1423,7 @@ private struct MemoryRows: View {
         if family.supportsHalfPrecision {
             Toggle(isOn: $settings.halfPrecision) {
                 Text("16-bit precision")
-                Text("Keeps the transformer’s activations in 16 bits, as FLUX.2 Klein and Ming-Image already do, instead of the 32 the reference uses: faster, with small differences in fine detail (small text first). Off, the image matches mflux’s.")
+                Text("Keeps the transformer’s activations in 16 bits, as FLUX.2 Klein and Ming-Image already do, instead of the 32 the reference uses. The image differs in its details; on an M1 it is no faster, newer chips may gain. Off, the image matches mflux’s.")
             }
         }
         if family.showsPreview {

@@ -13,39 +13,76 @@ generative AI; the rest has not started. 30 September: SenseNova-U1.5 came in as
 the first whose reference is PyTorch rather than MLX (the last item below); no phase moved.
 
 Later on 30 September, four items came in together, written without a Mac at hand (as the native
-engine's first phase was) and therefore compiled and measured by nobody yet: Phase 0's
-`turbo-engine bench`; Phase 1's 1d, in another form; the bf16 stream of Phase 3, as an option off
-by default; and Phase 3's live preview. What each needs from the next session at a Mac is under
-it, after the earlier status:
+engine's first phase was): Phase 0's `turbo-engine bench`; Phase 1's 1d, in another form; the bf16
+stream of Phase 3, as an option off by default; and Phase 3's live preview. The same evening they
+were compiled (two compile errors fixed), checked and measured on the M1 Max 64 GB:
 
 - **`bench` (Phase 0).** `turbo-engine bench` runs the catalog's models found in the hub cache on
   the rows of the tables below (or `--sizes` for the memory sweep, `--half` for the 16-bit option,
-  `--repeat` for medians), through the same `Engine` as the app, and writes the seconds per phase
-  and the peaks as Markdown and JSON (Engine/README.md, "Timing the catalog"). To do: a first
-  table, and a check that its numbers agree with the ones below.
+  `--preview` for the live preview, `--prompt` for other text, `--repeat` for medians), through
+  the same `Engine` as the app, and writes the seconds per phase and the peaks as Markdown and
+  JSON (Engine/README.md, "Timing the catalog"). Its first table, in one process (so a model's
+  first row carries its load, the others not); Z-Image q4 and LTX-2.3 q4 were not in the cache:
+
+  | Model | Request | Total | Denoise | Decode | Peak | Table below (0.32.2) |
+  |---|---|---|---|---|---|---|
+  | FLUX.2 Klein 4B q4 | 512², 4 steps | 9.1 s | 7.8 | 0.3 | 6.2 GB | 9.4 s · 6.3 GB |
+  | FLUX.2 Klein 4B q4 | 1024², 4 steps | 26.9 s | 25.7 | 1.1 | 10.1 GB | 28.6 s · 12.7 GB |
+  | FLUX.2 Klein 4B q4 | edit, 640 × 512 | 17.4 s | 16.1 | 0.4 | 6.5 GB | 17.4 s · 6.6 GB |
+  | Z-Image Turbo q8 | 512², 9 steps | 23.5 s | 22.1 | 0.2 | 12.0 GB | 22.6 s · 12.1 GB |
+  | Qwen-Image 2512 q4, Save memory | 512², 10 steps, CFG | 59.1 s | 55.8 | 0.3 | 14.0 GB | 55.3 s · 16.0 GB |
+  | Qwen-Image Edit 2511 q4, Save memory | 320 × 256, 3 steps | 18.4 s | 13.8 | 0.1 | 16.3 GB | 17.4 s · 16.3 GB |
+  | Ming-Image te5, Save memory | 512², 12 steps | 36.7 s | 33.9 | 0.4 | 11.7 GB | 35.2 s · 11.7 GB |
+  | SenseNova-U1.5 4-bit | 512², 8 steps | 8.3 s | 6.6 | – | 10.3 GB | |
+  | SenseNova-U1.5 4-bit | 1024², 8 steps | 27.6 s | 27.5 | – | 10.8 GB | |
+  | SenseNova-U1.5 4-bit | edit, 1024² | 32.8 s | 27.7 | – | 11.1 GB | |
+  | SeedVR2 3B | 640 × 512 → 1280 × 1024 | 10.6 s | 5.2 | 3.8 | 10.7 GB | 10.4 s · 10.7 GB |
+  | SeedVR2 3B | 768² → 3072² | 69.4 s | 32.4 | 27.2 | 13.5 GB | 79.5 s · 13.2 GB |
+  | LTX-2.3 q8 | 768 × 512, 5 s | 241.0 s | 217.8 | 14.3 | 37.1 GB | 218.5 s · 37.4 GB |
+  | LTX-2.5 q4, Save memory | 768 × 512, 5 s | 222.5 s | 199.1 | 14.0 | 17.8 GB | |
+
+  Klein's 1024² peak is the 10.1 GB 1f measured with the wired allowance. The rows 4–10 % slower
+  (Qwen-Image, Ming, LTX-2.3, whose code nothing here touched) are the run, not the code: the old
+  and the new engine, one process each on the same requests, give the same seconds (Qwen-Image
+  512² 56.1 against 55.1 s, Z-Image 23.1 against 22.2) and bit-identical images.
 - **1d, the VAE mid block.** Not the fused kernel: MLX 0.32.2's takes head dimensions up to 256
   and the mid block's is 384 (512 in FLUX.1's and FLUX.2's), so `scaledDotProductAttention` falls
   back there to the full score matrix, which the Z-Image and FLUX.2 decoders already pay without
-  saying so. The Qwen/Ming block now attends a chunk of pixel rows at a time (`ChunkedAttention`:
-  at most 256 MB of scores instead of 1 GB, and their softmax likewise, at 1024²), the same math
-  to rounding. To check: `verify --all` (the Qwen-Image and Ming decode stages), and a Qwen-Image
-  or Ming peak at 1024² without Save memory, which should drop by about 1.5 GB; the Z-Image and
-  FLUX.2 decoders can take the same helper once that is seen.
+  saying so. The Qwen/Ming block now attends a chunk of pixel rows at a time (`ChunkedAttention`,
+  at most 256 MB of scores). Checked: `verify --all` passes with the decode stages as before (the
+  fixtures are one chunk), and real images old against new engine are bit-identical at 1024²
+  (Qwen-Image, Ming; four chunks) and at 2048² for Qwen-Image, 87.8 dB (one level at most) for
+  Ming. What it saves shows at 2048² only: Ming without Save memory peaks at 39.4 GB instead of
+  42.9, its decode 8.2 s instead of 11.2. At 1024² nothing moves (Qwen-Image 30.95 GB, Ming 23.2
+  GB, both set by the transformer, not the decode), and Qwen-Image at 2048² stays at 47.1 GB for
+  the same reason; the "−1.5 GB at 1024²" expected here was wrong. `MemoryEstimate.swift` keeps
+  its Ming 2048² point, now 3.5 GB on the safe side. The Z-Image and FLUX.2 decoders can take the
+  same helper; it would show at 2048² as well.
 - **The bf16 stream (Phase 3), as an option.** `precision: "bf16"` in a request, *16-bit
   precision* under Advanced in the app (Z-Image, Qwen-Image, Qwen-Image Edit; off by default;
   kept with the image's settings and in its PNG): Z-Image's S3-DiT runs as Ming's does (the
   timestep embedding, latents and captions in the weights' precision, the rotation cast back),
   Qwen-Image's latents start in bf16 and the transformer follows them, the guidance's rescaling
   and the decode staying in float32. `verify` shows the loops in that mode next to the
-  reference's, without deciding on them. To measure: the Z-Image and Qwen-Image rows with
-  `bench --half` against the table (issue 761's 1.4× on the loop is the expectation), and the
-  PSNR of the same prompt and seed in both modes with `compare`, with a look at small text,
-  before the option is offered as anything but an option.
+  reference's, without deciding on them. **Measured on the M1 Max: no faster.** Z-Image q8 512²
+  21.6 against 22.1 s of denoising, 1024² 95.0 against 89.8; Qwen-Image 512² (Save memory)
+  58.9 against 55.8, 1024² 20 steps 531 against 513; the edit 14.0 against 13.8; the same peaks.
+  The M1 has no bf16 arithmetic of its own, so the 16 bits cost conversions and save nothing;
+  issue 761's 1.4× is a newer chip's, and an M3 or later is what can say whether the option
+  earns its place. The pixels do change: 37.0 dB (Z-Image 512²), 30.5 (Qwen-Image 512²), 25.2 (the
+  edit) from the float32 image, and on a prompt with small text at 1024² (a shop sign, a price
+  card, a headline and two columns of small print) 22.8 and 19.4 dB: the same scene with details
+  moved, the sign, the card and the headline as legible in both precisions, the small print as
+  illegible in both, one garbled masthead gone in bf16. Nothing there argues for more than an
+  option; the app's text says it is no faster on an M1.
 - **Live preview (Phase 3).** `preview: true` in a request, *Live preview* under Advanced (on by
   default): every few steps the clean image the model predicts is decoded small through the
-  family's own decoder and shown in the job's frame (Engine/README.md, "Families"). Its cost is
-  to be measured with the bench: a few percent is the expectation, Klein's four steps paying
-  three small decodes.
+  family's own decoder and shown in the job's frame (Engine/README.md, "Families"). Seen in the
+  app (Z-Image 1024², a recognizable lighthouse from step 1 of 9, the file gone once the image
+  is decoded) and through the protocol for Klein, Qwen-Image, Ming and SenseNova (coherent
+  previews sharpening towards the image). Its cost, `bench --preview` against the table above:
+  Klein +0.6 s at 512² (8 %, three previews in four steps), +0.6 s at 1024² (2 %), +0.8 s on the
+  edit; Z-Image, Qwen-Image, Ming and SenseNova within the run's noise; no peak moved.
 - **Qwen-Image Lightning (Phase 3): not started.** It needs a checkpoint that does not exist yet:
   the 4-step LoRA merged into the 2512 weights and saved in mflux's format in 4 bits (once with
   mflux on a Mac, or from Phase 6's converter), then a catalog entry checked at its commit as the
@@ -345,12 +382,13 @@ In order of what it is worth.
    6.7 s/MP on Qwen-Image and 3.1 s/MP on Ming (`TimeEstimate.swift`), more at 1536–2048.
 6. **Explicit attention in the Qwen/Ming VAE mid block** (`QwenImageVAE.swift`, lines 83–105).
    *Done on 30 September, as chunked attention (Status): the fused kernel does not take a head
-   dimension of 384.* `matmul` + `softmax` over every pixel of the latent frame. At 1024² (128 × 128 tokens) the
+   dimension of 384. It saves memory at 2048² (Ming −3.5 GB), not at 1024², where the transformer
+   sets the peak.* `matmul` + `softmax` over every pixel of the latent frame. At 1024² (128 × 128 tokens) the
    score matrix is 16384² × 4 bytes = 1 GB in float32 per frame, the reason *Save memory* has
    to tile. `MLXFast.scaledDotProductAttention` never materializes it and is faster; mflux
    runs the explicit version, so parity has to be rechecked (only the rounding differs).
 7. **Float32 residual stream in Z-Image and Qwen-Image.** *An option since 30 September, off by
-   default (Status).* Faithful to mflux (`S3DiT.swift`,
+   default; no faster on an M1 Max (Status).* Faithful to mflux (`S3DiT.swift`,
    `keepsWeightsPrecision = false`; `QwenImagePipeline.initialLatents` in float32; the comment
    at the top of `QwenImageTransformer.swift`). mflux issue 761 measures 1.4× on the loop in
    bf16, and on M5 float32 bypasses the neural accelerators. It is the single largest lever the
@@ -516,7 +554,7 @@ hand to measure.
   September): the results are under Status.*
 - `turbo-engine bench`: the catalog × 3 sizes × fixed prompts and seeds, seconds per phase and
   peak, in a table in `docs/`. The performance document has asked for it since September. *Done
-  (30 September): the tool, `Engine/Sources/turbo-engine/Bench.swift`; its first table is not.*
+  (30 September): the tool, `Engine/Sources/turbo-engine/Bench.swift`, and its first table (Status).*
 - One Metal System Trace (Instruments) per family: the top kernels and the gaps between them
   decide Phase 1.
 
@@ -551,7 +589,8 @@ beta build and the submission are not.*
 
 - A bf16 stream for Z-Image and Qwen-Image: ~1.4× on the loop, more on M5; a "Fast" option or
   the default after a comparison on text-heavy prompts. *In the code (30 September) as the
-  16-bit precision option, off by default; the comparison is not done (Status).*
+  16-bit precision option, off by default; measured on an M1 Max, no faster, and the pixels
+  move (Status).*
 - Qwen-Image 2512 Lightning (4 steps, no CFG) as a catalog entry of its own: ~10× on the
   slowest model (the engine already skips the unconditional pass at guidance 1). It needs a
   pre-merged checkpoint: from Phase 6, or once with mflux.

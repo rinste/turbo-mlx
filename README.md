@@ -13,8 +13,8 @@ app downloads it, and that is all the setup there is.
 - **Left column:** the prompt as blocks (Subject and Style to start with, each one a piece of the
   final text; renamable, resizable, and put in order by dragging), aspect ratio, steps and guidance;
   under *Advanced*, the resolution or a custom size, seed, number of images, transparent or white
-  background, memory saving, a *16-bit precision* for Z-Image and the Qwen-Image models (faster,
-  with slightly different fine detail) and the *Live preview*, which shows the image as it forms
+  background, memory saving, a *16-bit precision* for Z-Image and the Qwen-Image models (an
+  experiment: different details, no faster on an M1) and the *Live preview*, which shows the image as it forms
   every few steps. For LTX-2.3 and LTX-2.5, FLUX.2 Klein, Qwen-Image Edit and SenseNova-U1.5, a
   *Reference Image* above the prompt (dropped from Finder or from the history, chosen from a file
   or among the generated images): the clip's first frame, or the picture the image models change

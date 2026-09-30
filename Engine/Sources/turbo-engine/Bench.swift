@@ -9,13 +9,16 @@ import TurboEngineCore
 /// model needs without changing a pixel.
 ///
 ///   turbo-engine bench [--hub <dir>] [--only <text>]... [--sizes 512,1024]
-///                      [--save-memory on|off] [--half] [--repeat N] [--out <dir>]
+///                      [--save-memory on|off] [--half] [--preview] [--prompt <text>]
+///                      [--repeat N] [--out <dir>]
 ///
 /// By default the requests are the rows of the tables in docs/swift-engine-plan.md (Status), so a
 /// run compares with them; `--sizes` replaces the text-to-image rows of the image models with
 /// squares of those sides at each model's default steps, the sweep `MemoryEstimate.swift` is
 /// fitted on; `--save-memory` sets Save memory for every row; `--half` runs the 16-bit stream
-/// option on the models that have it; `--repeat` runs each row several times and keeps the median
+/// option on the models that have it; `--preview` asks for the live preview, whose cost it
+/// measures; `--prompt` replaces the text-to-image rows' prompt (small text, to judge `--half`
+/// with `compare`); `--repeat` runs each row several times and keeps the median
 /// (and the highest peak). A model that is not in the cache is skipped, and said so. The images,
 /// the clips and the tables go to build/bench/<date>/, or `--out`.
 enum Bench {
@@ -109,6 +112,8 @@ enum Bench {
         var sizes: [Int]?
         var saveMemory: Bool?
         var half = false
+        var preview = false
+        var prompt: String?
         var repeats = 1
         var out: URL?
 
@@ -136,6 +141,10 @@ enum Bench {
                     }
                 case "--half":
                     half = true
+                case "--preview":
+                    preview = true
+                case "--prompt":
+                    prompt = try value()
                 case "--repeat":
                     repeats = max(1, Int(try value()) ?? 1)
                 case "--out":
@@ -217,13 +226,15 @@ enum Bench {
                 let half = options.half && entry.halfPrecision
                 for run in runs(of: entry, options: options) {
                     let request = run.label + (run.lowRam ? ", Save memory" : "") + (half ? " · 16-bit" : "")
+                        + (options.preview ? " · preview" : "")
                     print("\(entry.repo): \(request)")
                     var attempts: [Result] = []
                     for repetition in 0 ..< options.repeats {
-                        let output = out.appending(path: fileName(entry: entry, run: run, half: half, repetition: repetition))
+                        let output = out.appending(path: fileName(entry: entry, run: run, half: half, preview: options.preview, repetition: repetition))
                         let pictureURL = try run.picture.map { try picture(width: $0.width, height: $0.height, in: out) }
                         collector.reset()
-                        try generate(engine, entry: entry, path: path, companion: companion, run: run, half: half, output: output, picture: pictureURL)
+                        try generate(engine, entry: entry, path: path, companion: companion, run: run, half: half,
+                                     preview: options.preview, output: output, picture: pictureURL)
                         FileHandle.standardError.write(Data("\r".utf8))
                         var result = Result(model: shortName(entry.repo), request: request, timings: [:])
                         if let done = collector.done {
@@ -268,6 +279,13 @@ enum Bench {
                     width: side, height: side, steps: entry.defaultSteps, guidance: entry.defaultGuidance)
             }
         }
+        if let prompt = options.prompt {
+            runs = runs.map { run in
+                var run = run
+                if run.prompt == Bench.prompt { run.prompt = prompt }
+                return run
+            }
+        }
         if let saveMemory = options.saveMemory {
             runs = runs.map { run in
                 var run = run
@@ -279,7 +297,7 @@ enum Bench {
     }
 
     /// The same `generate` line the app sends, through the wire's decoder.
-    static func generate(_ engine: Engine, entry: Entry, path: URL, companion: URL?, run: Run, half: Bool, output: URL, picture: URL?) throws {
+    static func generate(_ engine: Engine, entry: Entry, path: URL, companion: URL?, run: Run, half: Bool, preview: Bool, output: URL, picture: URL?) throws {
         var model: [String: Any] = [
             "family": entry.family, "path": path.path, "name": entry.repo, "variant": entry.variant ?? "", "low_ram": run.lowRam,
         ]
@@ -293,6 +311,7 @@ enum Bench {
         if let picture { params["image"] = picture.path }
         if let upscale = run.upscale { params["upscale"] = upscale }
         if half { params["precision"] = "bf16" }
+        if preview { params["preview"] = true }
         let object: [String: Any] = ["cmd": "generate", "id": UUID().uuidString, "model": model, "params": params]
         let line = String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
         let command = try Wire.command(from: line)
@@ -397,9 +416,9 @@ enum Bench {
         repo.split(separator: "/").last.map(String.init) ?? repo
     }
 
-    static func fileName(entry: Entry, run: Run, half: Bool, repetition: Int) -> String {
+    static func fileName(entry: Entry, run: Run, half: Bool, preview: Bool, repetition: Int) -> String {
         let request = run.label.map { $0.isLetter || $0.isNumber ? $0 : "-" }
-        let name = "\(shortName(entry.repo))-\(String(request))\(half ? "-bf16" : "")\(repetition > 0 ? "-\(repetition + 1)" : "")"
+        let name = "\(shortName(entry.repo))-\(String(request))\(half ? "-bf16" : "")\(preview ? "-preview" : "")\(repetition > 0 ? "-\(repetition + 1)" : "")"
         return name.replacingOccurrences(of: "--", with: "-") + (run.frames != nil ? ".mp4" : ".png")
     }
 
