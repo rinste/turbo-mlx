@@ -9,7 +9,8 @@ code refer to the files of the engine in `Engine/Sources/`.*
 
 29 September 2026: Phase 0's first item, 1c, 1f and Phase 5 are done, Phase 4's tools and the
 code side of Phase 2 (the sealed build) are in the tree, and every result is marked as made with
-generative AI; the rest has not started.
+generative AI; the rest has not started. 30 September: SenseNova-U1.5 came in as an eighth family,
+the first whose reference is PyTorch rather than MLX (the last item below); no phase moved.
 
 - **Phase 1, what is left, measured first.** The RoPE work (1a, 1b's rotation) has an upper
   bound: an engine whose rotation does nothing (wrong images, right timing) runs Klein's steps
@@ -19,18 +20,22 @@ generative AI; the rest has not started.
   mflux, neither is worth it now. 1e (GQA in the text encoders) and 1g (`asyncEval`) touch only the
   prompt's encoding or a percent or two: set aside likewise.
 - **Phase 4, verification without Python, the tools.** `turbo-engine verify --all` checks every
-  fixture in `build/fixtures` in one run (the 8 in 1.5 minutes), `turbo-engine compare a b` gives
+  fixture in `build/fixtures` in one run (9 since SenseNova's: the seven with weights of their own
+  in 5 seconds, LTX's two, which read dgrauet's 4-bit pack at the path their `fixture.json` names
+  and fail without it, in about a minute and a half), `turbo-engine compare a b` gives
   the PSNR and the largest difference of two images, or of two clips frame by frame with their
   sound (the same figures as the Python scripts it replaces, on images to the tenth of a dB),
   and `verify-tokenizers` (Phase 5) needs no Python either. Python is left for regenerating a
-  reference. Still open: publishing the fixtures (1.1 GB, 860 MB of it LTX's) and frozen mflux
-  images somewhere versioned for other Macs, and a CI job, which needs Metal on the runners.
+  reference. Still open: publishing the fixtures (1.1 GB, 860 MB of it LTX's) and frozen reference
+  images (mflux's, and SenseTime's for SenseNova) somewhere versioned for other Macs, and a CI job,
+  which needs Metal on the runners.
 - **Phase 5, the dependency diet.** The engine tokenizes on its own (`Tokenizer/BPETokenizer.swift`:
   byte-level BPE for Qwen2/3 and Ling, SentencePiece-style BPE with byte fallback for Gemma 3,
   Qwen3's chat template as the fixed string it renders for one user turn), and swift-transformers
   left the build with its eight packages: the engine resolves mlx-swift and the swift-numerics it
   brings, nothing else. The gate: `turbo-engine verify-tokenizers` compares every family's pipeline
-  with `transformers` on 64 prompts (`Fixtures/tokenizers.json`, 32,464 ids): identical. Two
+  with `transformers` on 64 prompts (`Fixtures/tokenizers.json`, 32,464 ids; 75,222 since
+  SenseNova's four pipelines, its prompts and edits and their unconditional queries): identical. Two
   Foundation traps were in the way: Swift's `String` merges canonically equivalent keys (Gemma's
   vocabulary has ";" and the Greek question mark as two tokens), so tokens are matched by bytes,
   and `JSONSerialization` drops a leading U+FEFF, so `tokenizer.json` has a parser of its own.
@@ -39,12 +44,14 @@ generative AI; the rest has not started.
 
 - **1f, the memory a job needs.** The app refuses a generation this Mac cannot hold
   (`TurboMLX/Models/MemoryEstimate.swift`, the `notEnoughMemory` blocker): its peak is predicted
-  from 48 measurements of the catalog's models (every image model at 512, 1024 and 2048 px or
-  1536 px, with and without Save memory; SeedVR2 up to 16.8 MP; LTX from 1 to 10 s, 768 × 512 and
-  1024 × 576, both packs), as the larger of the prompt's encoding and a line in the megapixels
-  (for a clip, in megapixels and megapixels × latent frames, capped by the decode budget the
-  engine gives a smaller Mac). The fit is within 0.5 GB of every measurement but Ming-Image with
-  Save memory, kept at the encoding's 11.7 GB. A job is refused above the Mac's memory less 2.5 GB,
+  from measurements of every catalog model (48 on 29 September: every image model at 512, 1024
+  and 2048 px or 1536 px, with and without Save memory; SeedVR2 up to 16.8 MP; LTX from 1 to 10 s,
+  768 × 512 and 1024 × 576, both packs; SenseNova's images and edits since 30 September), as the
+  larger of the prompt's encoding and a line in the megapixels (for a clip, in megapixels and
+  megapixels × latent frames, capped by the decode budget the engine gives a smaller Mac). The
+  fit is within 0.5 GB of every measurement but Ming-Image with Save memory, kept at the
+  encoding's 11.7 GB, and SenseNova's images, whose lines are its edits' (up to 0.8 GB above an
+  image's peak, 2.2 GB with Save memory). A job is refused above the Mac's memory less 2.5 GB,
   and the message says what would make it fit: Save memory, a smaller size, a shorter clip, a
   smaller scale, another model. And the engine wires what a job uses for its length (mlx-swift's
   `WiredMemoryTicket`, as large as the GPU's recommended working set, as the Python worker did):
@@ -130,13 +137,28 @@ generative AI; the rest has not started.
   mlx-swift means re-measuring the peaks, not only running `verify`: the `bench` of Phase 0 is
   the tool for it.
 
+- **SenseNova-U1.5, a family after the plan** (02c983d, de4cf8c, 30 September): SenseTime's 8B
+  model in 8 steps, images and edits of a reference picture, from mlx-community's 4-bit pack (the
+  official weights with the 8-step LoRA merged, converted by a third party). mflux does not run it,
+  so its reference is SenseTime's own PyTorch code (OpenSenseNova/SenseNova-U1 at 48bf827), in a
+  venv of its own (`Engine/Fixtures/requirements-sensenova.txt`: torch, transformers, and mlx only
+  to read the pack): `make_sensenova_fixture.py` runs its generation functions unchanged on a small
+  float32 model with random weights (every stage within 1e-5, the edit included), and
+  `Engine/Reference/sensenova_reference.py` runs the real pack dequantized to bf16, which takes
+  about 40 GB, to compare real images (37.3 dB at 512 px and 29.4 at 1024, where 0.2 % more noise
+  moves the reference itself to 33 dB; edits 43.7 and 36.7 dB). The rest follows the other
+  families' path: the in-house tokenizer reads its vocabulary (four pipelines in the corpus),
+  `verify --all` checks its fixture, the memory estimate has its peaks. What it adds is to §1.2: a
+  second kind of reference, PyTorch next to MLX, and one more reason to freeze the reference images.
+
 ## Short answer
 
 **Yes, and it already is, for the part that matters.** The native engine exists, is Swift on
 mlx-swift, runs every family of the catalog (FLUX.2 Klein, Z-Image Turbo, Qwen-Image 2512,
-Qwen-Image Edit 2511, Ming-Image, LTX-2.3, and since 3378198 the SeedVR2 upscaler), loads the mflux checkpoints without conversion, is
-checked stage by stage against mflux and ltx-2-mlx, and the app carries no Python: no
-interpreter, no venv, no `uv`. The bundle went from 77 to 41 MB.
+Qwen-Image Edit 2511, Ming-Image, LTX-2.3, since 3378198 the SeedVR2 upscaler and since 02c983d
+SenseNova-U1.5), loads the published checkpoints (mflux's and others') without conversion, is
+checked stage by stage against mflux, ltx-2-mlx and, for SenseNova, SenseTime's PyTorch code, and
+the app carries no Python: no interpreter, no venv, no `uv`. The bundle went from 77 to 41 MB.
 
 What is left, to "detach completely" and to be efficient, lies on four axes:
 
@@ -149,21 +171,27 @@ What is left, to "detach completely" and to be efficient, lies on four axes:
    Klein's higher peak at 1024² remains. All of it fixable in Swift, with the existing `verify`
    as the safety net.
 2. **Python.** It only remains outside the app: the fixture generators (`Engine/Fixtures/*.py`),
-   the reference worker (`Engine/Reference/turbo_worker.py`) and, indirectly, the catalog's
-   checkpoints, which are conversions made by others with Python tools. The workflow can be
-   brought to a point where Python is only needed to regenerate a reference when mflux
-   changes, and a Swift converter makes the app independent of other people's checkpoints too.
+   the reference worker (`Engine/Reference/turbo_worker.py`), since SenseNova a PyTorch reference
+   as well (`Engine/Reference/sensenova_reference.py`) and, indirectly, the catalog's
+   checkpoints, which are conversions made by others with their own tools. The workflow can be
+   brought to a point where Python is only needed to regenerate a reference when mflux (or
+   ltx-2-mlx, or SenseTime's code) changes, and a Swift converter makes the app independent of
+   other people's checkpoints too. *Updated 30 September:* the checks themselves need no Python
+   since 29 September (Phase 4's tools); making the fixtures and comparing real images still do.
 3. **Dependencies.** The engine has two direct ones (mlx-swift, swift-transformers) but
    swift-transformers brings eight more. An in-house tokenizer (BPE over `tokenizer.json`)
    leaves the engine with mlx-swift alone, which is Apple's and cannot be replaced. The app has
-   only Sparkle, which the sealed build leaves out.
+   only Sparkle, which the sealed build leaves out. *Done on 29 September (Phase 5): the engine
+   resolves mlx-swift and the swift-numerics it brings, nothing else.*
 4. **A sealed build**, which does not update itself and has no sandbox exception, as some
    distribution channels require. Feasible. Five things block it today: the "temporary
    exception" entitlement for `~/.cache/huggingface`, Sparkle (and its two mach-lookup
    exceptions), the Hugging Face token read from disk, the missing privacy manifest, and a
    memory handling that lets generations start when they do not fit in RAM. None of them needs
    a change of architecture: the sandboxed child process (`turbo-engine` in `Contents/MacOS`,
-   `inherit` entitlement) is the form Apple prescribes for a helper.
+   `inherit` entitlement) is the form Apple prescribes for a helper. *Updated 29 September: the
+   five are solved in the code (Status: Phase 2 and 1f); the account's side, a beta build and the
+   submission are left.*
 
 Recommended order: measure and update MLX (days) → efficiency without changing pixels (1–2
 weeks) → the sealed build (1–2 weeks, app side, can run in parallel) → speed that changes pixels, as
@@ -177,26 +205,30 @@ converter. Every phase leaves the app shippable.
 | Piece | Where | Notes |
 |---|---|---|
 | JSON-lines protocol, child process, cancel, timings | `Engine/Sources/TurboEngineCore/{Engine,Protocol}.swift`, `Sources/turbo-engine/Server.swift` | the same protocol as the old Python worker; `cancel` read on a thread of its own |
-| mflux checkpoint loading (shards, index, bits and group size inferred from the shapes, stacked experts) | `Checkpoint.swift` | no conversion |
-| Seven families (SeedVR2 since 3378198), module for module after mflux / ltx-2-mlx | `Families/` (~7 000 lines) | text encoders, DiTs, VAEs, schedulers, tiling, MoE, Pillow's resizes bit for bit |
-| Tokenizers | swift-transformers (`Qwen3Prompter.swift`) | Qwen2/3 BPE, Gemma; chat templates through swift-jinja with a fixed-string fallback |
-| Output | `ImageOutput.swift` (PNG through ImageIO), `VideoOutput.swift` (MP4, H.264 + AAC, through AVAssetWriter) | frames go to the writer as the decoder produces them |
-| Verification | `turbo-engine verify <fixture>` | every stage against mflux, 3 % tolerance; LTX against ltx-2-mlx on a real pack |
-| Downloads, HF cache, sandbox, updates | the app (`Services/`) | all Swift; Sparkle for the updates |
+| mflux checkpoint loading (shards, index, bits and group size inferred from the shapes, stacked experts) | `Checkpoint.swift` | no conversion; SenseNova's MLX pack goes through the same shard reading |
+| Eight families (SeedVR2 since 3378198, SenseNova-U1.5 since 02c983d), module for module after mflux / ltx-2-mlx / SenseTime's PyTorch code | `Families/` (~8 400 lines of code) | text encoders, DiTs, VAEs, schedulers, tiling, MoE, Pillow's resizes bit for bit |
+| Tokenizers | in-house since Phase 5: `Tokenizer/BPETokenizer.swift`, `Tokenizer/TokenizerJSON.swift` and the prompters that build each family's query (`Qwen3Prompter`, `TemplatePrompter`, `Gemma3Prompter`, `SenseNovaPrompter`) | byte-level BPE for Qwen2/3, Ling and SenseNova, SentencePiece-style BPE with byte fallback for Gemma 3; the chat templates as fixed strings |
+| Output | `ImageOutput.swift` (PNG through ImageIO), `VideoOutput.swift` (MP4, H.264 + AAC, through AVAssetWriter), `Provenance.swift` | frames go to the writer as the decoder produces them; both marked as generated in their XMP |
+| Verification | `turbo-engine verify <fixture>` or `verify --all`, `compare`, `verify-tokenizers` | every stage against mflux, 3 % tolerance; LTX against ltx-2-mlx on a real pack; SenseNova against SenseTime's PyTorch code; the tokenizers against `transformers`; PSNR of two images or clips |
+| Downloads, models folder, sandbox, updates | the app (`Services/`) | all Swift; Sparkle for the updates, in the GitHub build only |
 
 ### 1.2 Where Python remains
 
 | What | Where | For | When it is really needed |
 |---|---|---|---|
 | `turbo_worker.py` | `Engine/Reference/` | mflux behind the same protocol, to compare real images (PSNR) | whenever a new comparison with mflux is wanted |
-| `make_{klein,zimage,qwen_image,qwen_image_edit,ming}_fixture.py` | `Engine/Fixtures/` | tiny random-weight checkpoints plus the references `verify` compares | only when a reference changes (a new family, a new mflux revision). The fixtures they produce are safetensors + JSON, which Swift reads on its own |
+| `sensenova_reference.py` | `Engine/Reference/` | SenseTime's PyTorch code on the real SenseNova pack, dequantized to bf16 (about 40 GB), to compare real images; with `--record`, a fixture of the real pack for `verify` | whenever a new comparison with SenseTime's code is wanted |
+| `make_{klein,zimage,qwen_image,qwen_image_edit,ming,seedvr2}_fixture.py` | `Engine/Fixtures/` | tiny random-weight checkpoints plus the references `verify` compares | only when a reference changes (a new family, a new mflux revision). The fixtures they produce are safetensors + JSON, which Swift reads on its own |
+| `make_sensenova_fixture.py` | `Engine/Fixtures/` | the same from SenseTime's PyTorch code (a clone at 48bf827), whose generation functions it runs unchanged | same (a new revision of SenseTime's code) |
 | `make_ltx_fixture.py` | `Engine/Fixtures/` | runs ltx-2-mlx on a real pack and records its stages | same |
-| `requirements*.txt` | `Engine/Fixtures/` | the mflux and ltx-2-mlx pins | same |
-| The `mflux-community/*`, `joeynyc/*`, `dgrauet/*` checkpoints | Hugging Face (the catalog) | conversions and quantizations made by others with Python tools | every new model depends on someone converting it |
+| `make_tokenizer_corpus.py` | `Engine/Fixtures/` | `transformers`' ids for the corpus `verify-tokenizers` checks (`tokenizers.json`) | when a family brings a tokenizer or a prompt template of its own |
+| `requirements*.txt` | `Engine/Fixtures/` | the mflux and ltx-2-mlx pins; SenseTime's code with PyTorch, in a venv of its own | same |
+| The `mflux-community/*`, `joeynyc/*`, `dgrauet/*` checkpoints, and `mlx-community/SenseNova-*` | Hugging Face (the catalog) | conversions and quantizations made by others with their own tools (mflux's and ltx-2-mlx's are Python) | every new model depends on someone converting it |
 | Nothing | app, build, runtime | | never |
 
 A contributor who does not touch the references already needs no Python, but this is not
-organized: the fixtures have to be generated locally in a venv.
+organized: the fixtures have to be generated locally in a venv (for SenseNova's, one with
+PyTorch).
 
 ### 1.3 Dependencies
 
@@ -207,7 +239,8 @@ organized: the fixtures have to be generated locally in a venv.
 | Engine | swift-transformers 1.3.4 (`Tokenizers`), until Phase 5 | swift-jinja, swift-huggingface, swift-collections, swift-crypto, swift-asn1, swift-numerics, yyjson, EventSource | Apache 2.0 | the tokenizers only; its `Hub` module (network, downloads) is dead weight in an app that downloads by itself |
 
 Ten packages resolved for the engine (eleven with mlx-swift 0.31.6, which also pulled
-swift-argument-parser), one of them used for a single thing.
+swift-argument-parser), one of them used for a single thing. *Since Phase 5 (29 September): two,
+mlx-swift and its swift-numerics.*
 
 ### 1.4 Measured performance (M1 Max, native against mflux 0.20 / ltx-2-mlx)
 
@@ -315,20 +348,27 @@ needs Python is producing them. Freeze them:
 - Publish the fixtures as versioned artifacts (assets of a GitHub release, or a Hugging Face
   dataset repository such as `rinste/turbo-mlx-fixtures`): the image families weigh tens of
   MB, LTX about 0.5 GB (`gemma_states.safetensors` alone is 385 MB). Each fixture carries the
-  mflux / ltx-2-mlx revision that generated it.
+  mflux / ltx-2-mlx revision that generated it (SenseTime's commit for SenseNova's). LTX's two
+  name their real pack by a path on the Mac that made them: published, they need its repository
+  and revision instead.
 - `turbo-engine verify --all` downloads (or reads from the cache) and checks every family in
   one command; `turbo-engine compare a.png b.png` computes the PSNR instead of the comparison
   by hand.
-- Frozen mflux reference images per (model@revision, prompt, seed, size), next to the fixtures:
-  the "real image" comparison no longer needs mflux to run.
+- Frozen mflux reference images (SenseTime's for SenseNova) per (model@revision, prompt, seed,
+  size), next to the fixtures: the "real image" comparison no longer needs mflux, or PyTorch, to
+  run.
 - A tokenizer parity corpus (prompt → ids, JSON), generated once with Python's `tokenizers`:
   it serves Phase 5 and guards against regressions of swift-transformers.
 - CI: a GitHub Actions job on a macOS arm64 runner that builds the engine and runs `verify` on
   the small fixtures (they are tiny models, seconds of GPU). Whether Metal is available in the
   runners' virtualized GPU is to be checked with a trial job. There is no CI today.
 
-Result: Python is only for whoever regenerates a reference because mflux or ltx-2-mlx changed.
-Everybody else (and the release) never installs it.
+Result: Python is only for whoever regenerates a reference because mflux, ltx-2-mlx or
+SenseTime's code changed. Everybody else (and the release) never installs it.
+
+*Status, 30 September: `verify --all` (on the local folder: it downloads nothing yet), `compare`
+and the tokenizer corpus are done; publishing, the frozen reference images and CI are not.
+SenseNova's real-image reference, PyTorch on about 40 GB, makes the frozen images worth more.*
 
 ### 3.2 Checkpoints without Python: `turbo-engine convert`
 
@@ -362,7 +402,8 @@ a conversion with choices of its own) and LTX (dgrauet's packs have a layout of 
 
 ### 3.3 Dependencies: an in-house tokenizer, Sparkle only in the GitHub build
 
-swift-transformers is used for one thing: `AutoTokenizer.from(modelFolder:)` and
+*Done on 29 September: the tokenizer (Phase 5) and the sealed target without Sparkle (Phase 2),
+see Status.* swift-transformers is used for one thing: `AutoTokenizer.from(modelFolder:)` and
 `applyChatTemplate`. An in-house tokenizer that reads `tokenizer.json`:
 
 - byte-level BPE (GPT-2 style) for Qwen2/Qwen3 and for Ling (Ming): the pre-tokenization
@@ -396,7 +437,9 @@ protocol and a lifecycle managed by launchd. It can come later, without touching
 A note on the wired limit (item 9 of §2): with mlx-swift 0.32.2 the ticket is asynchronous and
 the engine is synchronous on one thread (`Server.run` → `Engine.generate`). Either the ticket
 is held on a `Task` for the length of the generation, or the C API is called through `Cmlx`.
-To decide when updating.
+To decide when updating. *Decided on 29 September (1f): neither; the engine's thread starts and
+ends the ticket itself, waiting on a semaphore while a detached `Task` awaits each call
+(`WiredAllowance` in `Engine.swift`).*
 
 ## 5. The sealed build: what changes
 
@@ -407,7 +450,7 @@ To decide when updating.
 | Sparkle: a sealed build does not update itself; two `temporary-exception.mach-lookup` entitlements; `SUFeedURL`/`SUPublicEDKey` in `TurboMLX-Info.plist`. *Done (29 Sep): the "TurboMLX Sealed" target.* | `AppUpdater.swift`, the "Check for Updates…" menu, Settings → About | A second Xcode target ("TurboMLX Sealed") on the same synchronized folders, without the Sparkle product linked, with entitlements and Info.plist of its own and `SWIFT_ACTIVE_COMPILATION_CONDITIONS = SEALED`; `#if !SEALED` around `AppUpdater`, the menu and the Settings section. The GitHub channel stays as it is; the sealed build gets a release script of its own. |
 | The `turbo-engine` helper | `Contents/MacOS`, entitlements `app-sandbox` + `inherit` (`Engine/turbo-engine.entitlements`) | Already compliant: Apple asks that a helper have only those two entitlements. Signed with the channel's certificate and the app's profile from the Xcode archive. To be checked early with a beta build. |
 | Privacy manifest | missing. *Done (29 Sep).* | `PrivacyInfo.xcprivacy` with the "required reason APIs" in use: `UserDefaults` (CA92.1), file dates (`ModelLocator`: `.contentModificationDateKey`; `QwenImageEditPipeline.pictureKey`: `attributesOfItem` → C617.1 / 3B52.1), disk space (`DownloadCenter.checkSpace`: `.volumeAvailableCapacityForImportantUsage` → E174.1 / 85F4.1). No tracking, no data collection. Codes to confirm against Apple's list at the time. |
-| Memory and review | the engine dies when memory runs out; the app says so | A predicted peak before starting (the catalog's peaks × pixels, per family) → a refusal with a clear message; the requirements stated on the product page; the 16 GB model (Z-Image q4) is there already. A reviewer on an 8–16 GB Mac must be able to generate something on first launch. |
+| Memory and review. *The refusal is done (29 Sep): 1f, see Status.* | the engine dies when memory runs out; the app says so | A predicted peak before starting (the catalog's peaks × pixels, per family) → a refusal with a clear message; the requirements stated on the product page; the 16 GB model (Z-Image q4) is there already. A reviewer on an 8–16 GB Mac must be able to generate something on first launch. |
 | Architecture | arm64 | Fine: Apple-silicon-only apps are accepted (Intel Macs do not see them). |
 | 5–38 GB downloads | | They are data, not code (the rules are about executable code). Apps that download models into their container already exist. The space needed is already shown. |
 | Generated content | | Describe the use on the product page; the models' licenses are already in About (the LTX-2 Community license has use restrictions that bind the outputs too: to be said). |
@@ -455,7 +498,8 @@ The whole table of §5: the models in the container + the optional shared folder
 the token in the Keychain; a target without Sparkle with entitlements and Info.plist of its
 own; `PrivacyInfo.xcprivacy`; the predicted peak and its messages; a release script for the
 sealed channel; a beta build; submission. Gate: the beta build installs and generates on a clean
-16 GB Mac; review answers.
+16 GB Mac; review answers. *The code is done (29 September, see Status); the account's side, the
+beta build and the submission are not.*
 
 ### Phase 3 — Speed that changes the pixels, as options (1–2 weeks)
 
@@ -476,12 +520,15 @@ catalog entries, not replacements.
 ### Phase 4 — Verification without Python (days)
 
 §3.1: fixtures and reference images published, `verify --all`, `compare`, the tokenizer corpus,
-a trial CI job. Gate: a clean clone without Python builds and verifies.
+a trial CI job. Gate: a clean clone without Python builds and verifies. *The tools and the corpus
+are done (29 September, see Status); publishing, the frozen images and CI are not, so a clean clone
+builds but has nothing to verify against.*
 
 ### Phase 5 — Dependency diet (1 week)
 
 §3.3: the in-house tokenizer, swift-transformers and its nine transitive packages gone,
-`make-acknowledgements` updated. Gate: the parity corpus at 100 %, `verify` green.
+`make-acknowledgements` updated. Gate: the parity corpus at 100 %, `verify` green. *Done (29
+September).*
 
 ### Phase 6 — A Swift converter (2–3 weeks)
 
@@ -521,7 +568,7 @@ then Z-Image and Qwen-Image; LoRA merging; "Add Model…" from original reposito
 | Qwen / Ming decode | 6.7 / 3.1 s per MP (about half on 29 Sep, 1c) | −30–50 % | Phase 1 (c, d) |
 | Klein peak, 1024² | 12.7 GB | ≤ 10.6 GB | Phases 0–1 |
 | Engine packages | 11 (10 since mlx-swift 0.32.2; 2 since Phase 5: mlx-swift and its swift-numerics) | 1 (mlx-swift) | Phase 5 |
-| Python in the workflow | fixtures and reference, locally | only to regenerate a reference | Phase 4 |
+| Python in the workflow | fixtures and reference, locally (the checks without it since 29 Sep; SenseNova's reference in PyTorch since 30 Sep) | only to regenerate a reference | Phase 4 |
 | Sealed channel | none (a target since 29 Sep) | a sealed target + a beta build | Phase 2 |
 
 The time targets are expectations to measure with Phase 0's bench, not promises: Phase 0
