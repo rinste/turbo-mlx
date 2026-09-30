@@ -44,7 +44,9 @@ nonisolated enum MemoryEstimate {
     // prompt's encoding is the peak); SeedVR2 10.7 GB up to about 5 MP out, 13.2 at 9.4, 18.1 at
     // 16.8. SenseNova-U1.5 4-bit (30 September) 10.2 / 10.8 / 11.2, with Save memory 6.4 / 6.1
     // at 1024 / 2048 once a prompt has been read that way (its two stacks are then never both in
-    // memory; the first image after one without Save memory still peaks as without). Where a size was not measured without Save memory, the decoder's growth is Qwen-Image's,
+    // memory; the first image after one without Save memory still peaks as without); an edit, whose
+    // picture is read with the prompt at the image's size, 10.9 / 11.0 / 11.9, with Save memory
+    // 7.4–7.7 / 8.2, which the lines follow. Where a size was not measured without Save memory, the decoder's growth is Qwen-Image's,
     // the same decoder.
     private static func peaks(_ id: String, lowMemory: Bool) -> Peak? {
         switch (id, lowMemory) {
@@ -60,8 +62,8 @@ nonisolated enum MemoryEstimate {
         case ("joeynyc/Ming-Image-0.1-Design-mflux-q8-te5", false): Peak(floor: 21.0, base: 20.15, perMegapixel: 5.11)
         case ("joeynyc/Ming-Image-0.1-Design-mflux-q8-te5", true): Peak(floor: 11.7, base: 10.4, perMegapixel: 0.03)
         case ("numz/SeedVR2_comfyUI", _): Peak(floor: 10.7, base: 7.0, perMegapixel: 0.66)
-        case ("mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit", false): Peak(floor: 10.3, base: 10.65, perMegapixel: 0.14)
-        case ("mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit", true): Peak(floor: 6.5, base: 6.2, perMegapixel: 0.1)
+        case ("mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit", false): Peak(floor: 10.9, base: 10.7, perMegapixel: 0.3)
+        case ("mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit", true): Peak(floor: 7.7, base: 7.5, perMegapixel: 0.2)
         default: nil
         }
     }

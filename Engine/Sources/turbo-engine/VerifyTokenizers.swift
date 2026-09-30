@@ -90,6 +90,12 @@ enum VerifyTokenizers {
         case "sensenova-unconditional":
             let prompter = try SenseNovaPrompter(folder: folder)
             return { _ in prompter.unconditionalIds }
+        case "sensenova-edit":
+            let prompter = try SenseNovaPrompter(folder: folder)
+            return { prompter.editIds($0, pictureTokens: 16) }
+        case "sensenova-edit-unconditional":
+            let prompter = try SenseNovaPrompter(folder: folder)
+            return { _ in prompter.editUnconditionalIds(pictureTokens: 16) }
         default:
             throw BPETokenizer.TokenizerError.unsupported("the pipeline \(name)")
         }

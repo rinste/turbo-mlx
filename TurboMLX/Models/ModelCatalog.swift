@@ -34,8 +34,8 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     var sizeMultiple: Int { self == .senseNova ? 32 : 16 }
 
     /// A reference image: the first frame of a clip (LTX-2), the picture an image is edited from
-    /// as the prompt says (FLUX.2 Klein, Qwen-Image Edit), the picture an upscaler enlarges.
-    var takesReferenceImage: Bool { self == .ltx2 || self == .flux2Klein || self == .qwenImageEdit || isUpscaler }
+    /// as the prompt says (FLUX.2 Klein, Qwen-Image Edit, SenseNova), the picture an upscaler enlarges.
+    var takesReferenceImage: Bool { self == .ltx2 || self == .flux2Klein || self == .qwenImageEdit || self == .senseNova || isUpscaler }
 
     /// Qwen-Image Edit only edits and SeedVR2 only upscales: they need the picture.
     var requiresReferenceImage: Bool { self == .qwenImageEdit || isUpscaler }
@@ -298,10 +298,11 @@ enum ModelCatalog {
         // SenseNova-U1.5 8B-MoT (SenseTime) with its official 8-step LoRA merged, in 4 bits: the MLX
         // pack mlx-community publishes, made from the original checkpoint for xocialize's Swift
         // runtime. Two 8B stacks (the prompt's and the image's) and a pixel decoder, no VAE.
-        // Measured on an M1 Max: 1024 × 1024 in 28 s, peaking at 11.6 GB.
+        // Measured on an M1 Max: 1024 × 1024 in 28 s, peaking at 11.6 GB; an edit of a picture in
+        // 34 s (the picture is read with the prompt, about 5 s).
         ModelDescriptor(
             name: "SenseNova-U1.5 · 16 GB RAM",
-            detail: "SenseTime's unified model: photos, posters and infographics with legible text, in 8 steps. The 4-bit version.",
+            detail: "SenseTime's unified model: photos, posters and infographics with legible text, in 8 steps; edits a reference image as the prompt says. The 4-bit version.",
             family: .senseNova,
             source: .huggingFace(repo: "mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit"),
             revision: "ff6d0c2dfe21b19891ae4551e11fcc99f6aa82ae",

@@ -13,10 +13,10 @@ app downloads it, and that is all the setup there is.
 - **Left column:** the prompt as blocks (Subject and Style to start with, each one a piece of the
   final text; renamable, resizable, and put in order by dragging), aspect ratio, steps and guidance;
   under *Advanced*, the resolution or a custom size, seed, number of images, transparent or white
-  background, memory saving. For LTX-2.3, FLUX.2 Klein and Qwen-Image Edit, a *Reference Image*
-  above the prompt (dropped from Finder or from the history, chosen from a file or among the
-  generated images): the clip's first frame, or the picture Klein and Qwen-Image Edit change as the
-  prompt says ("make it winter"), in its own proportions (Qwen-Image Edit needs one). For a clip,
+  background, memory saving. For LTX-2.3, FLUX.2 Klein, Qwen-Image Edit and SenseNova-U1.5, a
+  *Reference Image* above the prompt (dropped from Finder or from the history, chosen from a file
+  or among the generated images): the clip's first frame, or the picture the image models change
+  as the prompt says ("make it winter"), in its own proportions (Qwen-Image Edit needs one). For a clip,
   its duration and frame rate. With the SeedVR2 upscaler, no prompt and no format: the *Picture to
   Upscale*, its scale (2×, 3× or 4× each side, up to 4096 × 4096 pixels), a *Softness* that
   shrinks a noisy or over-sharpened picture first, and the size it comes out at; *Upscale…*, in the
@@ -83,7 +83,7 @@ prompt and settings, an MP4 in an XMP box.
 | [FLUX.2 Klein 4B](https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4) | 24 GB | 4.6 GB | 14.1 GB | the fastest: 4 steps; edits a reference image as the prompt says · Apache 2.0 |
 | [Qwen-Image 2512](https://huggingface.co/mflux-community/qwen-image-2512-mflux-q4) | 32 GB | 27.6 GB | 21.3 GB | 20B, rich scenes and long text · 4-bit · 20 steps · Apache 2.0 |
 | [Qwen-Image Edit 2511](https://huggingface.co/mflux-community/qwen-image-edit-2511-mflux-q4) | 32 GB | 29 GB | 33 GB (672 × 880, without *Save memory*) | changes a reference picture as the prompt says and keeps the rest · 20B, 4-bit · 20 steps · Apache 2.0 |
-| [SenseNova-U1.5](https://huggingface.co/mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit) | 16 GB | 11.8 GB | 11.6 GB, 6.9 GB with *Save memory* | photos, posters and infographics with legible text, in pixels (no VAE) · 8B + 8B, 4-bit · 8 steps · Apache 2.0 |
+| [SenseNova-U1.5](https://huggingface.co/mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit) | 16 GB | 11.8 GB | 11.6 GB, 6.9 GB with *Save memory* | photos, posters and infographics with legible text, in pixels (no VAE); edits a reference image as the prompt says · 8B + 8B, 4-bit · 8 steps · Apache 2.0 |
 | [LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q4) | 32 GB | 28.5 GB | 18 GB (768 × 512, 5 s) | video with sound, from a prompt or from an image as the first frame · 22B distilled, 4-bit · 8 + 3 steps · LTX-2 Community |
 | [LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q8) | 64 GB | 37.8 GB | 37 GB (768 × 512, 5 s) | the 8-bit version, closer to the original |
 | [SeedVR2 Upscaler 3B](https://huggingface.co/numz/SeedVR2_comfyUI) | 16 GB | 7.3 GB | 11 GB (to 2304 × 2304), 18 GB (to 4096 × 4096) | enlarges a picture 2–4× with sharper, faithful detail, in one step, no prompt · float16 · Apache 2.0 |
@@ -102,7 +102,9 @@ the native engine (measured while the Mac was busy building), whose image matche
 SenseNova-U1.5 is measured with the native engine against SenseTime's own PyTorch code, run on
 the same weights: 1024 × 1024 in 28–31 s, 512 × 512 in 7 s, 2048 × 2048 in 2½ minutes, with
 images that match the reference's to 37 dB at 512 px and 29 dB at 1024 px (a model this
-sensitive drifts as far from itself when its noise changes by 0.2%).
+sensitive drifts as far from itself when its noise changes by 0.2%). An edit reads the picture
+with the prompt, at about the image's size: 34 s at 1024 × 1024, matching the reference's to
+37 dB (44 dB at 512 px).
 SeedVR2 encodes and decodes the picture in tiles and runs its transformer once, attending within
 windows: 672 × 880 to 1344 × 1760 takes 29 s (mflux 51 s, peaking at 18 GB), 768 × 768 to
 2304 × 2304 41 s at 11 GB, to 4096 × 4096 about 2 minutes at 18 GB; its images match mflux's to

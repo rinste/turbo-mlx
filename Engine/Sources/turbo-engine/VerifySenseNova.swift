@@ -5,7 +5,7 @@ import TurboEngineCore
 /// The SenseNova-U1.5 port (Engine/Fixtures/make_sensenova_fixture.py, SenseTime's PyTorch code in
 /// float32): the prompt caches layer by layer, the schedule, the generation embedding and the model's
 /// input at the first step, both velocities of the first step, then the whole loop from the
-/// reference's noise, with guidance and without. A recording of the reference on a real pack
+/// reference's noise, with guidance and without; then an edit from a picture. A recording of the reference on a real pack
 /// (Engine/Reference/sensenova_reference.py --record) names the pack in `fixture.json` and has
 /// only the stages of its own run (in bf16, where rounding alone moves the later ones).
 enum VerifySenseNova {
@@ -45,7 +45,7 @@ enum VerifySenseNova {
             let cache = try (0 ..< config.numLayers).map {
                 (try reference("\(tag)_keys_\($0)").asType(dtype), try reference("\(tag)_values_\($0)").asType(dtype))
             }
-            return SenseNovaModel.Prefix(cache: cache, length: cache[0].0.shape[2])
+            return SenseNovaModel.Prefix(cache: cache, position: cache[0].0.shape[2])
         }
         let wantedConditional = try referencePrefix("cond")
 
@@ -95,6 +95,69 @@ enum VerifySenseNova {
             let unguided = try model.denoise(noise: noise, prefix: conditional, unconditional: nil, steps: steps, guidance: 1)
             ok = Verify.report("image, guidance 1", got: unguided, want: try reference("image_no_guidance").transposed(0, 2, 3, 1)) && ok
         }
+        if references["edit_image"] != nil {
+            ok = try verifyEdit(model: model, fixture: fixture, json: json, reference: reference, noise: noise, steps: steps, guidance: guidance) && ok
+        }
+        return ok
+    }
+
+    /// An edit of `picture.png`: its preparation byte for byte, its pixels and patch embedding, the
+    /// query's positions, both prefixes (the picture-only one is guidance's unconditional query),
+    /// the first step's velocities and the loop.
+    static func verifyEdit(
+        model: SenseNovaModel, fixture: URL, json: [String: Any], reference: (String) throws -> MLXArray,
+        noise: MLXArray, steps: Int, guidance: Float
+    ) throws -> Bool {
+        var ok = true
+        let config = model.config
+        let dtype = try model.activationType()
+        let width = (json["width"] as? NSNumber)?.intValue ?? 128
+        let height = (json["height"] as? NSNumber)?.intValue ?? 96
+        let imageStart = (json["image_start"] as? NSNumber)?.intValue ?? 151_670
+        let imageContext = (json["image_context"] as? NSNumber)?.intValue ?? 151_669
+
+        let picture = SenseNovaPicture(try QwenEditPicture(path: fixture.appending(path: "picture.png").path), area: width * height)
+        let wantedPicture = try reference("edit_picture")
+        let bytes = MLXArray(picture.rgb, [picture.height, picture.width, 3])
+        ok = Verify.report("edit picture", got: bytes.asType(.float32), want: wantedPicture.asType(.float32)) && ok
+        let pixels = picture.pixelValues
+        ok = Verify.report("edit pixels", got: pixels, want: try reference("edit_pixels")) && ok
+        let features = try model.pictureFeatures(pixels)
+        ok = Verify.report("edit features", got: features[0], want: try reference("edit_features")) && ok
+
+        let rows = picture.height / config.tokenSize
+        let columns = picture.width / config.tokenSize
+        func prefix(_ tag: String) throws -> SenseNovaModel.Prefix {
+            let ids = try reference("\(tag)_input_ids").reshaped([-1]).asArray(Int32.self).map(Int.init)
+            let positions = SenseNovaPositions.query(ids: ids, imageStart: imageStart, imageContext: imageContext, grids: [(rows, columns)])
+            let port = MLXArray(positions.t + positions.h + positions.w, [3, positions.count])
+            ok = Verify.report("\(tag) positions", got: port.asType(.float32), want: try reference("\(tag)_indexes").asType(.float32)) && ok
+            let prefix = try model.prefix(ids: ids, pictures: [pixels], imageStart: imageStart, imageContext: imageContext)
+            for layer in 0 ..< config.numLayers {
+                ok = Verify.report("\(tag) keys \(layer)", got: prefix.cache[layer].0, want: try reference("\(tag)_keys_\(layer)")) && ok
+                ok = Verify.report("\(tag) values \(layer)", got: prefix.cache[layer].1, want: try reference("\(tag)_values_\(layer)")) && ok
+            }
+            let wantedPosition = Int(try reference("\(tag)_indexes")[0].max().item(Int32.self)) + 1
+            if prefix.position != wantedPosition {
+                print("  ✗ \(tag) image position \(prefix.position), expected \(wantedPosition)")
+                ok = false
+            }
+            return prefix
+        }
+        let conditional = try prefix("edit_cond")
+        let unconditional = try prefix("edit_uncond")
+
+        let timesteps = SenseNovaConfig.timesteps(steps: steps, shift: model.timestepShift)
+        let tokens = (noise.shape[1] / config.tokenSize) * (noise.shape[2] / config.tokenSize)
+        let image = noise.asType(dtype) * Float(config.noiseScale(tokens: tokens))
+        let embeds = try reference("edit_image_embeds").asType(dtype)
+        let velocity = try model.velocity(embeds: embeds, image: image, prefix: conditional, t: timesteps[0])
+        ok = Verify.report("edit velocity", got: patchified(velocity, size: config.tokenSize), want: try reference("edit_v_cond")) && ok
+        let other = try model.velocity(embeds: embeds, image: image, prefix: unconditional, t: timesteps[0])
+        ok = Verify.report("edit velocity uncond", got: patchified(other, size: config.tokenSize), want: try reference("edit_v_uncond")) && ok
+
+        let edited = try model.denoise(noise: noise, prefix: conditional, unconditional: unconditional, steps: steps, guidance: guidance)
+        ok = Verify.report("edit image", got: edited, want: try reference("edit_image").transposed(0, 2, 3, 1)) && ok
         return ok
     }
 

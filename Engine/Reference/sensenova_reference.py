@@ -68,6 +68,9 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--device", default="mps" if torch.backends.mps.is_available() else "cpu")
     parser.add_argument("--record", type=Path)
+    # An edit of this picture (`it2i_generate`), prepared as the engine does: over white, resized
+    # with Lanczos to about the image's area within 512² and 2048², sides multiples of 32.
+    parser.add_argument("--image", type=Path)
     # Adds this much of another unit normal to the noise: how far a small change moves the image.
     parser.add_argument("--perturb", type=float, default=0.0)
     args = parser.parse_args()
@@ -139,13 +142,35 @@ def main():
 
         model._t2i_predict_v = recording_predict
 
+    picture = None
+    if args.image:
+        from sensenova_u1.models.neo_unify.utils import smart_resize
+
+        picture = Image.open(args.image)
+        if picture.mode == "RGBA":
+            background = Image.new("RGB", picture.size, (255, 255, 255))
+            background.paste(picture, mask=picture.split()[3])
+            picture = background
+        picture = picture.convert("RGB")
+        area = min(max(args.width * args.height, 512 * 512), 2048 * 2048)
+        height, width = smart_resize(picture.height, picture.width, factor=32, min_pixels=area, max_pixels=area)
+        if (width, height) != picture.size:
+            picture = picture.resize((width, height), Image.LANCZOS)
+
     torch.randn = engine_noise
     try:
         with torch.inference_mode():
-            image = model.t2i_generate(
-                tokenizer, args.prompt, cfg_scale=args.guidance, timestep_shift=args.shift, cfg_norm="none",
-                image_size=(args.width, args.height), num_steps=args.steps, seed=args.seed,
-            )
+            if picture is None:
+                image = model.t2i_generate(
+                    tokenizer, args.prompt, cfg_scale=args.guidance, timestep_shift=args.shift, cfg_norm="none",
+                    image_size=(args.width, args.height), num_steps=args.steps, seed=args.seed,
+                )
+            else:
+                image = model.it2i_generate(
+                    tokenizer, args.prompt, [picture], cfg_scale=args.guidance, img_cfg_scale=1.0,
+                    timestep_shift=args.shift, cfg_norm="none", image_size=(args.width, args.height),
+                    num_steps=args.steps, seed=args.seed,
+                )
     finally:
         torch.randn = randn
 

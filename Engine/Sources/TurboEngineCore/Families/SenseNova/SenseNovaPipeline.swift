@@ -2,16 +2,25 @@ import Foundation
 import MLX
 import MLXNN
 
-/// The tokenizer (the pack's `tokenizer.json`) and the two queries the model reads: a prompt's and
-/// the unconditional one of guidance, both tokenized as `tokenizer(query)` does (no tokens added).
+/// The tokenizer (the pack's `tokenizer.json`) and the queries the model reads: a prompt's, an
+/// edit's with its picture's tokens, and the unconditional ones of guidance, all tokenized as
+/// `tokenizer(query)` does (no tokens added).
 public final class SenseNovaPrompter {
     private let tokenizer: BPETokenizer
+    /// `<img>`, `</img>` and `<IMG_CONTEXT>`, the tokens around and in place of a picture.
+    public let imageStart: Int
+    public let imageEnd: Int
+    public let imageContext: Int
 
     public init(folder: URL) throws {
         guard FileManager.default.fileExists(atPath: folder.appending(path: "tokenizer.json").path) else {
             throw Qwen3Prompter.PromptError.noTokenizer(folder)
         }
         tokenizer = try BPETokenizer(folder: folder)
+        guard let start = tokenizer.id(of: "<img>"), let end = tokenizer.id(of: "</img>"), let context = tokenizer.id(of: "<IMG_CONTEXT>") else {
+            throw BPETokenizer.TokenizerError.unsupported("a vocabulary without SenseNova's picture tokens")
+        }
+        (imageStart, imageEnd, imageContext) = (start, end, context)
     }
 
     public func tokenIds(_ prompt: String) -> [Int] {
@@ -20,6 +29,28 @@ public final class SenseNovaPrompter {
 
     public var unconditionalIds: [Int] {
         tokenizer.encode(SenseNovaConfig.unconditionalQuery, addSpecialTokens: true)
+    }
+
+    /// An edit's query with one picture of `pictureTokens` tokens.
+    public func editIds(_ prompt: String, pictureTokens: Int) -> [Int] {
+        withPicture(SenseNovaConfig.conditionalQuery(SenseNovaConfig.editPrompt(prompt)), tokens: pictureTokens)
+    }
+
+    /// The unconditional query of an edit's guidance, with the picture.
+    public func editUnconditionalIds(pictureTokens: Int) -> [Int] {
+        withPicture(SenseNovaConfig.editUnconditionalQuery, tokens: pictureTokens)
+    }
+
+    /// The query with its first `<image>` replaced by `<img>`, `tokens` × `<IMG_CONTEXT>` and
+    /// `</img>`: the query is tokenized with the two ends only and the picture's tokens go between
+    /// them, which gives the same ids, as special tokens split the text around them.
+    private func withPicture(_ query: String, tokens: Int) -> [Int] {
+        guard let range = query.range(of: "<image>") else { return tokenizer.encode(query, addSpecialTokens: true) }
+        var ids = tokenizer.encode(query.replacingCharacters(in: range, with: "<img></img>"), addSpecialTokens: true)
+        if let index = ids.indices.dropLast().first(where: { ids[$0] == imageStart && ids[$0 + 1] == imageEnd }) {
+            ids.insert(contentsOf: Array(repeating: imageContext, count: tokens), at: index + 1)
+        }
+        return ids
     }
 }
 
@@ -38,7 +69,9 @@ public final class SenseNovaTokenEmbedding: Module {
 /// reference's `t2i_generate` runs it: Euler steps on a shifted schedule from t = 0 (noise) to
 /// t = 1, the model predicting the clean image and the velocity derived from it, activations in
 /// the checkpoint's dtype (bf16) as the reference keeps them. Guidance above 1 adds the
-/// unconditional pass (the MLX packs of the 8-step distillation run without it).
+/// unconditional pass (the MLX packs of the 8-step distillation run without it). With a picture,
+/// the image is an edit of it (`it2i_generate`): the picture's tokens join the prompt, read by the
+/// understanding stack's own patch embedding.
 ///
 /// Checkpoints are the MLX packs (`mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit` and friends):
 /// the original's keys and `config.json` in one folder, linears quantized, convolutions channels
@@ -54,24 +87,28 @@ public final class SenseNovaModel: FamilyModel {
     public var timestepShift: Double = 3
     public var tEps: Float = 0.02
 
-    /// A prompt's keys and values, layer by layer, and how many tokens it has.
+    /// A query's keys and values, layer by layer, and the text position the image's tokens take
+    /// after it (its last position plus one: its length for text alone).
     public struct Prefix {
         public let cache: [(MLXArray, MLXArray)]
-        public let length: Int
+        public let position: Int
 
-        public init(cache: [(MLXArray, MLXArray)], length: Int) {
+        public init(cache: [(MLXArray, MLXArray)], position: Int) {
             self.cache = cache
-            self.length = length
+            self.position = position
         }
     }
 
     private var prompter: SenseNovaPrompter?
-    private var understanding: (embed: SenseNovaTokenEmbedding, stack: SenseNovaStack)?
+    private var understanding: (embed: SenseNovaTokenEmbedding, vision: SenseNovaVisionModel, stack: SenseNovaStack)?
     private var generation: (stack: SenseNovaStack, modules: SenseNovaFlowModules)?
     /// The generation stack has run: its weights are resident rather than lazy.
     private var generationUsed = false
     private var promptCache: [String: Prefix] = [:]
     private var unconditional: Prefix?
+    /// The last few edits' queries, by prompt, picture, size and guidance.
+    private var editCache: [(key: String, prefix: Prefix, unconditional: Prefix?)] = []
+    private static let cachedEdits = 3
 
     public init(modelPath: URL, loadTokenizer: Bool = true) throws {
         self.modelPath = modelPath
@@ -101,12 +138,14 @@ public final class SenseNovaModel: FamilyModel {
     }
 
     private func loadUnderstanding() throws {
-        let loaded = try tensors { $0.hasPrefix("language_model.model.") && !$0.contains("_mot_gen") }
+        let loaded = try tensors { $0.hasPrefix("language_model.model.") && !$0.contains("_mot_gen") || $0.hasPrefix("vision_model.") }
         let embed = SenseNovaTokenEmbedding(config: config)
         try WeightLoading.apply(Self.strip(loaded, "language_model.model.").filter { $0.key.hasPrefix("embed_tokens.") }, to: embed)
+        let vision = SenseNovaVisionModel(config: config)
+        try WeightLoading.apply(Self.strip(loaded, "vision_model."), to: vision)
         let stack = SenseNovaStack(config: config)
         try WeightLoading.apply(SenseNovaStack.split(Self.strip(loaded, "language_model.model.")).understanding, to: stack)
-        understanding = (embed, stack)
+        understanding = (embed, vision, stack)
     }
 
     private func loadGeneration() throws {
@@ -119,10 +158,10 @@ public final class SenseNovaModel: FamilyModel {
         generationUsed = false
     }
 
-    /// The understanding stack and the token embeddings, reloaded if they had been released; with
-    /// Save memory a generation stack that has run is released first, so the two are never both
-    /// resident.
-    func loadedUnderstanding() throws -> (embed: SenseNovaTokenEmbedding, stack: SenseNovaStack) {
+    /// The understanding stack, the token embeddings and the pictures' patch embedding, reloaded if
+    /// they had been released; with Save memory a generation stack that has run is released first,
+    /// so the two are never both resident.
+    func loadedUnderstanding() throws -> (embed: SenseNovaTokenEmbedding, vision: SenseNovaVisionModel, stack: SenseNovaStack) {
         if let understanding { return understanding }
         if lowRam, generationUsed {
             generation = nil
@@ -179,12 +218,69 @@ public final class SenseNovaModel: FamilyModel {
 
     /// Text tokens through the understanding stack: the keys and values the image attends to.
     public func prefix(ids: [Int]) throws -> Prefix {
-        let (embed, stack) = try loadedUnderstanding()
+        let (embed, _, stack) = try loadedUnderstanding()
         let embeds = embed.embedTokens(MLXArray(ids.map { Int32($0) }, [1, ids.count]))
         let positions = SenseNovaPositions.text(count: ids.count)
         let cache = stack.prefixCache(embeds, positions: positions, mask: SenseNovaStack.blockCausalMask(positions, dtype: embeds.dtype))
         eval(cache.flatMap { [$0.0, $0.1] })
-        return Prefix(cache: cache, length: ids.count)
+        return Prefix(cache: cache, position: ids.count)
+    }
+
+    /// The patch embedding of the pictures an edit reads (`extract_feature`), from their normalized
+    /// pixels [1, H, W, 3]: [1, tokens, hidden]. The pixels are rounded to bf16 first, as
+    /// `it2i_generate` casts them whatever the model's dtype.
+    public func pictureFeatures(_ pixelValues: MLXArray) throws -> MLXArray {
+        let (_, vision, _) = try loadedUnderstanding()
+        return vision(pixelValues.asType(.bfloat16).asType(try activationType()))
+    }
+
+    /// An edit's query through the understanding stack (`_it2i_prefix_forward`): the tokens of
+    /// `ids`, the pictures' features in place of their `imageContext` tokens (in order), at the
+    /// positions of `get_thw_indexes`, under the block-causal mask (a picture's tokens see each
+    /// other).
+    public func prefix(ids: [Int], pictures: [MLXArray], imageStart: Int, imageContext: Int) throws -> Prefix {
+        let (embed, _, stack) = try loadedUnderstanding()
+        let tokens = embed.embedTokens(MLXArray(ids.map { Int32($0) }, [1, ids.count]))
+        var pieces: [MLXArray] = []
+        var grids: [(rows: Int, columns: Int)] = []
+        var start = 0
+        var picture = 0
+        var index = 0
+        while index < ids.count {
+            guard ids[index] == imageContext, picture < pictures.count else { index += 1; continue }
+            let features = try pictureFeatures(pictures[picture])
+            let (rows, columns) = (pictures[picture].shape[1] / config.tokenSize, pictures[picture].shape[2] / config.tokenSize)
+            pieces.append(tokens[0..., start ..< index])
+            pieces.append(features.asType(tokens.dtype))
+            grids.append((rows, columns))
+            index += rows * columns
+            start = index
+            picture += 1
+        }
+        pieces.append(tokens[0..., start...])
+        let embeds = concatenated(pieces, axis: 1)
+        let positions = SenseNovaPositions.query(ids: ids, imageStart: imageStart, imageContext: imageContext, grids: grids)
+        let cache = stack.prefixCache(embeds, positions: positions, mask: SenseNovaStack.blockCausalMask(positions, dtype: embeds.dtype))
+        eval(cache.flatMap { [$0.0, $0.1] })
+        return Prefix(cache: cache, position: Int(positions.t.max() ?? -1) + 1)
+    }
+
+    /// An edit's queries (and, with guidance, the picture-only one), from the cache when the same
+    /// prompt, picture and size came last.
+    private func editPrefixes(prompt: String, picture: SenseNovaPicture, key: String, guided: Bool) throws -> (Prefix, Prefix?) {
+        let cacheKey = "\(key)|\(picture.width)x\(picture.height)|\(guided)|\(prompt)"
+        if let cached = editCache.first(where: { $0.key == cacheKey }) { return (cached.prefix, cached.unconditional) }
+        guard let prompter else { throw Qwen3Prompter.PromptError.noTokenizer(modelPath) }
+        let pixels = picture.pixelValues
+        let tokens = picture.tokens(tokenSize: config.tokenSize)
+        func run(_ ids: [Int]) throws -> Prefix {
+            try self.prefix(ids: ids, pictures: [pixels], imageStart: prompter.imageStart, imageContext: prompter.imageContext)
+        }
+        let prefix = try run(prompter.editIds(prompt, pictureTokens: tokens))
+        let unconditional = guided ? try run(prompter.editUnconditionalIds(pictureTokens: tokens)) : nil
+        editCache.append((cacheKey, prefix, unconditional))
+        if editCache.count > Self.cachedEdits { editCache.removeFirst() }
+        return (prefix, unconditional)
     }
 
     // MARK: Sampling
@@ -205,7 +301,7 @@ public final class SenseNovaModel: FamilyModel {
     public func velocity(embeds: MLXArray, image: MLXArray, prefix: Prefix, t: Float) throws -> MLXArray {
         let (stack, modules) = try loadedGeneration()
         let (rows, columns) = (image.shape[1] / config.tokenSize, image.shape[2] / config.tokenSize)
-        let positions = SenseNovaPositions.image(rows: rows, columns: columns, t: prefix.length)
+        let positions = SenseNovaPositions.image(rows: rows, columns: columns, t: prefix.position)
         let hidden = stack(embeds, positions: positions, prefix: prefix.cache)
         let predicted = modules.head(hidden.reshaped([1, rows, columns, config.hiddenSize]))
         // (x_pred − z) in the activations' dtype, divided by the float32 max(1 − t, t_eps).
@@ -258,14 +354,26 @@ public final class SenseNovaModel: FamilyModel {
         guard width >= size, height >= size else { throw GenerationError.sizeTooSmall }
 
         phase(.encoding)
-        if !isCached(request.prompt) { try encode(request.prompt) }
-        guard let prefix = promptCache[request.prompt] else { throw GenerationError.cancelled }
+        let prefix: Prefix
+        let other: Prefix?
+        if let path = request.imagePath {
+            // An edit reads its picture with the prompt, so at the start of each image; the picture
+            // takes about the image's area.
+            let picture = SenseNovaPicture(try QwenEditPicture(path: path), area: width * height, factor: size)
+            (prefix, other) = try editPrefixes(prompt: request.prompt, picture: picture, key: QwenImageEditModel.pictureKey(path),
+                                               guided: request.guidance > 1)
+            promptsEncoded()
+        } else {
+            if !isCached(request.prompt) { try encode(request.prompt) }
+            guard let cached = promptCache[request.prompt] else { throw GenerationError.cancelled }
+            (prefix, other) = (cached, unconditional)
+        }
         if isCancelled() { throw GenerationError.cancelled }
 
         phase(.denoising)
         let noise = MLXRandom.normal([1, height, width, 3], key: MLXRandom.key(UInt64(truncatingIfNeeded: request.seed)))
         let image = try denoise(
-            noise: noise, prefix: prefix, unconditional: unconditional, steps: request.steps,
+            noise: noise, prefix: prefix, unconditional: other, steps: request.steps,
             guidance: Float(request.guidance), progress: progress, isCancelled: isCancelled
         )
 

@@ -116,7 +116,8 @@ enum TimeEstimate {
         // 20 steps (mflux; the native engine matched it at 336 × 432), reading the picture ~4 s.
         case .qwenImageEdit: Rates(denoise: 3.2, decode: 3.4, fixed: 5, load: 5)
         // 8 steps at 512 / 1024 / 2048 px in 7, 27–31 and 150 s; the pixel head is part of each
-        // step, so there is no decode to speak of.
+        // step, so there is no decode to speak of. An edit reads its picture with the prompt
+        // (5 s at 1024 px, 17 s at 2048), which the history's fixed part learns.
         case .senseNova: Rates(denoise: 0.72, decode: 0.05, fixed: 1.3, load: 3)
         // The 8-bit transformer is as fast as the 4-bit one since mlx-swift 0.32.2: 5 s at
         // 768 × 512 in 219 s without Save memory, against 206 s with it for the 4-bit one.

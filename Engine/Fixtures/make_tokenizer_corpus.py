@@ -10,7 +10,8 @@ for each pipeline, the folder it read and the ids of every prompt, built as the 
 them: FLUX.2 Klein and Z-Image with Qwen3's chat template (thinking off and on), Qwen-Image and
 Qwen-Image Edit with their templates around the prompt, Ming-Image with its template and no
 special tokens, LTX-2's Gemma 3 with `<bos>` and the prompt stripped, SenseNova-U1.5 with its
-"neo1_0" generation query (and the unconditional one, the same for every prompt). SenseNova's
+"neo1_0" generation query (and the unconditional one, the same for every prompt), and its edit
+query with 16 picture tokens (and the picture-only one). SenseNova's
 reference is the tokenizer SenseTime's code builds from `vocab.json` and `merges.txt` (the original
 checkpoint has no `tokenizer.json`): the MLX pack's `tokenizer.json`, which the engine reads, was
 made from them by the pack's author, so it is left out here and checked against them.
@@ -65,6 +66,17 @@ def sensenova_query(prompt: str) -> str:
 
 
 SENSENOVA_UNCONDITIONAL = "<|im_start|>user\n<|im_end|>\n<|im_start|>assistant\n<img>"
+SENSENOVA_EDIT_UNCONDITIONAL = "<|im_start|>user\n<image><|im_end|>\n<|im_start|>assistant\n<img>"
+
+
+def sensenova_picture(query: str, image_tokens: int) -> str:
+    """`it2i_generate`'s replacement of the first `<image>` with the picture's tokens."""
+    return query.replace("<image>", "<img>" + "<IMG_CONTEXT>" * image_tokens + "</img>", 1)
+
+
+def sensenova_edit_prompt(prompt: str) -> str:
+    """`it2i_generate`'s placeholder for one picture, unless the prompt has one."""
+    return prompt if "<image>" in prompt else "<image>\n" + prompt
 
 
 def edit_text(prompt: str, image_tokens: int) -> str:
@@ -87,6 +99,8 @@ PIPELINES = [
     ("gemma3", "mlx-community/gemma-3-12b-it-4bit", "86cc6a8dedbc456dd0e4af01a9d09f396f77e558", ""),
     ("sensenova", "mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit", "ff6d0c2dfe21b19891ae4551e11fcc99f6aa82ae", ""),
     ("sensenova-unconditional", "mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit", "ff6d0c2dfe21b19891ae4551e11fcc99f6aa82ae", ""),
+    ("sensenova-edit", "mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit", "ff6d0c2dfe21b19891ae4551e11fcc99f6aa82ae", ""),
+    ("sensenova-edit-unconditional", "mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit", "ff6d0c2dfe21b19891ae4551e11fcc99f6aa82ae", ""),
 ]
 
 PROMPTS = [
@@ -178,6 +192,10 @@ def pipeline_ids(name: str, tokenizer, prompt: str) -> list[int]:
         return tokenizer(sensenova_query(prompt))["input_ids"]
     if name == "sensenova-unconditional":
         return tokenizer(SENSENOVA_UNCONDITIONAL)["input_ids"]
+    if name == "sensenova-edit":
+        return tokenizer(sensenova_picture(sensenova_query(sensenova_edit_prompt(prompt)), 16))["input_ids"]
+    if name == "sensenova-edit-unconditional":
+        return tokenizer(sensenova_picture(SENSENOVA_EDIT_UNCONDITIONAL, 16))["input_ids"]
     raise ValueError(name)
 
 

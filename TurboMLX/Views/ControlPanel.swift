@@ -798,6 +798,9 @@ private struct ReferenceImageSection: View {
         if app.selectedModel?.family.requiresReferenceImage == true {
             return "Needed: the picture to edit. It keeps its own proportions, at about the new image’s size; the new image takes the format below."
         }
+        if app.selectedModel?.family == .senseNova {
+            return "Optional. It keeps its own proportions, at about the new image’s size (at least 512 × 512 pixels); the new image takes the format below."
+        }
         return "Optional. It keeps its own proportions, at most about a megapixel; the new image takes the format below."
     }
 
