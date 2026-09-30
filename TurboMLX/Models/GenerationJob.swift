@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -52,6 +53,9 @@ final class GenerationJob: Identifiable {
     private(set) var secondsPerStep: Double?
     /// This run's time against the plan's, from the steps done so far.
     private(set) var pace = 1.0
+    /// The image as it forms: the last preview the engine wrote, and the step it shows.
+    private(set) var preview: NSImage?
+    private(set) var previewStep = 0
 
     init(model: ModelDescriptor, request: GenerationRequest, outputURL: URL) {
         self.model = model
@@ -111,6 +115,16 @@ final class GenerationJob: Identifiable {
             return max(plan.decode * pace - now.timeIntervalSince(decodeStartedAt), 0)
         default:
             return nil
+        }
+    }
+
+    /// Shows the preview the engine wrote at `url` for `step` (the same file every time), read
+    /// off the main thread; one from an earlier step that comes in late is dropped.
+    func showPreview(at url: URL, step: Int) {
+        Task { [weak self] in
+            guard let image = await ImageLoader.fresh(url), let self, step >= previewStep else { return }
+            preview = image
+            previewStep = step
         }
     }
 

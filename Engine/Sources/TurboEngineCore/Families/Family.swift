@@ -21,10 +21,15 @@ public struct FamilyRequest {
     /// Upscalers: the factor the picture's shorter side is scaled by, the softening before (0–1).
     public var upscale: Double?
     public var softness: Double?
+    /// Keep the transformer's residual stream in the weights' 16-bit precision where the reference
+    /// runs it in float32 (Z-Image, Qwen-Image and its editor; the other families are in 16 bits
+    /// already): faster, at the price of small differences in the pixels.
+    public var halfPrecision = false
 
     public init(
         prompt: String, seed: Int, width: Int, height: Int, steps: Int, guidance: Double, flattenAlpha: Bool,
-        frames: Int? = nil, fps: Double? = nil, imagePath: String? = nil, upscale: Double? = nil, softness: Double? = nil
+        frames: Int? = nil, fps: Double? = nil, imagePath: String? = nil, upscale: Double? = nil, softness: Double? = nil,
+        halfPrecision: Bool = false
     ) {
         self.prompt = prompt
         self.seed = seed
@@ -38,6 +43,7 @@ public struct FamilyRequest {
         self.imagePath = imagePath
         self.upscale = upscale
         self.softness = softness
+        self.halfPrecision = halfPrecision
     }
 }
 
@@ -66,6 +72,30 @@ public protocol FamilyModel: AnyObject {
         progress: (Int, Int) -> Void,
         isCancelled: () -> Bool
     ) throws -> GeneratedImage
+}
+
+/// A family that can show the image as it forms: at some steps (`LatentPreview.shows`) `preview`
+/// gets the clean image the model predicts, decoded small. Adopting it gives the plain
+/// `FamilyModel.generate` for free.
+public protocol PreviewingFamilyModel: FamilyModel {
+    func generate(
+        _ request: FamilyRequest,
+        phase: (GenerationPhase) -> Void,
+        progress: (Int, Int) -> Void,
+        preview: (Preview) -> Void,
+        isCancelled: () -> Bool
+    ) throws -> GeneratedImage
+}
+
+extension PreviewingFamilyModel {
+    public func generate(
+        _ request: FamilyRequest,
+        phase: (GenerationPhase) -> Void,
+        progress: (Int, Int) -> Void,
+        isCancelled: () -> Bool
+    ) throws -> GeneratedImage {
+        try generate(request, phase: phase, progress: progress, preview: { _ in }, isCancelled: isCancelled)
+    }
 }
 
 /// Loads the model a spec names, by family.

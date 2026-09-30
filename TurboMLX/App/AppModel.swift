@@ -476,6 +476,7 @@ final class AppModel {
                 guidance: upscales ? 1 : settings.guidance,
                 transparentBackground: settings.transparentBackground && model.family.producesAlpha,
                 lowMemory: settings.lowMemory,
+                halfPrecision: model.family.supportsHalfPrecision && settings.halfPrecision ? true : nil,
                 frames: isVideo ? settings.videoFrames : nil,
                 fps: isVideo ? settings.videoFrameRate : nil,
                 autoDuration: isVideo && settings.autoDuration(for: model.family) ? true : nil,
@@ -574,7 +575,8 @@ final class AppModel {
                 textEncoderPath: locator.companionLocation(of: job.model)?.path,
                 request: job.request,
                 output: job.outputURL,
-                upcomingPrompts: Array(upcoming.prefix(8))
+                upcomingPrompts: Array(upcoming.prefix(8)),
+                preview: settings.livePreview && job.model.family.showsPreview
             ))
         } catch {
             activeJob = nil
@@ -610,6 +612,8 @@ final class AppModel {
             }
         case "progress":
             job.advance(to: event.step ?? job.step)
+        case "preview":
+            if let path = event.path { job.showPreview(at: URL(fileURLWithPath: path), step: event.step ?? job.step) }
         case "done":
             complete(job, with: event)
         case "cancelled":
@@ -808,6 +812,10 @@ final class AppModel {
         // others always save false, which would turn the choice off for the next Ming image.
         if model?.family.producesAlpha == true {
             updated.transparentBackground = request.transparentBackground
+        }
+        // Likewise the precision: only the families with the option say which was chosen.
+        if model?.family.supportsHalfPrecision == true {
+            updated.halfPrecision = request.halfPrecision ?? false
         }
         return (updated, model?.id ?? selectedModelID)
     }

@@ -13,7 +13,9 @@ app downloads it, and that is all the setup there is.
 - **Left column:** the prompt as blocks (Subject and Style to start with, each one a piece of the
   final text; renamable, resizable, and put in order by dragging), aspect ratio, steps and guidance;
   under *Advanced*, the resolution or a custom size, seed, number of images, transparent or white
-  background, memory saving. For LTX-2.3 and LTX-2.5, FLUX.2 Klein, Qwen-Image Edit and SenseNova-U1.5, a
+  background, memory saving, a *16-bit precision* for Z-Image and the Qwen-Image models (faster,
+  with slightly different fine detail) and the *Live preview*, which shows the image as it forms
+  every few steps. For LTX-2.3 and LTX-2.5, FLUX.2 Klein, Qwen-Image Edit and SenseNova-U1.5, a
   *Reference Image* above the prompt (dropped from Finder or from the history, chosen from a file
   or among the generated images): the clip's first frame, or the picture the image models change
   as the prompt says ("make it winter"), in its own proportions (Qwen-Image Edit needs one). For a clip,
@@ -178,8 +180,9 @@ SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo-engine serve ──▶ 
   instant, and no Python process sits between the app and the GPU. The engine keeps the
   selected model in memory, loads it as soon as a prompt is being written, encodes the prompts
   of the queued images while the text encoder is in memory, reports phases, per-step progress
-  and the seconds each phase took (shown when hovering the time of an image), and stops a
-  generation at the next step. See `Engine/README.md` and
+  and the seconds each phase took (shown when hovering the time of an image), shows the image as
+  it forms (the model's prediction decoded small every few steps), and stops a generation at the
+  next step. See `Engine/README.md` and
   [docs/native-engine.md](docs/native-engine.md).
 - **mflux is the reference.** The ports follow [mflux](https://github.com/mflux-community/mflux)
   (Python + MLX) module for module: `Engine/Fixtures` builds the references `verify` compares

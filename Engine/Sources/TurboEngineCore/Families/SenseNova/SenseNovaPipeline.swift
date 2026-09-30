@@ -77,7 +77,7 @@ public final class SenseNovaTokenEmbedding: Module {
 /// the original's keys and `config.json` in one folder, linears quantized, convolutions channels
 /// last. Both stacks load lazily; with Save memory the understanding stack leaves memory once the
 /// prompts are read, and the generation stack before a new prompt is read.
-public final class SenseNovaModel: FamilyModel {
+public final class SenseNovaModel: PreviewingFamilyModel {
     public let config: SenseNovaConfig
     public let modelPath: URL
     public var bits: Int? { config.bits }
@@ -309,10 +309,11 @@ public final class SenseNovaModel: FamilyModel {
     }
 
     /// The denoising loop from `noise` (unit normal, [1, H, W, 3]): scaled for the image's size,
-    /// then one Euler step per pair of timesteps, with guidance when it is above 1.
+    /// then one Euler step per pair of timesteps, with guidance when it is above 1. `preview` gets
+    /// the clean image predicted at some steps, small.
     public func denoise(
         noise: MLXArray, prefix: Prefix, unconditional: Prefix?, steps: Int, guidance: Float,
-        progress: (Int, Int) -> Void = { _, _ in }, isCancelled: () -> Bool = { false }
+        progress: (Int, Int) -> Void = { _, _ in }, preview: (Preview) -> Void = { _ in }, isCancelled: () -> Bool = { false }
     ) throws -> MLXArray {
         let tokens = (noise.shape[1] / config.tokenSize) * (noise.shape[2] / config.tokenSize)
         let noiseScale = config.noiseScale(tokens: tokens)
@@ -326,10 +327,13 @@ public final class SenseNovaModel: FamilyModel {
                 let other = try self.velocity(embeds: embeds, image: image, prefix: unconditional, t: t)
                 velocity = other + ((velocity - other).asType(.float32) * guidance).asType(velocity.dtype)
             }
+            // The clean image the velocity points at (`velocity` inverted), for a preview.
+            let glimpse = LatentPreview.shows(step: index + 1, of: steps) ? image + velocity * Swift.max(1 - t, tEps) : nil
             image = image + (velocity.asType(.float32) * (next - t)).asType(image.dtype)
             eval(image)
             generationUsed = true
             progress(index + 1, steps)
+            if let glimpse { preview(Preview(pixels: Self.previewPixels(glimpse), step: index + 1)) }
             if isCancelled() { throw GenerationError.cancelled }
         }
         return image
@@ -342,10 +346,18 @@ public final class SenseNovaModel: FamilyModel {
         return (unit * 255).round().asType(.uint8)[0]
     }
 
+    /// The clean image predicted at a step ([1, H, W, 3] in [−1, 1]), small: pooled to about 384
+    /// pixels on the longer side.
+    static func previewPixels(_ image: MLXArray) -> MLXArray {
+        let factor = LatentPreview.factor(height: image.shape[1], width: image.shape[2], scale: 1)
+        return pixels(LatentPreview.pooled(image.asType(.float32), factor: factor))
+    }
+
     public func generate(
         _ request: FamilyRequest,
         phase: (GenerationPhase) -> Void,
         progress: (Int, Int) -> Void,
+        preview: (Preview) -> Void,
         isCancelled: () -> Bool
     ) throws -> GeneratedImage {
         let size = config.tokenSize
@@ -374,7 +386,7 @@ public final class SenseNovaModel: FamilyModel {
         let noise = MLXRandom.normal([1, height, width, 3], key: MLXRandom.key(UInt64(truncatingIfNeeded: request.seed)))
         let image = try denoise(
             noise: noise, prefix: prefix, unconditional: other, steps: request.steps,
-            guidance: Float(request.guidance), progress: progress, isCancelled: isCancelled
+            guidance: Float(request.guidance), progress: progress, preview: preview, isCancelled: isCancelled
         )
 
         phase(.decoding)

@@ -132,7 +132,7 @@ public enum KleinReference {
 }
 
 /// FLUX.2 Klein: the three modules, the prompt cache, and the sampling loop.
-public final class KleinModel: FamilyModel {
+public final class KleinModel: PreviewingFamilyModel {
     /// The negative prompt mflux encodes for a base checkpoint's classifier-free guidance.
     static let negativePrompt = " "
 
@@ -245,6 +245,7 @@ public final class KleinModel: FamilyModel {
         _ request: FamilyRequest,
         phase: (GenerationPhase) -> Void,
         progress: (Int, Int) -> Void,
+        preview: (Preview) -> Void,
         isCancelled: () -> Bool
     ) throws -> GeneratedImage {
         // Distilled checkpoints only work at guidance 1; base checkpoints run real CFG.
@@ -252,19 +253,21 @@ public final class KleinModel: FamilyModel {
         return try generate(
             prompt: request.prompt, seed: request.seed, width: request.width, height: request.height,
             steps: request.steps, guidance: guidance, referencePath: request.imagePath,
-            phase: phase, progress: progress, isCancelled: isCancelled
+            phase: phase, progress: progress, preview: preview, isCancelled: isCancelled
         )
     }
 
-    /// Runs the whole pipeline for a prompt. `progress` gets each finished step; `isCancelled`
-    /// is consulted between steps. A `guidance` above 1 runs mflux's classifier-free guidance
-    /// against an encoded space, as its base checkpoints do. With `referencePath`, the image is
-    /// edited from that picture, as `Flux2KleinEdit` does: its tokens follow the image's in every
-    /// pass, and only the image's come out.
+    /// Runs the whole pipeline for a prompt. `progress` gets each finished step, `preview` a small
+    /// image of the prediction at some of them; `isCancelled` is consulted between steps. A
+    /// `guidance` above 1 runs mflux's classifier-free guidance against an encoded space, as its
+    /// base checkpoints do. With `referencePath`, the image is edited from that picture, as
+    /// `Flux2KleinEdit` does: its tokens follow the image's in every pass, and only the image's
+    /// come out.
     public func generate(
         prompt: String, seed: Int, width: Int, height: Int, steps: Int, guidance: Double = 1, referencePath: String? = nil,
         phase: (GenerationPhase) -> Void,
         progress: (Int, Int) -> Void,
+        preview: (Preview) -> Void = { _ in },
         isCancelled: () -> Bool
     ) throws -> GeneratedImage {
         let width = 16 * (width / 16)
@@ -291,9 +294,14 @@ public final class KleinModel: FamilyModel {
                 noise = negativeNoise + Float(guidance) * (noise - negativeNoise)
             }
             if reference != nil { noise = noise[0..., 0 ..< imageTokens, 0...] }
+            let glimpse = LatentPreview.shows(step: t + 1, of: steps)
+                ? LatentPreview.predicted(latents: latents, noise: noise, sigma: schedule.sigmas[t]) : nil
             latents = Self.step(latents: latents, noise: noise, schedule: schedule, index: t)
             eval(latents)
             progress(t + 1, steps)
+            if let glimpse {
+                preview(Preview(pixels: previewPixels(latents: glimpse, latentHeight: initial.latentHeight, latentWidth: initial.latentWidth), step: t + 1))
+            }
             if isCancelled() { throw GenerationError.cancelled }
         }
 
@@ -301,6 +309,14 @@ public final class KleinModel: FamilyModel {
         let pixels = decode(latents: latents, latentHeight: initial.latentHeight, latentWidth: initial.latentWidth)
         eval(pixels)
         return GeneratedImage(pixels: pixels)
+    }
+
+    /// A small image of what packed latents [1, h·w, 128] (a step's prediction) hold: the grid
+    /// pooled to about 384 pixels on the longer side, decoded in one piece.
+    func previewPixels(latents: MLXArray, latentHeight: Int, latentWidth: Int) -> MLXArray {
+        let grid = latents.reshaped([1, latentHeight, latentWidth, latents.shape[latents.ndim - 1]])
+        let factor = LatentPreview.factor(height: latentHeight, width: latentWidth, scale: 16)
+        return Pixels.toPixels(vae.decodePacked(LatentPreview.pooled(grid, factor: factor)))
     }
 
     /// Packed latents → [H, W, 3] uint8 pixels, as `ImageUtil.to_image` converts them.

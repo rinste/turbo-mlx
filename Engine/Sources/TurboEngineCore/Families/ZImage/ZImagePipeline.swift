@@ -4,7 +4,7 @@ import MLXNN
 
 /// Z-Image Turbo: the Qwen3 encoder, the S3-DiT and the decoder, with the prompt cache and the
 /// sampling loop of mflux's `ZImage.generate_image` (guidance off, the linear schedule).
-public final class ZImageModel: FamilyModel {
+public final class ZImageModel: PreviewingFamilyModel {
     public let config: ZImageConfig
     public let modelPath: URL
     public let textEncoder: Qwen3TextEncoder
@@ -79,6 +79,7 @@ public final class ZImageModel: FamilyModel {
         _ request: FamilyRequest,
         phase: (GenerationPhase) -> Void,
         progress: (Int, Int) -> Void,
+        preview: (Preview) -> Void,
         isCancelled: () -> Bool
     ) throws -> GeneratedImage {
         let width = 16 * (request.width / 16)
@@ -90,14 +91,20 @@ public final class ZImageModel: FamilyModel {
         if isCancelled() { throw GenerationError.cancelled }
 
         phase(.denoising)
+        // The reference lets its float32 timestep embedding promote the stream to float32; the
+        // 16-bit option keeps it in the weights' precision, as Ming-Image's S3-DiT always does.
+        transformer.setKeepsWeightsPrecision(request.halfPrecision)
         let schedule = LinearSchedule(steps: request.steps, width: width, height: height, shift: config.shift)
         var latents = Self.initialLatents(width: width, height: height, seed: request.seed)
         for t in 0 ..< request.steps {
-            let timestep = MLXArray([1 - schedule.sigmas[t]])
-            let noise = transformer(latents: latents, timestep: timestep, capFeats: capFeats)
+            let sigma = schedule.sigmas[t]
+            let noise = transformer(latents: latents, timestep: MLXArray([1 - sigma]), capFeats: capFeats)
+            let glimpse = LatentPreview.shows(step: t + 1, of: request.steps)
+                ? LatentPreview.predicted(latents: latents, noise: noise, sigma: sigma) : nil
             latents = schedule.step(latents: latents, noise: noise, index: t)
             eval(latents)
             progress(t + 1, request.steps)
+            if let glimpse { preview(Preview(pixels: previewPixels(latents: glimpse), step: t + 1)) }
             if isCancelled() { throw GenerationError.cancelled }
         }
 
@@ -105,6 +112,14 @@ public final class ZImageModel: FamilyModel {
         let pixels = try decode(latents: latents, isCancelled: isCancelled)
         eval(pixels)
         return GeneratedImage(pixels: pixels)
+    }
+
+    /// A small image of what `latents` ([16, 1, h, w], a step's prediction) hold: the grid pooled
+    /// to about 384 pixels on the longer side, decoded in one piece.
+    func previewPixels(latents: MLXArray) -> MLXArray {
+        let grid = latents.reshaped([1, latents.shape[0], latents.shape[2], latents.shape[3]]).transposed(0, 2, 3, 1)
+        let factor = LatentPreview.factor(height: grid.shape[1], width: grid.shape[2], scale: ZImageVAE.spatialScale)
+        return Pixels.toPixels(vae.decode(LatentPreview.pooled(grid, factor: factor)))
     }
 
     /// [16, 1, h, w] latents → [H, W, 3] uint8 pixels; in tiles with Save memory on.

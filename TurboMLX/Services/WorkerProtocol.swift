@@ -55,8 +55,9 @@ nonisolated enum WorkerCommand: Sendable {
     /// `upcomingPrompts` are the distinct prompts of the images queued behind this one: the
     /// worker encodes them while the text encoder is resident, so they will not reload the model.
     /// `textEncoderPath`: the companion checkpoint of a family that has one (LTX-2's Gemma).
+    /// `preview`: the engine shows the image as it forms (`preview` events with a small PNG).
     case generate(jobID: UUID, model: ModelDescriptor, modelPath: String, textEncoderPath: String?, request: GenerationRequest,
-                  output: URL, upcomingPrompts: [String])
+                  output: URL, upcomingPrompts: [String], preview: Bool)
     /// Loads the model ahead of its first image.
     case load(model: ModelDescriptor, modelPath: String, textEncoderPath: String?, lowMemory: Bool)
     case cancel(jobID: UUID)
@@ -78,12 +79,12 @@ nonisolated enum WorkerCommand: Sendable {
 
     var jsonLine: String {
         let object: [String: Any] = switch self {
-        case let .generate(jobID, model, modelPath, textEncoderPath, request, output, upcomingPrompts):
+        case let .generate(jobID, model, modelPath, textEncoderPath, request, output, upcomingPrompts, preview):
             [
                 "cmd": "generate",
                 "id": jobID.uuidString,
                 "model": Self.modelObject(model, path: modelPath, textEncoderPath: textEncoderPath, lowMemory: request.lowMemory),
-                "params": Self.params(request, output: output, upcomingPrompts: upcomingPrompts),
+                "params": Self.params(request, output: output, upcomingPrompts: upcomingPrompts, preview: preview),
             ]
         case let .load(model, modelPath, textEncoderPath, lowMemory):
             ["cmd": "load", "model": Self.modelObject(model, path: modelPath, textEncoderPath: textEncoderPath, lowMemory: lowMemory)]
@@ -98,7 +99,7 @@ nonisolated enum WorkerCommand: Sendable {
         return String(decoding: data, as: UTF8.self)
     }
 
-    private static func params(_ request: GenerationRequest, output: URL, upcomingPrompts: [String]) -> [String: Any] {
+    private static func params(_ request: GenerationRequest, output: URL, upcomingPrompts: [String], preview: Bool) -> [String: Any] {
         var params: [String: Any] = [
             "prompt": request.prompt,
             "seed": request.seed,
@@ -115,6 +116,8 @@ nonisolated enum WorkerCommand: Sendable {
         if request.autoDuration == true { params["auto_duration"] = true }
         if let upscale = request.upscale { params["upscale"] = upscale }
         if let softness = request.softness { params["softness"] = softness }
+        if request.halfPrecision == true { params["precision"] = "bf16" }
+        if preview { params["preview"] = true }
         if let reference = request.referenceImage {
             let url = HistoryStore.referenceURL(reference)
             if FileManager.default.fileExists(atPath: url.path) { params["image"] = url.path }

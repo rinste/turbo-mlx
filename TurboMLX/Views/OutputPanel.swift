@@ -1,4 +1,5 @@
 import AVFoundation
+import AppKit
 import SwiftUI
 
 /// Right column: the current output on top, the history below.
@@ -536,6 +537,23 @@ private struct GenerationFrame: View {
     }
 }
 
+/// The image as it forms: the engine's last preview, small and soft, in the frame the image will
+/// have.
+private struct PreviewFrame: View {
+    let image: NSImage
+    let size: PixelSize
+
+    var body: some View {
+        Image(nsImage: image)
+            .resizable()
+            .interpolation(.medium)
+            .aspectRatio(CGSize(width: size.width, height: size.height), contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .frame(maxWidth: min(CGFloat(size.width), 520), maxHeight: min(CGFloat(size.height), 520))
+            .accessibilityLabel("Preview of the image being generated")
+    }
+}
+
 /// The "+" after the history: the frame of the next generation as the controls on the left set
 /// it up, until Generate starts it.
 private struct DraftView: View {
@@ -575,8 +593,12 @@ private struct JobView: View {
     var body: some View {
         let isQueued = job.phase == .queued
         VStack(spacing: 22) {
-            GenerationFrame(model: job.model, size: job.request.size, frames: job.request.frames, fps: job.request.fps,
-                            isLongest: job.framesAreLongest, isPulsing: !isQueued && !job.isCancelling)
+            if let preview = job.preview {
+                PreviewFrame(image: preview, size: job.request.size)
+            } else {
+                GenerationFrame(model: job.model, size: job.request.size, frames: job.request.frames, fps: job.request.fps,
+                                isLongest: job.framesAreLongest, isPulsing: !isQueued && !job.isCancelling)
+            }
 
             VStack(spacing: 10) {
                 HStack {

@@ -104,7 +104,8 @@ final class S3DiTAttention: Module {
 
     let heads: Int
     let headDim: Int
-    let castsRope: Bool
+    /// The rotation in float32, cast back to the input's dtype (`S3DiTTransformer.keepsWeightsPrecision`).
+    var castsRope: Bool
 
     init(config: S3DiTConfig) {
         heads = config.numHeads
@@ -259,9 +260,14 @@ public final class S3DiTTransformer: Module {
 
     public let config: S3DiTConfig
     let ropeEmbedder: S3DiTRopeEmbedder
+    /// Whether the residual stream keeps the weights' precision, as the config says (Ming) or as a
+    /// request asks (Z-Image with `FamilyRequest.halfPrecision`): the timestep embedding, the
+    /// latents and the captions cast to it, the rotation cast back to it.
+    public private(set) var keepsWeightsPrecision: Bool
 
     public init(config: S3DiTConfig) {
         self.config = config
+        keepsWeightsPrecision = config.keepsWeightsPrecision
         ropeEmbedder = S3DiTRopeEmbedder(theta: config.ropeTheta, axesDims: config.axesDims, axesLens: config.axesLens)
         _xEmbedder.wrappedValue = S3DiTPatchEmbedder(embedDim: config.embedDim, dim: config.dim)
         _finalLayers.wrappedValue = S3DiTFinalLayers(dim: config.dim, embedDim: config.embedDim, tEmbedSize: config.tEmbedSize)
@@ -277,12 +283,19 @@ public final class S3DiTTransformer: Module {
         super.init()
     }
 
+    /// Sets the stream's precision for the passes that follow (every attention's rotation with it).
+    public func setKeepsWeightsPrecision(_ keeps: Bool) {
+        guard keeps != keepsWeightsPrecision else { return }
+        keepsWeightsPrecision = keeps
+        for block in noiseRefiner + contextRefiner + layers { block.attention.castsRope = keeps }
+    }
+
     /// One pass. `latents` [C, 1, H, W] (channels first, as mflux keeps them), `timestep` [1] in
     /// [0, 1] (`1 − σ`), `capFeats` [N, capFeatDim] through the caption embedder, `extraCaption`
     /// [N2, dim] appended as it is (Ming's direct-VLM tokens). Returns the flow prediction
     /// [C, 1, H, W] with mflux's sign (negated).
     public func callAsFunction(latents: MLXArray, timestep: MLXArray, capFeats: MLXArray, extraCaption: MLXArray? = nil) -> MLXArray {
-        let keeps = config.keepsWeightsPrecision
+        let keeps = keepsWeightsPrecision
         var tEmb = tEmbedder(timestep.asType(.float32) * config.tScale)
         if keeps { tEmb = tEmb.asType(modelPrecision) }
 

@@ -6,7 +6,7 @@ import MLXNN
 /// RGBA decoder, with the prompt cache and the loop of mflux's `MingImage.generate_image` (the
 /// static-shift schedule, guidance against zeroed conditions). The ~16B-parameter text side is
 /// kept out of memory while the DiT works in low-RAM mode, and vice versa.
-public final class MingModel: FamilyModel {
+public final class MingModel: PreviewingFamilyModel {
     /// mflux keeps the last 16 prompts.
     static let promptCacheSize = 16
 
@@ -135,6 +135,7 @@ public final class MingModel: FamilyModel {
         _ request: FamilyRequest,
         phase: (GenerationPhase) -> Void,
         progress: (Int, Int) -> Void,
+        preview: (Preview) -> Void,
         isCancelled: () -> Bool
     ) throws -> GeneratedImage {
         let width = 16 * (request.width / 16)
@@ -154,13 +155,20 @@ public final class MingModel: FamilyModel {
         var latents = Self.initialLatents(width: width, height: height, seed: request.seed)
         for t in 0 ..< request.steps {
             let (sigma, next) = (sigmas[t], sigmas[t + 1])
+            var glimpse: MLXArray?
             // The official schedule ends on a sigma = 0 step whose update is dt = 0: skip its pass.
             if sigma > 0 {
                 let velocity = Self.predict(transformer: transformer, latents: latents, sigma: sigma, capFeats: capFeats, capFeats2: capFeats2, guidance: guidance)
+                if LatentPreview.shows(step: t + 1, of: request.steps) {
+                    glimpse = LatentPreview.predicted(latents: latents, noise: velocity, sigma: sigma)
+                }
                 latents = latents + MLXArray(next - sigma) * velocity.asType(.float32)
             }
             eval(latents)
             progress(t + 1, request.steps)
+            if let glimpse {
+                preview(Preview(pixels: previewPixels(latents: glimpse, vae: vae, flatten: request.flattenAlpha), step: t + 1))
+            }
             if isCancelled() { throw GenerationError.cancelled }
         }
         imageSideUsed = true
@@ -170,6 +178,15 @@ public final class MingModel: FamilyModel {
         if request.flattenAlpha { pixels = Pixels.flattenAlpha(pixels) }
         eval(pixels)
         return GeneratedImage(pixels: pixels)
+    }
+
+    /// A small image of what `latents` ([1, 16, h, w], a step's prediction) hold: the grid pooled
+    /// to about 384 pixels on the longer side, decoded in one piece, on white when the image will be.
+    func previewPixels(latents: MLXArray, vae: QwenImageVAE, flatten: Bool) -> MLXArray {
+        let grid = latents.asType(modelPrecision).transposed(0, 2, 3, 1)
+        let factor = LatentPreview.factor(height: grid.shape[1], width: grid.shape[2], scale: QwenImageVAE.spatialScale)
+        let pixels = Pixels.toPixels(vae.decode(LatentPreview.pooled(grid, factor: factor)))
+        return flatten ? Pixels.flattenAlpha(pixels) : pixels
     }
 
     /// [1, 16, h, w] latents → [H, W, 4] uint8 RGBA pixels, decoded in bf16; in tiles with Save memory on.

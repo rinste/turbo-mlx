@@ -6,7 +6,7 @@ import MLXNN
 /// cache and the loop of mflux's `QwenImage.generate_image` (true classifier-free guidance, the
 /// linear schedule). The 7B encoder is kept out of memory while the 20B transformer works in
 /// low-RAM mode, and vice versa: each side reloads lazily when it is next needed.
-public final class QwenImageModel: FamilyModel {
+public final class QwenImageModel: PreviewingFamilyModel {
     public let config: QwenImageConfig
     public let modelPath: URL
     public private(set) var bits: Int?
@@ -108,17 +108,22 @@ public final class QwenImageModel: FamilyModel {
     }
 
     /// `compute_guided_noise`: the CFG combination rescaled to the conditional prediction's norm.
+    /// In float32 whatever the stream's precision (the norms' ratio is a fine quantity), returned
+    /// in the prediction's.
     public static func guidedNoise(_ noise: MLXArray, negative: MLXArray, guidance: Float) -> MLXArray {
-        let combined = negative + guidance * (noise - negative)
-        let condNorm = sqrt((noise * noise).sum(axis: -1, keepDims: true) + 1e-12)
+        let positive32 = noise.asType(.float32)
+        let negative32 = negative.asType(.float32)
+        let combined = negative32 + guidance * (positive32 - negative32)
+        let condNorm = sqrt((positive32 * positive32).sum(axis: -1, keepDims: true) + 1e-12)
         let noiseNorm = sqrt((combined * combined).sum(axis: -1, keepDims: true) + 1e-12)
-        return combined * (condNorm / noiseNorm)
+        return (combined * (condNorm / noiseNorm)).asType(noise.dtype)
     }
 
     public func generate(
         _ request: FamilyRequest,
         phase: (GenerationPhase) -> Void,
         progress: (Int, Int) -> Void,
+        preview: (Preview) -> Void,
         isCancelled: () -> Bool
     ) throws -> GeneratedImage {
         let width = 16 * (request.width / 16)
@@ -136,24 +141,41 @@ public final class QwenImageModel: FamilyModel {
         let schedule = LinearSchedule(steps: request.steps, width: width, height: height, shift: config.shift)
         let guidance = Float(request.guidance)
         var latents = Self.initialLatents(width: width, height: height, seed: request.seed)
+        // The reference keeps the latents, and with them the stream, in float32; the 16-bit option
+        // starts them in bf16, which the transformer follows (the decode stays in float32).
+        if request.halfPrecision { latents = latents.asType(.bfloat16) }
         for t in 0 ..< request.steps {
-            var noise = transformer(latents: latents, prompt: prompt, timestep: schedule.sigmas[t], latentHeight: latentHeight, latentWidth: latentWidth)
+            let sigma = schedule.sigmas[t]
+            var noise = transformer(latents: latents, prompt: prompt, timestep: sigma, latentHeight: latentHeight, latentWidth: latentWidth)
             // At guidance 1 the unconditional pass would cancel out exactly: skip it.
             if guidance > 1 {
-                let negativeNoise = transformer(latents: latents, prompt: negative, timestep: schedule.sigmas[t], latentHeight: latentHeight, latentWidth: latentWidth)
+                let negativeNoise = transformer(latents: latents, prompt: negative, timestep: sigma, latentHeight: latentHeight, latentWidth: latentWidth)
                 noise = Self.guidedNoise(noise, negative: negativeNoise, guidance: guidance)
             }
+            let glimpse = LatentPreview.shows(step: t + 1, of: request.steps)
+                ? LatentPreview.predicted(latents: latents, noise: noise, sigma: sigma) : nil
             latents = schedule.step(latents: latents, noise: noise, index: t)
             eval(latents)
             progress(t + 1, request.steps)
+            if let glimpse {
+                preview(Preview(pixels: Self.previewPixels(latents: glimpse, latentHeight: latentHeight, latentWidth: latentWidth, vae: vae), step: t + 1))
+            }
             if isCancelled() { throw GenerationError.cancelled }
         }
         imageSideUsed = true
 
         phase(.decoding)
-        let pixels = try decode(latents: latents, latentHeight: latentHeight, latentWidth: latentWidth, vae: vae, isCancelled: isCancelled)
+        let pixels = try decode(latents: latents.asType(.float32), latentHeight: latentHeight, latentWidth: latentWidth, vae: vae, isCancelled: isCancelled)
         eval(pixels)
         return GeneratedImage(pixels: pixels)
+    }
+
+    /// A small image of what packed latents [1, h·w, 64] (a step's prediction) hold: the grid
+    /// pooled to about 384 pixels on the longer side, decoded in one piece, in float32 as the image.
+    public static func previewPixels(latents: MLXArray, latentHeight: Int, latentWidth: Int, vae: QwenImageVAE) -> MLXArray {
+        let grid = unpack(latents, latentHeight: latentHeight, latentWidth: latentWidth).asType(.float32)
+        let factor = LatentPreview.factor(height: grid.shape[1], width: grid.shape[2], scale: QwenImageVAE.spatialScale)
+        return Pixels.toPixels(vae.decode(LatentPreview.pooled(grid, factor: factor)))
     }
 
     /// Packed latents [1, h·w, 64] → [H, W, 3] uint8 pixels; in tiles with Save memory on.

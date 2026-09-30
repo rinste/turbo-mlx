@@ -51,6 +51,13 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     /// Enlarges the reference picture instead of following a prompt: no prompt, no format, a scale.
     var isUpscaler: Bool { self == .seedVR2 }
 
+    /// The families whose reference keeps the transformer's residual stream in float32, which the
+    /// "16-bit precision" option trades for speed (the others run in 16 bits already).
+    var supportsHalfPrecision: Bool { self == .zImageTurbo || self == .qwenImage || self == .qwenImageEdit }
+
+    /// The families that can show the image as it forms: image models, with steps to show it at.
+    var showsPreview: Bool { media == .image && !isUpscaler }
+
     /// Checkpoint sub-folders that must hold complete safetensors shards (SenseNova's MLX packs keep
     /// theirs, and the index naming them, at the top).
     var components: [String] {

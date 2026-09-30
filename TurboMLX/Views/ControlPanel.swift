@@ -1268,6 +1268,7 @@ private struct AdvancedSection: View {
             parts.insert("\(min(max(settings.steps, range.lowerBound), range.upperBound)) steps", at: 0)
         }
         if !settings.randomSeed { parts.append("seed \(settings.seed)") }
+        if family.supportsHalfPrecision, settings.halfPrecision { parts.append("16-bit") }
         return parts.joined(separator: " · ")
     }
 }
@@ -1380,8 +1381,10 @@ private struct OutputRows: View {
     }
 }
 
-// MARK: - Memory
+// MARK: - Memory and speed
 
+/// Save memory, the 16-bit precision option and the live preview: what trades memory or exactness
+/// for speed, and the model in memory.
 private struct MemoryRows: View {
     @Environment(AppModel.self) private var app
     @Binding var settings: GenerationSettings
@@ -1415,6 +1418,18 @@ private struct MemoryRows: View {
             Toggle(isOn: $settings.lowMemory) {
                 Text("Save memory")
                 Text(saveMemoryDescription)
+            }
+        }
+        if family.supportsHalfPrecision {
+            Toggle(isOn: $settings.halfPrecision) {
+                Text("16-bit precision")
+                Text("Keeps the transformer’s activations in 16 bits, as FLUX.2 Klein and Ming-Image already do, instead of the 32 the reference uses: faster, with small differences in fine detail (small text first). Off, the image matches mflux’s.")
+            }
+        }
+        if family.showsPreview {
+            Toggle(isOn: $settings.livePreview) {
+                Text("Live preview")
+                Text("Shows the image as it forms, every few steps, so a wrong one can be stopped early. Costs a few percent of the time.")
             }
         }
         if app.backend.loadedModelPath != nil {
@@ -1547,6 +1562,7 @@ private struct GenerateBar: View {
             frames: model.family.media == .video ? settings.videoFrames : nil,
             reference: model.family.takesReferenceImage ? settings.referenceImage : nil,
             lowMemory: settings.lowMemory,
+            halfPrecision: model.family.supportsHalfPrecision && settings.halfPrecision,
             count: settings.batchCount,
             // A model the queue is using will be in memory by then.
             isLoaded: app.isLoaded(model) || (app.queue.last ?? app.activeJob)?.model.id == model.id,

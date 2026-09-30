@@ -7,8 +7,8 @@ the app speaks to it; the Python engine the app used to ship, `Reference/turbo_w
 it too for the image families (see `docs/native-engine.md` for the why and the plan).
 
 ```
-Sources/turbo-engine/         the executable: `serve` (the worker), `verify` and
-                              `verify-tokenizers` (parity checks)
+Sources/turbo-engine/         the executable: `serve` (the worker), `verify`, `verify-tokenizers`
+                              and `compare` (parity checks), `bench` (the catalog's times and peaks)
 Sources/TurboEngineCore/      protocol, mflux checkpoint loading, PNG output, the families
   Tokenizer/                  the tokenizers, read from `tokenizer.json`: byte-level BPE (Qwen,
                               Ling) and SentencePiece-style BPE with byte fallback (Gemma 3)
@@ -84,6 +84,25 @@ are never co-resident); the other two keep everything loaded. Qwen-Image-Edit en
 with the picture, so at the start of each image rather than ahead for the queue, and caches the
 last few prompt–picture pairs; with *Save memory* it releases its text side the same way.
 
+Two things a request can ask for, both off the reference's path by design. `precision: "bf16"`
+(the app's *16-bit precision*) keeps the transformer's residual stream in the weights' precision
+where the reference promotes it to float32: Z-Image's, through its float32 timestep embedding
+(the S3-DiT then runs as it does for Ming-Image, whose config asks for that), and Qwen-Image's
+and its editor's, whose latents the reference creates in float32 and never casts (they start in
+bf16 instead; the guidance's rescaling stays in float32, and so does the decode). The other
+families run in 16 bits already. `preview: true` (the app's *Live preview*) makes the image
+families report the image as it forms: at some steps (every one of a short run, six or so of a
+long one, never the last) the clean image the model predicts, `latents − σ · velocity`, is decoded
+small (the latent grid averaged down to about 384 pixels on the longer side, through the family's
+own decoder in one piece; SenseNova's pixels directly) and written beside the output, whole or
+not at all, with a `preview` event; the file goes once the image is decoded.
+
+The Qwen/Ming VAE's mid block attends over every pixel of the latent frame with one head of 384
+channels, which MLX's fused attention does not take (its kernels stop at 256), so the scores would
+be materialized in full: 1 GB in float32 at 1024 × 1024, and their softmax as much again. They
+are computed a chunk of pixel rows at a time instead (`ChunkedAttention`, 256 MB of scores at
+most), the same math to rounding.
+
 ## Building
 
 Requires Xcode 26 (mlx-swift 0.32.2 asks for a Swift 6.3 toolchain) and a Mac with Apple silicon.
@@ -96,7 +115,7 @@ it in the bundle, `turbo-engine` in `Contents/MacOS` and the resource bundles it
 (mlx-swift's Metal library among them) in `Contents/Resources`, signed like the app and with
 `turbo-engine.entitlements`, which make it inherit the app's sandbox (a sandboxed app can start
 no other helper, and none from outside its bundle). Start the app: the engine status shows
-"turbo-engine 0.2" and every model runs on it. The engine is rebuilt only when `Engine/`
+"turbo-engine 0.4" and every model runs on it. The engine is rebuilt only when `Engine/`
 changed; when it fails to build, so does the app.
 
 For the checks below:
@@ -286,12 +305,36 @@ the way of, which the tokenizer avoids: Swift's `String` treats canonically equi
 matched by their bytes; and `JSONSerialization` drops a U+FEFF that opens a string, so
 `tokenizer.json` is read by a parser of its own (`TokenizerJSON`).
 
+## Timing the catalog
+
+`turbo-engine bench` runs the catalog's models found in the Hugging Face cache through the same
+`Engine` the app talks to, on fixed prompts, seeds and sizes, and prints the seconds per phase and
+the peak memory of each as a table (`build/bench/<date>/bench.md`, with `bench.json` beside it
+and the images and clips it made):
+
+```bash
+build/bin/turbo-engine bench                                  # the rows of docs/swift-engine-plan.md's tables
+build/bin/turbo-engine bench --only z-image --sizes 512,1024,2048 --save-memory on   # a memory sweep
+build/bin/turbo-engine bench --only z-image --only qwen-image --half                 # the 16-bit option
+```
+
+By default the requests are those of the Status tables in `docs/swift-engine-plan.md`, so a run
+compares with them; `--sizes` replaces the text-to-image rows with squares of those sides at each
+model's default steps, the sweep `TurboMLX/Models/MemoryEstimate.swift` is fitted on;
+`--save-memory on|off` sets Save memory for every row, `--repeat N` keeps the median of N runs
+(and the highest peak), `--hub` names another cache, `--out` another folder. A model that is not in
+the cache is skipped. The pictures the edits and upscales start from are drawn by the bench. It is
+what to run after an mlx-swift update, before the peaks in `MemoryEstimate.swift` are trusted again.
+
 ## Protocol
 
 Commands on stdin, one JSON object per line: `generate` (id, model, params), `load` (model),
-`cancel` (id), `unload`, `shutdown`. Events on stdout: `ready`, `phase`, `progress`, `done`
-(path, seed, size, seconds, peak_memory, timings per phase), `failed`, `cancelled`,
-`model_loaded`, `load_failed` (a `load` that did not), `unloaded`. Everything else goes to stderr, which the app shows as the engine log.
+`cancel` (id), `unload`, `shutdown`; `params` may carry `precision` ("bf16") and `preview`
+(true), described under Families. Events on stdout: `ready`, `phase`, `progress`, `preview` (id,
+step, path: a small PNG of the image as it forms, written again at each), `done` (path, seed, size,
+seconds, peak_memory, timings per phase), `failed`, `cancelled`, `model_loaded`, `load_failed` (a
+`load` that did not), `unloaded`. Everything else goes to stderr, which the app shows as the
+engine log.
 
 Every PNG and MP4 the engine writes carries IPTC's Digital Source Type in XMP (`Provenance.swift`):
 `trainedAlgorithmicMedia` for a result from a prompt, `compositeWithTrainedAlgorithmicMedia` for

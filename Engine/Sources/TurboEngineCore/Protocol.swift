@@ -46,6 +46,11 @@ public struct GenerationParams: Decodable {
     /// softened first (0–1).
     public let upscale: Double?
     public let softness: Double?
+    /// "bf16": the transformer's residual stream in 16 bits where the reference keeps float32
+    /// (`FamilyRequest.halfPrecision`). Absent, the reference's precision.
+    public let precision: String?
+    /// Show the image as it forms: a `preview` event, with a small PNG, at some steps.
+    public let preview: Bool?
 }
 
 public enum Wire {
@@ -66,9 +71,15 @@ public final class Emitter: @unchecked Sendable {
     private let lock = NSLock()
     private let out = FileHandle.standardOutput
     private let err = FileHandle.standardError
+    /// Set, it gets the events instead of stdout (`turbo-engine bench` collects them there).
+    public var sink: ((String, [String: Any]) -> Void)?
 
     /// `fields` values must be JSON-representable (String, Int, Double, Bool, [String: Any], [Any], NSNull).
     public func emit(_ event: String, _ fields: [String: Any] = [:]) {
+        if let sink {
+            sink(event, fields)
+            return
+        }
         var object = fields
         object["event"] = event
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.withoutEscapingSlashes]) else { return }

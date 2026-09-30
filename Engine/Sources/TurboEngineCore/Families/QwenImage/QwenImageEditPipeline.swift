@@ -100,7 +100,7 @@ public struct QwenEditPicture {
 /// follow the image's in every pass. The transformer, the schedule, the guidance and the decoder
 /// are Qwen-Image's. As there, the 7B encoder and the 20B transformer are never in memory together
 /// in low-RAM mode.
-public final class QwenImageEditModel: FamilyModel {
+public final class QwenImageEditModel: PreviewingFamilyModel {
     public let config: QwenImageConfig
     public let modelPath: URL
     public private(set) var bits: Int?
@@ -234,6 +234,7 @@ public final class QwenImageEditModel: FamilyModel {
         _ request: FamilyRequest,
         phase: (GenerationPhase) -> Void,
         progress: (Int, Int) -> Void,
+        preview: (Preview) -> Void,
         isCancelled: () -> Bool
     ) throws -> GeneratedImage {
         guard let path = request.imagePath else { throw GenerationError.referenceRequired }
@@ -260,24 +261,36 @@ public final class QwenImageEditModel: FamilyModel {
         let schedule = LinearSchedule(steps: request.steps, width: width, height: height, shift: config.shift)
         let guidance = Float(request.guidance)
         var latents = QwenImageModel.initialLatents(width: width, height: height, seed: request.seed)
+        // As in Qwen-Image: the 16-bit option starts the latents, and the picture's, in bf16.
+        var picture = referenceTokens
+        if request.halfPrecision {
+            latents = latents.asType(.bfloat16)
+            picture = picture.asType(.bfloat16)
+        }
         let imageTokens = latents.shape[1]
         for t in 0 ..< request.steps {
-            let input = concatenated([latents, referenceTokens], axis: 1)
-            var noise = transformer(latents: input, prompt: prompt, timestep: schedule.sigmas[t], grids: grids)[0..., 0 ..< imageTokens]
+            let sigma = schedule.sigmas[t]
+            let input = concatenated([latents, picture], axis: 1)
+            var noise = transformer(latents: input, prompt: prompt, timestep: sigma, grids: grids)[0..., 0 ..< imageTokens]
             // At guidance 1 the unconditional pass would cancel out exactly: skip it.
             if guidance > 1 {
-                let negativeNoise = transformer(latents: input, prompt: negative, timestep: schedule.sigmas[t], grids: grids)[0..., 0 ..< imageTokens]
+                let negativeNoise = transformer(latents: input, prompt: negative, timestep: sigma, grids: grids)[0..., 0 ..< imageTokens]
                 noise = QwenImageModel.guidedNoise(noise, negative: negativeNoise, guidance: guidance)
             }
+            let glimpse = LatentPreview.shows(step: t + 1, of: request.steps)
+                ? LatentPreview.predicted(latents: latents, noise: noise, sigma: sigma) : nil
             latents = schedule.step(latents: latents, noise: noise, index: t)
             eval(latents)
             progress(t + 1, request.steps)
+            if let glimpse {
+                preview(Preview(pixels: QwenImageModel.previewPixels(latents: glimpse, latentHeight: height / 16, latentWidth: width / 16, vae: vae), step: t + 1))
+            }
             if isCancelled() { throw GenerationError.cancelled }
         }
         imageSideUsed = true
 
         phase(.decoding)
-        let pixels = try QwenImageModel.decode(latents: latents, latentHeight: height / 16, latentWidth: width / 16,
+        let pixels = try QwenImageModel.decode(latents: latents.asType(.float32), latentHeight: height / 16, latentWidth: width / 16,
                                                vae: vae, tiled: lowRam, isCancelled: isCancelled)
         eval(pixels)
         return GeneratedImage(pixels: pixels)

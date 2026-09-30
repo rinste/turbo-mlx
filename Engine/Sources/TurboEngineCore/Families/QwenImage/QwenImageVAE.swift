@@ -109,9 +109,9 @@ final class QwenAttentionBlock3D: Module {
         let parts = qkv.split(parts: 3, axis: -1)
         // Computed as mflux does: the scores in the activations' dtype, then a float32 scale. A
         // decode that starts in bf16 (Ming-Image's) goes on in float32 from here, as it does there.
-        let scale = 1 / sqrt(MLXArray(Float(channels)))
-        let scores = matmul(parts[0], parts[1].transposed(0, 2, 1)) * scale
-        let attended = matmul(softmax(scores, axis: -1), parts[2])
+        // A chunk of pixels at a time: the scores over all of them are 1 GB at 1024 × 1024, the
+        // reason a decode had to be tiled to fit (`ChunkedAttention`).
+        let attended = ChunkedAttention.attend(queries: parts[0], keys: parts[1], values: parts[2], scale: 1 / Float(channels).squareRoot())
         let merged = proj(attended.reshaped([batch * time, height, width, channels]))
         return merged.reshaped([batch, time, height, width, channels]) + x
     }

@@ -45,6 +45,18 @@ enum VerifyZImage {
         }
         ok = Verify.report("denoised latents", got: latents, want: try reference("final_latents")) && ok
 
+        // 4b. The same loop with the stream kept in the weights' precision (the app's "16-bit
+        // precision" option): shown, not decided, since the option moves the pixels by design.
+        model.transformer.setKeepsWeightsPrecision(true)
+        var half = try reference("latents")
+        for t in 0 ..< steps {
+            let predicted = model.transformer(latents: half, timestep: MLXArray([1 - schedule.sigmas[t]]), capFeats: prompt)
+            half = schedule.step(latents: half, noise: predicted, index: t)
+            eval(half)
+        }
+        model.transformer.setKeepsWeightsPrecision(false)
+        _ = Verify.report("16-bit stream loop", got: half, want: try reference("final_latents"), counts: false)
+
         // 5. VAE decode (the reference is channels first).
         let final = try reference("final_latents")
         let grid = final.reshaped([1, final.shape[0], final.shape[2], final.shape[3]]).transposed(0, 2, 3, 1)

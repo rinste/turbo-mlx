@@ -257,6 +257,13 @@ enum ImageLoader {
         return image
     }
 
+    /// The image at `url` as it is now, outside the cache: for a file written again and again (a
+    /// generation's preview).
+    static func fresh(_ url: URL) async -> NSImage? {
+        guard let cgImage = await decode(url, maxPixelSize: nil) else { return nil }
+        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+    }
+
     static func evict(_ url: URL) {
         // Keys embed the size, so drop the common ones.
         for size in [nil, 160, 320, 512] as [Int?] {

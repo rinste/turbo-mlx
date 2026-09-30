@@ -22,7 +22,8 @@ enum TimeEstimate {
         let work = Work(model: model, size: request.size, steps: request.steps, guidance: request.guidance, frames: request.frames,
                         reference: request.referenceImage)
         let byID = Dictionary(models.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let (rates, _) = rates(for: model, work: work, lowMemory: request.lowMemory, history: history, models: byID)
+        let (rates, _) = rates(for: model, work: work, lowMemory: request.lowMemory, halfPrecision: request.halfPrecision ?? false,
+                               history: history, models: byID)
         // An upscale's decode rate also covers the picture's encode, done before its step: the
         // decode itself is 72% of the two.
         let decodeShare = model.family.isUpscaler ? 0.72 : 1
@@ -32,11 +33,12 @@ enum TimeEstimate {
     /// `count` generations with these settings, after loading the model if it is not in memory.
     static func estimate(
         model: ModelDescriptor, size: PixelSize, steps: Int, guidance: Double, frames: Int?, reference: String?, lowMemory: Bool,
-        count: Int, isLoaded: Bool, history: [HistoryItem], models: [ModelDescriptor]
+        halfPrecision: Bool, count: Int, isLoaded: Bool, history: [HistoryItem], models: [ModelDescriptor]
     ) -> Result {
         let work = Work(model: model, size: size, steps: steps, guidance: guidance, frames: frames, reference: reference)
         let byID = Dictionary(models.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let (rates, isFromHistory) = rates(for: model, work: work, lowMemory: lowMemory, history: history, models: byID)
+        let (rates, isFromHistory) = rates(for: model, work: work, lowMemory: lowMemory, halfPrecision: halfPrecision,
+                                           history: history, models: byID)
         let seconds = (isLoaded ? 0 : rates.load) + Double(max(count, 1)) * rates.seconds(for: work)
         return Result(seconds: seconds, isFromHistory: isFromHistory)
     }
@@ -139,6 +141,7 @@ enum TimeEstimate {
         var fixed: Double
         var load: Double
         var lowMemory: Bool
+        var halfPrecision: Bool
 
         init?(_ item: HistoryItem, model: ModelDescriptor) {
             let request = item.request
@@ -152,18 +155,20 @@ enum TimeEstimate {
             load = timings["load"] ?? 0
             fixed = max(0, item.seconds - denoise - decode - load)
             lowMemory = request.lowMemory
+            halfPrecision = request.halfPrecision ?? false
         }
     }
 
     private static func rates(
-        for model: ModelDescriptor, work: Work, lowMemory: Bool, history: [HistoryItem], models: [String: ModelDescriptor]
+        for model: ModelDescriptor, work: Work, lowMemory: Bool, halfPrecision: Bool, history: [HistoryItem], models: [String: ModelDescriptor]
     ) -> (Rates, Bool) {
         let reference = reference(model, cfg: work.cfg)
-        // Recent generations with the same model, preferably with the same CFG and memory saving,
-        // and the five closest in size: small images use the GPU less well than large ones.
+        // Recent generations with the same model, preferably with the same CFG, memory saving and
+        // precision, and the five closest in size: small images use the GPU less well than large ones.
         var samples: [Sample] = Array(history.lazy.filter { $0.modelID == model.id }.compactMap { Sample($0, model: model) }.prefix(20))
         if samples.contains(where: { $0.work.cfg == work.cfg }) { samples = samples.filter { $0.work.cfg == work.cfg } }
         if samples.contains(where: { $0.lowMemory == lowMemory }) { samples = samples.filter { $0.lowMemory == lowMemory } }
+        if samples.contains(where: { $0.halfPrecision == halfPrecision }) { samples = samples.filter { $0.halfPrecision == halfPrecision } }
         samples = Array(samples.sorted { abs(log($0.work.denoise / work.denoise)) < abs(log($1.work.denoise / work.denoise)) }.prefix(5))
         if !samples.isEmpty {
             let rates = Rates(

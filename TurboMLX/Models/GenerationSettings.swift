@@ -133,6 +133,12 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     /// which gives smoother results from a noisy or over-sharpened picture.
     var upscale = 2.0
     var softness = 0.0
+    /// The transformer's activations in 16 bits where the reference keeps 32 (Z-Image, Qwen-Image
+    /// and its editor; the other families run in 16 bits already): faster, slightly different
+    /// fine detail. Off, the image is the reference's.
+    var halfPrecision = false
+    /// The image shown as it forms, every few steps, while it is generated.
+    var livePreview = true
 
     var size: PixelSize {
         usesCustomSize
@@ -184,7 +190,8 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case blocks, aspect, resolution, usesCustomSize, customWidth, customHeight, steps, guidance,
              randomSeed, seed, batchCount, transparentBackground, lowMemory,
-             videoResolution, videoSeconds, videoFrameRate, videoAutoDuration, referenceImage, upscale, softness
+             videoResolution, videoSeconds, videoFrameRate, videoAutoDuration, referenceImage, upscale, softness,
+             halfPrecision, livePreview
     }
 
     /// Settings saved before the prompt had blocks kept a single string.
@@ -219,6 +226,8 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         referenceImage = try values.decodeIfPresent(String.self, forKey: .referenceImage)
         upscale = try values.decodeIfPresent(Double.self, forKey: .upscale) ?? upscale
         softness = try values.decodeIfPresent(Double.self, forKey: .softness) ?? softness
+        halfPrecision = try values.decodeIfPresent(Bool.self, forKey: .halfPrecision) ?? halfPrecision
+        livePreview = try values.decodeIfPresent(Bool.self, forKey: .livePreview) ?? livePreview
     }
 
     /// Seeds for the next batch: consecutive from the fixed seed, or fresh random ones.
@@ -269,6 +278,9 @@ nonisolated struct GenerationRequest: Codable, Hashable, Sendable {
     /// Upscalers only: the factor and the softening (`GenerationSettings`).
     var upscale: Double?
     var softness: Double?
+    /// The 16-bit precision option (`GenerationSettings.halfPrecision`), for the families it
+    /// applies to; nil for the others, and in items from before it.
+    var halfPrecision: Bool?
 
     /// What to show for it: the prompt, or for an upscale, what it did ("Upscaled 2×").
     var caption: String {

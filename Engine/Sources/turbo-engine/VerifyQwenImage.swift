@@ -55,6 +55,17 @@ enum VerifyQwenImage {
         }
         ok = Verify.report("denoised latents", got: latents, want: try reference("final_latents")) && ok
 
+        // 4b. The guided loop with the latents, and so the stream, started in bf16 (the app's
+        // "16-bit precision" option): shown, not decided, since the option moves the pixels by design.
+        var half = try reference("latents").asType(.bfloat16)
+        for t in 0 ..< steps {
+            let positive = transformer(latents: half, prompt: embeds, timestep: schedule.sigmas[t], latentHeight: latentHeight, latentWidth: latentWidth)
+            let unconditional = transformer(latents: half, prompt: negativeEmbeds, timestep: schedule.sigmas[t], latentHeight: latentHeight, latentWidth: latentWidth)
+            half = schedule.step(latents: half, noise: QwenImageModel.guidedNoise(positive, negative: unconditional, guidance: guidance), index: t)
+            eval(half)
+        }
+        _ = Verify.report("16-bit stream loop", got: half, want: try reference("final_latents"), counts: false)
+
         // 5. VAE decode (the reference is channels first).
         let grid = QwenImageModel.unpack(try reference("final_latents"), latentHeight: latentHeight, latentWidth: latentWidth)
         let decoded = vae.decode(grid)

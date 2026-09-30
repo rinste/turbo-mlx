@@ -12,6 +12,48 @@ code side of Phase 2 (the sealed build) are in the tree, and every result is mar
 generative AI; the rest has not started. 30 September: SenseNova-U1.5 came in as an eighth family,
 the first whose reference is PyTorch rather than MLX (the last item below); no phase moved.
 
+Later on 30 September, four items came in together, written without a Mac at hand (as the native
+engine's first phase was) and therefore compiled and measured by nobody yet: Phase 0's
+`turbo-engine bench`; Phase 1's 1d, in another form; the bf16 stream of Phase 3, as an option off
+by default; and Phase 3's live preview. What each needs from the next session at a Mac is under
+it, after the earlier status:
+
+- **`bench` (Phase 0).** `turbo-engine bench` runs the catalog's models found in the hub cache on
+  the rows of the tables below (or `--sizes` for the memory sweep, `--half` for the 16-bit option,
+  `--repeat` for medians), through the same `Engine` as the app, and writes the seconds per phase
+  and the peaks as Markdown and JSON (Engine/README.md, "Timing the catalog"). To do: a first
+  table, and a check that its numbers agree with the ones below.
+- **1d, the VAE mid block.** Not the fused kernel: MLX 0.32.2's takes head dimensions up to 256
+  and the mid block's is 384 (512 in FLUX.1's and FLUX.2's), so `scaledDotProductAttention` falls
+  back there to the full score matrix, which the Z-Image and FLUX.2 decoders already pay without
+  saying so. The Qwen/Ming block now attends a chunk of pixel rows at a time (`ChunkedAttention`:
+  at most 256 MB of scores instead of 1 GB, and their softmax likewise, at 1024²), the same math
+  to rounding. To check: `verify --all` (the Qwen-Image and Ming decode stages), and a Qwen-Image
+  or Ming peak at 1024² without Save memory, which should drop by about 1.5 GB; the Z-Image and
+  FLUX.2 decoders can take the same helper once that is seen.
+- **The bf16 stream (Phase 3), as an option.** `precision: "bf16"` in a request, *16-bit
+  precision* under Advanced in the app (Z-Image, Qwen-Image, Qwen-Image Edit; off by default;
+  kept with the image's settings and in its PNG): Z-Image's S3-DiT runs as Ming's does (the
+  timestep embedding, latents and captions in the weights' precision, the rotation cast back),
+  Qwen-Image's latents start in bf16 and the transformer follows them, the guidance's rescaling
+  and the decode staying in float32. `verify` shows the loops in that mode next to the
+  reference's, without deciding on them. To measure: the Z-Image and Qwen-Image rows with
+  `bench --half` against the table (issue 761's 1.4× on the loop is the expectation), and the
+  PSNR of the same prompt and seed in both modes with `compare`, with a look at small text,
+  before the option is offered as anything but an option.
+- **Live preview (Phase 3).** `preview: true` in a request, *Live preview* under Advanced (on by
+  default): every few steps the clean image the model predicts is decoded small through the
+  family's own decoder and shown in the job's frame (Engine/README.md, "Families"). Its cost is
+  to be measured with the bench: a few percent is the expectation, Klein's four steps paying
+  three small decodes.
+- **Qwen-Image Lightning (Phase 3): not started.** It needs a checkpoint that does not exist yet:
+  the 4-step LoRA merged into the 2512 weights and saved in mflux's format in 4 bits (once with
+  mflux on a Mac, or from Phase 6's converter), then a catalog entry checked at its commit as the
+  others are. Two things wait with it in the engine: the schedule, since the LoRA's authors run a
+  fixed shift of 3 (`base_shift = max_shift = ln 3`) where the catalog's Qwen-Image runs mflux's
+  dynamic one (the same at 1024², not at other sizes: a `Shift` of its own in `QwenImageConfig`),
+  and guidance fixed at 1, which the engine already takes as "no unconditional pass".
+
 - **Phase 1, what is left, measured first.** The RoPE work (1a, 1b's rotation) has an upper
   bound: an engine whose rotation does nothing (wrong images, right timing) runs Klein's steps
   2.5 % faster (7.3 against 7.5 s at 512², 24.9 against 25.5 s at 1024²), and the tables rebuilt
@@ -301,12 +343,14 @@ In order of what it is worth.
    multiplications. Today it also goes through core 0.31's slow path. A still-image decoder
    built with Conv2d (weights sliced at load time) is exact and cheaper: the decode is worth
    6.7 s/MP on Qwen-Image and 3.1 s/MP on Ming (`TimeEstimate.swift`), more at 1536–2048.
-6. **Explicit attention in the Qwen/Ming VAE mid block** (`QwenImageVAE.swift`, lines 83–105):
-   `matmul` + `softmax` over every pixel of the latent frame. At 1024² (128 × 128 tokens) the
+6. **Explicit attention in the Qwen/Ming VAE mid block** (`QwenImageVAE.swift`, lines 83–105).
+   *Done on 30 September, as chunked attention (Status): the fused kernel does not take a head
+   dimension of 384.* `matmul` + `softmax` over every pixel of the latent frame. At 1024² (128 × 128 tokens) the
    score matrix is 16384² × 4 bytes = 1 GB in float32 per frame, the reason *Save memory* has
    to tile. `MLXFast.scaledDotProductAttention` never materializes it and is faster; mflux
    runs the explicit version, so parity has to be rechecked (only the rounding differs).
-7. **Float32 residual stream in Z-Image and Qwen-Image.** Faithful to mflux (`S3DiT.swift`,
+7. **Float32 residual stream in Z-Image and Qwen-Image.** *An option since 30 September, off by
+   default (Status).* Faithful to mflux (`S3DiT.swift`,
    `keepsWeightsPrecision = false`; `QwenImagePipeline.initialLatents` in float32; the comment
    at the top of `QwenImageTransformer.swift`). mflux issue 761 measures 1.4× on the loop in
    bf16, and on M5 float32 bypasses the neural accelerators. It is the single largest lever the
@@ -471,7 +515,8 @@ hand to measure.
   the table of §1.4. The cheapest item with the most likely return (decoders, M5). *Done (29
   September): the results are under Status.*
 - `turbo-engine bench`: the catalog × 3 sizes × fixed prompts and seeds, seconds per phase and
-  peak, in a table in `docs/`. The performance document has asked for it since September.
+  peak, in a table in `docs/`. The performance document has asked for it since September. *Done
+  (30 September): the tool, `Engine/Sources/turbo-engine/Bench.swift`; its first table is not.*
 - One Metal System Trace (Instruments) per family: the top kernels and the gaps between them
   decide Phase 1.
 
@@ -482,7 +527,8 @@ Gate: `verify` green on every family; a before/after table.
 a. RoPE tables per shape, computed once per generation (Klein, Qwen-Image, LTX).
 b. A fused RoPE rotation or `compile` of the step (Klein, Z-Image); measured on M1/M2 base too.
 c. The Qwen/Ming single-frame decoder with Conv2d (exact). *Done (29 September), SeedVR2's too.*
-d. Fused SDPA in the VAE mid block.
+d. Fused SDPA in the VAE mid block. *Done (30 September) as chunked attention: the fused kernel
+   takes head dimensions up to 256, the mid block's is 384 (Status).*
 e. GQA without `repeated` in the text encoders.
 f. A wired limit for the length of the generation + predicted peak and refusal. *Done (29 September).*
 g. `asyncEval` on the next step (measure; keep only if it shows).
@@ -504,7 +550,8 @@ beta build and the submission are not.*
 ### Phase 3 — Speed that changes the pixels, as options (1–2 weeks)
 
 - A bf16 stream for Z-Image and Qwen-Image: ~1.4× on the loop, more on M5; a "Fast" option or
-  the default after a comparison on text-heavy prompts.
+  the default after a comparison on text-heavy prompts. *In the code (30 September) as the
+  16-bit precision option, off by default; the comparison is not done (Status).*
 - Qwen-Image 2512 Lightning (4 steps, no CFG) as a catalog entry of its own: ~10× on the
   slowest model (the engine already skips the unconditional pass at guidance 1). It needs a
   pre-merged checkpoint: from Phase 6, or once with mflux.
@@ -512,7 +559,8 @@ beta build and the submission are not.*
   models).
 - Live preview: a linear latents → RGB projection every N steps, a `preview` event with a small
   PNG on the protocol, shown by the app; stopping a wrong image at step 2 of 9 is the largest
-  gain for whoever iterates.
+  gain for whoever iterates. *Done (30 September), through the family's own decoder on the
+  pooled latents rather than a projection (Status).*
 
 Gate: PSNR + a visual review on text-heavy prompts; the options that change the model are
 catalog entries, not replacements.

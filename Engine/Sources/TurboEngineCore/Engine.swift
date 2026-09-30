@@ -4,7 +4,7 @@ import MLX
 /// The worker behind the JSON protocol: keeps one model loaded, generates images with phases,
 /// progress and timings, and answers `load`, `cancel` and `unload` like `turbo_worker.py`.
 public final class Engine {
-    public static let version = "0.3"
+    public static let version = "0.4"
     public static let mlxSwiftVersion = "0.32.2"
     /// Families this engine implements, as the app names them.
     public static var families: [String] { FamilyLoader.families }
@@ -111,7 +111,8 @@ public final class Engine {
                 prompt: params.prompt, seed: params.seed, width: params.width, height: params.height,
                 steps: params.steps, guidance: params.guidance, flattenAlpha: params.flattenAlpha ?? false,
                 frames: params.frames, fps: params.fps, imagePath: params.image,
-                upscale: params.upscale, softness: params.softness
+                upscale: params.upscale, softness: params.softness,
+                halfPrecision: params.precision == "bf16"
             )
             if let video = model as? VideoFamilyModel {
                 var request = request
@@ -119,31 +120,42 @@ public final class Engine {
                 try generateVideo(video, request: request, id: id, spec: spec, params: params, started: started)
                 return
             }
-            let image = try model.generate(
-                request,
-                phase: { [self] phase in
-                    switch phase {
-                    case .denoising:
-                        mark("denoise_start")
-                        emitter.emit("phase", ["id": id, "phase": "denoising", "total": params.steps])
-                    case .decoding:
-                        mark("denoise_end")
-                        emitter.emit("phase", ["id": id, "phase": "decoding"])
-                    default:
-                        break
-                    }
-                },
-                progress: { [self] step, total in
-                    emitter.emit("progress", ["id": id, "step": step, "total": total])
-                },
-                isCancelled: { [self] in isCancelled(id) }
-            )
+            let phaseChanged: (GenerationPhase) -> Void = { [self] phase in
+                switch phase {
+                case .denoising:
+                    mark("denoise_start")
+                    emitter.emit("phase", ["id": id, "phase": "denoising", "total": params.steps])
+                case .decoding:
+                    mark("denoise_end")
+                    emitter.emit("phase", ["id": id, "phase": "decoding"])
+                default:
+                    break
+                }
+            }
+            let progressed: (Int, Int) -> Void = { [self] step, total in
+                emitter.emit("progress", ["id": id, "step": step, "total": total])
+            }
+            let cancelled: () -> Bool = { [self] in isCancelled(id) }
+            let output = URL(fileURLWithPath: params.output)
+            let source = Provenance.sourceType(input: params.image.map { URL(fileURLWithPath: $0) })
+            let image: GeneratedImage
+            if params.preview == true, let previewing = model as? PreviewingFamilyModel {
+                // The image as it forms: a small PNG beside the output, written again at each
+                // preview for the app to read, and gone once the image is decoded.
+                let previewURL = Self.previewURL(for: output)
+                defer { try? FileManager.default.removeItem(at: previewURL) }
+                image = try previewing.generate(
+                    request, phase: phaseChanged, progress: progressed,
+                    preview: { [self] preview in writePreview(preview, to: previewURL, id: id, source: source) },
+                    isCancelled: cancelled
+                )
+            } else {
+                image = try model.generate(request, phase: phaseChanged, progress: progressed, isCancelled: cancelled)
+            }
             mark("decode_end")
 
             emitter.emit("phase", ["id": id, "phase": "saving"])
-            let output = URL(fileURLWithPath: params.output)
-            let source = Provenance.sourceType(input: params.image.map { URL(fileURLWithPath: $0) })
-            try ImageOutput.writePNG(image.pixels, to: output, source: source, metadata: [
+            var metadata: [String: Any] = [
                 "engine": "turbo-engine \(Self.version)",
                 "model": spec.name ?? spec.path,
                 "prompt": params.prompt,
@@ -152,7 +164,9 @@ public final class Engine {
                 "guidance": params.guidance,
                 "width": image.width,
                 "height": image.height,
-            ])
+            ]
+            if request.halfPrecision { metadata["precision"] = "bf16" }
+            try ImageOutput.writePNG(image.pixels, to: output, source: source, metadata: metadata)
             mark("save_end")
 
             let timings = self.timings()
@@ -259,6 +273,28 @@ public final class Engine {
             "peak_memory": Memory.peakMemory,
             "timings": timings,
         ])
+    }
+
+    // MARK: Previews
+
+    /// Where a generation's previews go: the output's name with `.preview` before its extension.
+    public static func previewURL(for output: URL) -> URL {
+        output.deletingPathExtension().appendingPathExtension("preview").appendingPathExtension(output.pathExtension)
+    }
+
+    /// Writes a preview where the app looks for it, whole or not at all (written beside it, then
+    /// renamed over the last one), and tells the app. A preview that cannot be written is only logged.
+    private func writePreview(_ preview: Preview, to url: URL, id: String, source: Provenance.SourceType) {
+        let staging = url.appendingPathExtension("tmp")
+        do {
+            eval(preview.pixels)
+            try ImageOutput.writePNG(preview.pixels, to: staging, source: source, metadata: ["preview": preview.step])
+            guard rename(staging.path, url.path) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            emitter.emit("preview", ["id": id, "step": preview.step, "path": url.path])
+        } catch {
+            try? FileManager.default.removeItem(at: staging)
+            emitter.log("[turbo] no preview at step \(preview.step): \(error.localizedDescription)")
+        }
     }
 
     // MARK: Timings
