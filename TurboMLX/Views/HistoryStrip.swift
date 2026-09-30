@@ -2,15 +2,20 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Film strip of past images and clips, by date (the newest on the right) or in the order the user
-/// dragged them into, then the running and queued jobs and a "+" that sets up the next one. A click
-/// shows an item or a job and puts its settings on the left.
+/// dragged them into, then the running and queued jobs; a "+" that sets up the next one stays at its
+/// right end, however far the strip is scrolled. A click shows an item or a job and puts its settings
+/// on the left.
 struct HistoryStrip: View {
     @Environment(AppModel.self) private var app
     @State private var confirmsClear = false
     /// At the end, where the newest are, until the user scrolls away.
     @State private var position = ScrollPosition(edge: .trailing)
+    /// What moves the "+" in line with the thumbnails: a scroll bar that is always shown takes room
+    /// under the row, which then centers them in less than their height and padding, a little higher.
+    @State private var rowOffset: CGFloat = 0
 
     private let thumbnailHeight: CGFloat = 92
+    private let rowPadding: CGFloat = 10
 
     var body: some View {
         @Bindable var app = app
@@ -56,43 +61,61 @@ struct HistoryStrip: View {
             .padding(.horizontal, 14)
             .padding(.top, 8)
 
-            ScrollViewReader { proxy in
-                ScrollView(.horizontal) {
-                    LazyHStack(spacing: 8) {
-                        ForEach(app.arrangedHistory) { item in
-                            HistoryThumbnail(item: item, height: thumbnailHeight, isSelected: app.isSelected(item))
-                                .id(item.id)
+            let isEmpty = app.history.items.isEmpty && app.pendingJobs.isEmpty
+            // The "+" outside the scroll view, so it is always there: back to the next generation
+            // from anywhere in the history in one click, the strip staying where it was scrolled.
+            HStack(alignment: .top, spacing: 8) {
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal) {
+                        LazyHStack(spacing: 8) {
+                            ForEach(app.arrangedHistory) { item in
+                                HistoryThumbnail(item: item, height: thumbnailHeight, isSelected: app.isSelected(item))
+                                    .id(item.id)
+                            }
+                            // The running job next to the images it will join, then the queue.
+                            ForEach(app.pendingJobs) { job in
+                                JobThumbnail(job: job, height: thumbnailHeight, isSelected: app.isSelected(job))
+                                    .id(job.id)
+                            }
+                            if isEmpty {
+                                Text("Generated images will appear here.")
+                                    .font(.callout)
+                                    .foregroundStyle(.tertiary)
+                                    .frame(height: thumbnailHeight)
+                            }
                         }
-                        // The running job next to the images it will join, then the queue.
-                        ForEach(app.pendingJobs) { job in
-                            JobThumbnail(job: job, height: thumbnailHeight, isSelected: app.isSelected(job))
-                                .id(job.id)
-                        }
-                        if app.history.items.isEmpty && app.pendingJobs.isEmpty {
-                            Text("Generated images will appear here.")
-                                .font(.callout)
-                                .foregroundStyle(.tertiary)
-                                .frame(height: thumbnailHeight)
-                        } else {
-                            NewTile(height: thumbnailHeight)
+                        .padding(.leading, 14)
+                        .padding(.trailing, isEmpty ? 14 : 0)
+                        .padding(.vertical, rowPadding)
+                        // Only the vertical, which scrolling leaves alone.
+                        .onGeometryChange(for: CGFloat.self) { proxy in
+                            let row = proxy.frame(in: .named("HistoryStrip"))
+                            return row.minY + (row.height - thumbnailHeight) / 2 - rowPadding
+                        } action: {
+                            rowOffset = $0
                         }
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
+                    .scrollIndicators(.automatic)
+                    .scrollPosition($position)
+                    .onChange(of: app.displayedItem?.id ?? app.displayedJob?.id) { _, id in
+                        guard let id else { return }
+                        withAnimation(.snappy) { proxy.scrollTo(id, anchor: .center) }
+                    }
+                    // A new job: back to the end, where it is. Not after a deletion, which leaves the
+                    // strip where it was.
+                    .onChange(of: app.history.items.count + app.pendingJobs.count) { old, new in
+                        guard new > old else { return }
+                        withAnimation(.snappy) { position.scrollTo(edge: .trailing) }
+                    }
                 }
-                .scrollIndicators(.automatic)
-                .scrollPosition($position)
-                .onChange(of: app.displayedItem?.id ?? app.displayedJob?.id) { _, id in
-                    guard let id else { return }
-                    withAnimation(.snappy) { proxy.scrollTo(id, anchor: .center) }
-                }
-                // A new job: back to the end, where it is. Not after a deletion, which leaves the
-                // strip where it was.
-                .onChange(of: app.history.items.count + app.pendingJobs.count) { old, new in
-                    guard new > old else { return }
-                    withAnimation(.snappy) { position.scrollTo(edge: .trailing) }
+                if !isEmpty {
+                    NewTile(height: thumbnailHeight)
+                        .padding(.trailing, 14)
+                        .padding(.vertical, rowPadding)
+                        .offset(y: rowOffset)
                 }
             }
+            .coordinateSpace(.named("HistoryStrip"))
         }
         .frame(height: thumbnailHeight + 48)
         .background(.background)
@@ -109,8 +132,8 @@ struct HistoryStrip: View {
     }
 }
 
-/// After the last generation: the next one, set up with its settings on the left and its frame on
-/// the right, for Generate to start.
+/// At the strip's right end: the next generation, set up with its settings on the left and its frame
+/// on the right, for Generate to start.
 private struct NewTile: View {
     @Environment(AppModel.self) private var app
     @Environment(\.undoManager) private var undoManager

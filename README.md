@@ -35,7 +35,7 @@ app downloads it, and that is all the setup there is.
   generation with its model, progress and time left (for a clip too, counted by its steps' expected
   time), and the history: by date, the oldest on the left and the newest on the right, or in your
   own order (drag an image or clip where you want it; the menu next to *History* switches between
-  the two, and new ones join the end), then the queue and a *+*, the draft of the next generation: its settings on the left (the last generation's, the first
+  the two, and new ones join the end), then the queue; a *+*, always at the right end of the strip however far it is scrolled, is the draft of the next generation: its settings on the left (the last generation's, the first
   time), its frame on the right, for Generate to start. What is changed there stays, even across
   launches, while you look through the history. A click on an image or clip, or on a generation
   running or waiting in the queue (or ← →, ⌘[ ⌘]), shows it and puts its prompt, in its blocks, its
