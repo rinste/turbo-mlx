@@ -32,6 +32,12 @@ until it is done. To free the space again, use *Move to Trash…* in the ⋯ men
 **You need** a Mac with Apple silicon, macOS 15 or later, at least 16 GB of memory (the bigger
 models want more, see the table) and room on the disk for the models you pick.
 
+## See it in action
+
+[![Watch the video on YouTube: Creative Local MLX AI Image & Video Models for macOS](https://img.youtube.com/vi/qjuIjDraq10/maxresdefault.jpg)](https://www.youtube.com/watch?v=qjuIjDraq10)
+
+*Click the picture to watch the video on YouTube.*
+
 ## Using the app
 
 ### On the left: what to make
