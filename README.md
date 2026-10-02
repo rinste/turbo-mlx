@@ -90,10 +90,10 @@ models want more, see the table) and room on the disk for the models you pick.
 
 ## Models
 
-*Memory* is how much memory your Mac needs for the model; *Download* is the space it takes on the
-disk.
+*Minimum RAM* is the memory your Mac needs for the model; *Download* is the space it takes on
+the disk.
 
-| Model | Memory | Download | Good for |
+| Model | Minimum RAM | Download | Good for |
 |---|---|---|---|
 | [Ming-Image 0.1 Design](https://huggingface.co/joeynyc/Ming-Image-0.1-Design-mflux-q8-te5) | 24 GB | 19.3 GB | graphic design and typography, PNG with a transparent background · 12 steps · MIT |
 | [Z-Image Turbo](https://huggingface.co/mflux-community/z-image-turbo-mflux-q4) | 16 GB | 5.9 GB | photorealism, text in the image · 4-bit · 9 steps · Apache 2.0 |
