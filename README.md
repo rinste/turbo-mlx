@@ -8,6 +8,10 @@ There is nothing else to install: no Terminal, no Python, no account. Pick a mod
 downloads it once, and you can start. Everything runs on the Mac's own graphics chip, so your
 prompts and pictures never leave it.
 
+[![Watch the video on YouTube: Creative Local MLX AI Image & Video Models for macOS](https://img.youtube.com/vi/qjuIjDraq10/maxresdefault.jpg)](https://www.youtube.com/watch?v=qjuIjDraq10)
+
+*Click the picture to watch the video on YouTube.*
+
 ![Turbo MLX: settings on the left, the image with its zoom controls and metadata on the right, the history below](docs/screenshot.webp)
 
 ## What you can do
@@ -31,12 +35,6 @@ until it is done. To free the space again, use *Move to Trash…* in the ⋯ men
 
 **You need** a Mac with Apple silicon, macOS 15 or later, at least 16 GB of memory (the bigger
 models want more, see the table) and room on the disk for the models you pick.
-
-## See it in action
-
-[![Watch the video on YouTube: Creative Local MLX AI Image & Video Models for macOS](https://img.youtube.com/vi/qjuIjDraq10/maxresdefault.jpg)](https://www.youtube.com/watch?v=qjuIjDraq10)
-
-*Click the picture to watch the video on YouTube.*
 
 ## Using the app
 
