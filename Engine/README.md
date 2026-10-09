@@ -225,7 +225,10 @@ every step's four passes on the reference's own inputs land within bfloat16's la
 0.2% of their scale), the guiders' combination of the reference's passes is bit for bit, and the
 whole guided stage from the reference's noise ends 3.6% apart (bfloat16 drift, which guidance
 amplifies). A 2 s 768 × 512 clip on the 2.5 4-bit pack took 663 s of denoising against 79 s fast,
-peaking at 30.9 GB both ways without Save memory.
+peaking at 30.9 GB both ways without Save memory (13 GB with it), and the reference's own run of
+the same request is the same clip: 27.8 dB per frame on average through H.264, the same loudness
+(a distilled clip lands at 32.6: thirty guided steps carry more bfloat16 drift, which guidance
+amplifies).
 
 The whole pipeline, same prompt and seed through the app's protocol, 768 × 512 × 49 frames with
 the 4-bit pack: the same clip as the reference (PSNR 29–35 dB per frame, 32.6 on average, through
