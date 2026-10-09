@@ -23,6 +23,8 @@ final class DownloadCenter {
     private(set) var failures: [String: String] = [:]
     /// Called on the main actor when a download ends, successfully or not (not when cancelled).
     var onFinish: ((ModelDescriptor) -> Void)?
+    /// The same for a model's Quality files (`startQuality`).
+    var onQualityFinish: ((ModelDescriptor) -> Void)?
 
     private var tasks: [String: Task<Void, Never>] = [:]
     private var samples: [String: (date: Date, bytes: Int64)] = [:]
@@ -143,37 +145,84 @@ final class DownloadCenter {
         throw Problem.notEnoughSpace(needed: needed, free: free)
     }
 
-    private func update(_ model: ModelDescriptor, total: Int64) {
-        guard var progress = active[model.id] else { return }
+    private func update(_ model: ModelDescriptor, total: Int64) { update(key: model.id, total: total) }
+    private func update(_ model: ModelDescriptor, bytes: Int64) { update(key: model.id, bytes: bytes) }
+    private func finished(_ model: ModelDescriptor) { finished(model, key: model.id) }
+
+    private func update(key: String, total: Int64) {
+        guard var progress = active[key] else { return }
         progress.total = total
-        active[model.id] = progress
+        active[key] = progress
     }
 
-    private func update(_ model: ModelDescriptor, bytes: Int64) {
-        guard var progress = active[model.id] else { return }
+    private func update(key: String, bytes: Int64) {
+        guard var progress = active[key] else { return }
         let now = Date()
-        if let previous = samples[model.id] {
+        if let previous = samples[key] {
             let elapsed = now.timeIntervalSince(previous.date)
             if elapsed >= 1 {
                 let instant = Double(bytes - previous.bytes) / elapsed
                 // Smooth the rate so the remaining time does not jump around.
                 progress.bytesPerSecond = progress.bytesPerSecond == 0 ? instant : progress.bytesPerSecond * 0.8 + instant * 0.2
-                samples[model.id] = (now, bytes)
+                samples[key] = (now, bytes)
             }
         } else {
-            samples[model.id] = (now, bytes)
+            samples[key] = (now, bytes)
         }
         progress.bytes = bytes
-        active[model.id] = progress
+        active[key] = progress
     }
 
-    private func finished(_ model: ModelDescriptor) {
+    private func finished(_ model: ModelDescriptor, key: String) {
         // A cancelled download was already removed.
-        guard tasks[model.id] != nil else { return }
-        tasks[model.id] = nil
-        active[model.id] = nil
-        samples[model.id] = nil
+        guard tasks[key] != nil else { return }
+        tasks[key] = nil
+        active[key] = nil
+        samples[key] = nil
         awake.isOn = !tasks.isEmpty
-        onFinish?(model)
+        if key == model.id { onFinish?(model) } else { onQualityFinish?(model) }
+    }
+
+    // MARK: Quality files
+
+    /// The key the Quality mode's files of a model download under, apart from the model's own.
+    static func qualityKey(_ model: ModelDescriptor) -> String { model.id + "#quality" }
+
+    func qualityProgress(_ model: ModelDescriptor) -> Progress? { active[Self.qualityKey(model)] }
+    func qualityFailure(_ model: ModelDescriptor) -> String? { failures[Self.qualityKey(model)] }
+
+    /// Downloads the files only the Quality mode needs (`ModelFamily.qualityFiles`) into the
+    /// installed model's snapshot, at the model's commit.
+    func startQuality(_ model: ModelDescriptor, locator: ModelLocator) {
+        let key = Self.qualityKey(model)
+        let files = model.family.qualityFiles
+        guard let repo = model.repo, tasks[key] == nil, !files.isEmpty else { return }
+        failures[key] = nil
+        active[key] = Progress(total: model.qualitySizeBytes ?? 0)
+        let hubCache = locator.hubCache
+        let downloader = HubDownloader(repo: repo, hubCache: hubCache, revision: model.revision ?? "main")
+        tasks[key] = Task { [weak self] in
+            do {
+                let listing = try await downloader.list(matching: files)
+                self?.update(key: key, total: listing.totalBytes)
+                try Self.checkSpace(for: downloader.bytesMissing(from: listing), in: hubCache)
+                _ = try await downloader.download(listing) { [weak self] bytes in
+                    Task { @MainActor [weak self] in self?.update(key: key, bytes: bytes) }
+                }
+            } catch {
+                if !Task.isCancelled { self?.failures[key] = error.localizedDescription }
+            }
+            self?.finished(model, key: key)
+        }
+        awake.isOn = true
+    }
+
+    func cancelQuality(_ model: ModelDescriptor) {
+        let key = Self.qualityKey(model)
+        guard let task = tasks.removeValue(forKey: key) else { return }
+        task.cancel()
+        active[key] = nil
+        samples[key] = nil
+        awake.isOn = !tasks.isEmpty
     }
 }

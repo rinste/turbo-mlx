@@ -141,3 +141,48 @@ extension LTXVideoModel {
         return waveform
     }
 }
+
+/// The full pipeline's stage 1 for `verify` (make_ltx_fixture.py --quality): one guided step's
+/// passes on the reference's own inputs, and the whole guided loop, with the dev transformer.
+extension LTXVideoModel {
+    /// The four passes' x0, keyed `<stream>_<pass>` (cond, uncond, perturbed, isolated).
+    public func guidedPasses(
+        video: MLXArray, audio: MLXArray, sigma: Double, text: (video: MLXArray, audio: MLXArray),
+        negative: (video: MLXArray, audio: MLXArray), guidance: Double, videoPositions: MLXArray, audioPositions: MLXArray,
+        keyframeTokens: Int
+    ) throws -> [String: MLXArray] {
+        let state = LTXLatentState(latent: video, clean: MLXArray.zeros(video.shape, dtype: video.dtype),
+                                   mask: MLXArray.ones([video.shape[0], video.shape[1], 1], dtype: .bfloat16), uniform: true)
+        let passes = try Self.guidedPasses(
+            transformer: try loadedTransformer(.dev), videoX: video, audioX: audio, sigma: sigma, video: state,
+            text: text, negative: negative, videoGuider: .video(cfg: guidance), audioGuider: .audio,
+            videoPositions: videoPositions, audioPositions: audioPositions, keyframeTokens: keyframeTokens
+        )
+        var outputs: [String: MLXArray] = ["video_cond": passes.cond.video, "audio_cond": passes.cond.audio]
+        for (label, pass) in [("uncond", passes.uncond), ("perturbed", passes.perturbed), ("isolated", passes.isolated)] {
+            if let pass {
+                outputs["video_\(label)"] = pass.video
+                outputs["audio_\(label)"] = pass.audio
+            }
+        }
+        return outputs
+    }
+
+    /// The guided loop from given (text-to-video) states.
+    public func guidedStageOne(
+        video: MLXArray, audio: MLXArray, sigmas: [Double], text: (video: MLXArray, audio: MLXArray),
+        negative: (video: MLXArray, audio: MLXArray), guidance: Double, videoPositions: MLXArray, audioPositions: MLXArray,
+        keyframeTokens: Int
+    ) throws -> (video: MLXArray, audio: MLXArray) {
+        func state(_ x: MLXArray) -> LTXLatentState {
+            LTXLatentState(latent: x, clean: MLXArray.zeros(x.shape, dtype: x.dtype),
+                           mask: MLXArray.ones([x.shape[0], x.shape[1], 1], dtype: .bfloat16), uniform: true)
+        }
+        return try guidedDenoise(
+            transformer: try loadedTransformer(.dev), video: state(video), audio: state(audio), sigmas: sigmas,
+            text: text, negative: negative, videoGuider: .video(cfg: guidance), audioGuider: .audio,
+            videoPositions: videoPositions, audioPositions: audioPositions, keyframeTokens: keyframeTokens,
+            onStep: {}, isCancelled: { false }
+        )
+    }
+}

@@ -42,20 +42,27 @@ final class LTXAttention: Module {
     }
 
     /// Self-attention without `context`, cross-attention with it. `rope` rotates the queries (and
-    /// the keys, unless `keyRope` is given); `mask` is additive.
+    /// the keys, unless `keyRope` is given); `mask` is additive. `valuesOnly`: STG's perturbation,
+    /// the attention replaced by the values (the reference's `out · 0 + v · 1`, the same numbers).
     func callAsFunction(
-        _ x: MLXArray, context: MLXArray? = nil, rope: LTXRope? = nil, keyRope: LTXRope? = nil, mask: MLXArray? = nil
+        _ x: MLXArray, context: MLXArray? = nil, rope: LTXRope? = nil, keyRope: LTXRope? = nil, mask: MLXArray? = nil,
+        valuesOnly: Bool = false
     ) -> MLXArray {
         let batch = x.shape[0]
         let source = context ?? x
         var q = qNorm(toQ(x)).reshaped([batch, -1, heads, headDim]).transposed(0, 2, 1, 3)
         var k = kNorm(toK(source)).reshaped([batch, -1, heads, headDim]).transposed(0, 2, 1, 3)
         let v = toV(source).reshaped([batch, -1, heads, headDim]).transposed(0, 2, 1, 3)
-        if let rope {
-            q = rope.apply(q)
-            k = (keyRope ?? rope).apply(k)
+        var out: MLXArray
+        if valuesOnly {
+            out = v
+        } else {
+            if let rope {
+                q = rope.apply(q)
+                k = (keyRope ?? rope).apply(k)
+            }
+            out = MLXFast.scaledDotProductAttention(queries: q, keys: k, values: v, scale: scale, mask: mask)
         }
-        var out = MLXFast.scaledDotProductAttention(queries: q, keys: k, values: v, scale: scale, mask: mask)
         let gate = 2 * sigmoid(toGateLogits(x))
         out = out * gate.transposed(0, 2, 1).expandedDimensions(axis: -1)
         return toOut(out.transposed(0, 2, 1, 3).reshaped([batch, -1, heads * headDim]))
@@ -205,9 +212,10 @@ final class LTXTransformerBlock: Module {
 
     private func norm(_ x: MLXArray) -> MLXArray { unweightedRMSNorm(x, eps: eps) }
 
-    /// One block over both streams (`BasicAVTransformerBlock.__call__`, without guidance
-    /// perturbations or attention masks, which the distilled pipeline does not use).
-    func callAsFunction(video: MLXArray, audio: MLXArray, context: LTXBlockContext) -> (video: MLXArray, audio: MLXArray) {
+    /// One block over both streams (`BasicAVTransformerBlock.__call__`, without attention masks,
+    /// which neither pipeline uses), with the guidance's perturbations when `context` has them.
+    func callAsFunction(video: MLXArray, audio: MLXArray, context: LTXBlockContext, index: Int) -> (video: MLXArray, audio: MLXArray) {
+        let perturbation = context.perturbation
         let vdim = video.shape[2]
         let adim = audio.shape[2]
         var video = video
@@ -223,8 +231,10 @@ final class LTXTransformerBlock: Module {
         let gateToAudio = (context.crossGateToAudio + crossAudioTable[4, 0...]).expandedDimensions(axis: 1)
 
         // 1–2. Self-attention.
-        video = video + attn1(norm(video) * (1 + v[1]) + v[0], rope: context.videoRope) * v[2]
-        audio = audio + audioAttn1(norm(audio) * (1 + a[1]) + a[0], rope: context.audioRope) * a[2]
+        video = video + attn1(norm(video) * (1 + v[1]) + v[0], rope: context.videoRope,
+                              valuesOnly: perturbation.skipsVideoSelfAttention.contains(index)) * v[2]
+        audio = audio + audioAttn1(norm(audio) * (1 + a[1]) + a[0], rope: context.audioRope,
+                                   valuesOnly: perturbation.skipsAudioSelfAttention.contains(index)) * a[2]
 
         // 3–4. Text cross-attention, the text modulated by the prompt tables.
         let vp = LTXModulation.shared(context.videoPrompt).unpack(table: promptScaleShiftTable, count: 2, dim: vdim)
@@ -234,19 +244,22 @@ final class LTXTransformerBlock: Module {
         let audioText = context.audioText * (1 + ap[1]) + ap[0]
         audio = audio + audioAttn2(norm(audio) * (1 + a[7]) + a[6], context: audioText) * a[8]
 
-        // 5–6. Audio ↔ video, both from the same normalized streams.
-        let videoNorm = norm(video)
-        let audioNorm = norm(audio)
-        let toVideo = audioToVideoAttn(
-            videoNorm * (1 + cv[0]) + cv[1], context: audioNorm * (1 + ca[0]) + ca[1],
-            rope: context.videoCrossRope, keyRope: context.audioCrossRope
-        ) * gateToVideo
-        video = video + toVideo
-        let toAudio = videoToAudioAttn(
-            audioNorm * (1 + ca[2]) + ca[3], context: videoNorm * (1 + cv[2]) + cv[3],
-            rope: context.audioCrossRope, keyRope: context.videoCrossRope
-        ) * gateToAudio
-        audio = audio + toAudio
+        // 5–6. Audio ↔ video, both from the same normalized streams; left out when the guidance
+        // isolates the modalities (the reference multiplies them by zero).
+        if !perturbation.isolatesModalities {
+            let videoNorm = norm(video)
+            let audioNorm = norm(audio)
+            let toVideo = audioToVideoAttn(
+                videoNorm * (1 + cv[0]) + cv[1], context: audioNorm * (1 + ca[0]) + ca[1],
+                rope: context.videoCrossRope, keyRope: context.audioCrossRope
+            ) * gateToVideo
+            video = video + toVideo
+            let toAudio = videoToAudioAttn(
+                audioNorm * (1 + ca[2]) + ca[3], context: videoNorm * (1 + cv[2]) + cv[3],
+                rope: context.audioCrossRope, keyRope: context.videoCrossRope
+            ) * gateToAudio
+            audio = audio + toAudio
+        }
 
         // 7–8. Feed forward.
         video = video + ff(norm(video) * (1 + v[4]) + v[3]) * v[5]
@@ -255,8 +268,20 @@ final class LTXTransformerBlock: Module {
     }
 }
 
+/// What a guided pass changes in the blocks (`PerturbationConfig`): STG's self-attentions turned
+/// into their values in some blocks, and the modality guidance's pass with the audio–video
+/// cross-attentions left out of every block.
+public struct LTXPerturbation {
+    var skipsVideoSelfAttention: Set<Int> = []
+    var skipsAudioSelfAttention: Set<Int> = []
+    var isolatesModalities = false
+
+    public static let none = LTXPerturbation()
+}
+
 /// What every block of one forward pass shares.
 struct LTXBlockContext {
+    var perturbation = LTXPerturbation.none
     var video: LTXModulation
     var audio: LTXModulation
     var crossVideo: LTXModulation
@@ -353,7 +378,7 @@ final class LTXTransformer: Module {
     func callAsFunction(
         video: MLXArray, audio: MLXArray, sigma: MLXArray, videoTimesteps: MLXArray?,
         videoText: MLXArray, audioText: MLXArray, videoPositions: MLXArray, audioPositions: MLXArray,
-        keyframeTokens: Int = 0
+        keyframeTokens: Int = 0, perturbation: LTXPerturbation = .none
     ) -> (video: MLXArray, audio: MLXArray) {
         let c = config
         var videoHidden = patchifyProj(video.asType(.bfloat16))
@@ -386,6 +411,7 @@ final class LTXTransformer: Module {
         let (audioParams, audioEmbeddedTimestep) = audioAdalnSingle(timestepEmbedding)
 
         let context = LTXBlockContext(
+            perturbation: perturbation,
             video: videoModulation,
             audio: .shared(audioParams),
             crossVideo: crossVideo,
@@ -409,7 +435,7 @@ final class LTXTransformer: Module {
         )
 
         for (index, block) in blocks.enumerated() {
-            (videoHidden, audioHidden) = block(video: videoHidden, audio: audioHidden, context: context)
+            (videoHidden, audioHidden) = block(video: videoHidden, audio: audioHidden, context: context, index: index)
             if evalEvery > 0, (index + 1) % evalEvery == 0 { eval(videoHidden, audioHidden) }
         }
 

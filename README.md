@@ -50,7 +50,10 @@ models want more, see the table) and room on the disk for the models you pick.
   drop a picture there from Finder or from the history. Image models change it as the prompt
   says; video models use it as the first frame of the clip. Qwen-Image Edit always needs one.
 - **Videos.** Choose the duration and the frame rate, or let LTX-2.5 pick the length the prompt
-  describes.
+  describes. *Fast* runs the distilled model (8 steps, a few minutes for 5 seconds); *Quality*
+  runs the full model with guidance and a *Negative Prompt* (30 steps of four passes each, about
+  ten times longer), often truer to the prompt and with fewer flaws. Quality downloads the full
+  model's transformer the first time (11 GB for the 4-bit models, 21 GB for the 8-bit one).
 - **Upscaling.** With the SeedVR2 upscaler there is no prompt: pick the picture, the scale and,
   for a noisy or over-sharpened picture, some *Softness*. *Upscale…*, in the menu of any image,
   sets it up for you.

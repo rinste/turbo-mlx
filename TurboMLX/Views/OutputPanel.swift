@@ -403,6 +403,10 @@ private struct ItemInfoBar: View {
                             MetadataChip(systemImage: "photo", text: "From an image",
                                          help: item.kind == .video ? "The clip started from a reference image" : "Made from a reference image")
                         }
+                        if item.request.quality == true {
+                            MetadataChip(systemImage: "sparkles", text: "Quality",
+                                         help: "The full model with guidance (CFG \(Format.guidance(item.request.guidance))) and a negative prompt")
+                        }
                         MetadataChip(systemImage: "stairs", text: "\(item.request.steps) steps")
                         if item.kind == .image {
                             MetadataChip(systemImage: "dial.medium", text: "CFG \(Format.guidance(item.request.guidance))")

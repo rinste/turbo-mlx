@@ -100,8 +100,13 @@ public final class Engine {
 
             emitter.emit("phase", ["id": id, "phase": "encoding"])
             mark("encode_start")
-            // A negative prompt only counts where guidance runs an unconditional pass.
-            let negativePrompt = params.guidance > 1 ? params.negativePrompt.flatMap { $0.isEmpty ? nil : $0 } : nil
+            // A negative prompt only counts where guidance runs an unconditional pass. LTX's full
+            // pipeline always runs one (its sound's guidance is fixed): the request's negative
+            // prompt, or the reference's own.
+            let givenNegative = params.negativePrompt.flatMap { $0.isEmpty ? nil : $0 }
+            let fullLTX = params.quality == true && model is LTXVideoModel
+            let negativePrompt = fullLTX ? givenNegative ?? LTXFullPipeline.defaultNegativePrompt
+                : params.guidance > 1 ? givenNegative : nil
             // This prompt and its negative, then the queued ones (their negatives among them),
             // encode now while the text encoder is resident.
             let current = [params.prompt] + (negativePrompt.map { [$0] } ?? [])
@@ -122,6 +127,7 @@ public final class Engine {
             if let video = model as? VideoFamilyModel {
                 var request = request
                 request.autoDuration = params.autoDuration ?? false
+                request.quality = params.quality ?? false
                 try generateVideo(video, request: request, id: id, spec: spec, params: params, started: started)
                 return
             }
@@ -266,6 +272,12 @@ public final class Engine {
             ]
             if let loras = (model as? LoRAAdaptable)?.loras.specs, !loras.isEmpty {
                 metadata["loras"] = loras.map { ["name": $0.name, "scale": $0.scale] as [String: Any] }
+            }
+            if request.quality {
+                metadata["quality"] = true
+                metadata["steps"] = request.steps
+                metadata["guidance"] = request.guidance
+                if let negative = params.negativePrompt, !negative.isEmpty { metadata["negative_prompt"] = negative }
             }
             try ImageOutput.writePNG(first, to: poster, source: source, metadata: metadata)
         }

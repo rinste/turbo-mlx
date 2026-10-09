@@ -29,6 +29,9 @@ final class AppModel {
         case missingReference
         case emptyPrompt
         case upscaleTooLarge
+        /// LTX's Quality mode needs its dev transformer, downloaded apart (`ModelFamily.qualityFiles`).
+        case qualityNotDownloaded
+        case qualityDownloading
         /// The LoRA chosen for the model is not in the library any more, or not for this model.
         case loraMissing(String)
         case loraMismatch(String, base: String)
@@ -44,6 +47,8 @@ final class AppModel {
             case .missingReference: "Add the picture to edit."
             case .emptyPrompt: "Write a prompt."
             case .upscaleTooLarge: "Choose a smaller scale: at most 4096 × 4096 pixels."
+            case .qualityNotDownloaded: "Quality runs the full model: download its files once."
+            case .qualityDownloading: "Waiting for the Quality files to download."
             case .loraMissing(let name): "The LoRA \(name) is no longer among your LoRAs: add it again, or choose None."
             case .loraMismatch(let name, let base): "The LoRA \(name) is for \(base), not this model: choose another one, or None."
             case .notEnoughMemory(let needed, let remedy):
@@ -65,6 +70,10 @@ final class AppModel {
     /// Bytes each Hugging Face repository of the list (companions too) takes in the cache, partial
     /// downloads included: what moving a model to the Trash frees. Measured with `installed`.
     private(set) var bytesOnDisk: [String: Int64] = [:]
+    /// Installed models that also have the Quality mode's files (`ModelFamily.qualityFiles`).
+    private(set) var qualityInstalled: Set<String> = []
+    /// Model to generate with once its Quality files are downloaded.
+    @ObservationIgnored private var generateAfterQuality: String?
     let locator = ModelLocator()
     /// The hub cache the models are kept in (Settings → Models), as `ModelFolder` has it.
     private(set) var modelsFolder = ModelFolder.hubCache
@@ -79,11 +88,13 @@ final class AppModel {
             }
             guard selectedModelID != oldValue, let model = selectedModel,
                   let previous = models.first(where: { $0.id == oldValue }),
-                  previous.family != model.family || previous.defaultSteps != model.defaultSteps
+                  previous.family != model.family
+                    || previous.defaultSteps(quality: settings.fullPipeline(for: previous)) != model.defaultSteps(quality: settings.fullPipeline(for: model))
             else { return }
             // Steps and guidance mean different things across families: start from the new defaults.
-            settings.steps = model.defaultSteps
-            settings.guidance = model.defaultGuidance
+            let quality = settings.fullPipeline(for: model)
+            settings.steps = model.defaultSteps(quality: quality)
+            settings.guidance = model.defaultGuidance(quality: quality)
         }
     }
 
@@ -194,6 +205,7 @@ final class AppModel {
         backend.onEvent = { [weak self] in self?.handle($0) }
         backend.onCrash = { [weak self] in self?.backendCrashed($0) }
         downloads.onFinish = { [weak self] in self?.downloadFinished($0) }
+        downloads.onQualityFinish = { [weak self] in self?.qualityDownloadFinished($0) }
         refreshInstalled()
     }
 
@@ -262,6 +274,26 @@ final class AppModel {
         }
         installed = found
         bytesOnDisk = bytes
+        qualityInstalled = Set(found.compactMap { id, url in
+            guard let model = models.first(where: { $0.id == id }), !model.family.qualityFiles.isEmpty else { return nil }
+            return model.family.qualityFiles.allSatisfy { FileManager.default.fileExists(atPath: url.appending(path: $0).path) } ? id : nil
+        })
+    }
+
+    func hasQualityFiles(_ model: ModelDescriptor) -> Bool { qualityInstalled.contains(model.id) }
+
+    /// Downloads the Quality mode's files of the selected model, then generates with the current
+    /// prompt unless it is empty.
+    func downloadQuality(generating: Bool = true) {
+        guard let model = selectedModel else { return }
+        generateAfterQuality = generating && !settings.trimmedPrompt.isEmpty ? model.id : nil
+        downloads.startQuality(model, locator: locator)
+    }
+
+    func cancelQualityDownload(_ model: ModelDescriptor) {
+        if generateAfterQuality == model.id { generateAfterQuality = nil }
+        downloads.cancelQuality(model)
+        refreshInstalled()
     }
 
     /// Downloads the model (checking the disk has room for what is still missing first).
@@ -283,6 +315,18 @@ final class AppModel {
         downloads.cancel(model)
         // What arrived stays, to resume from or to move to the Trash.
         refreshInstalled()
+    }
+
+    private func qualityDownloadFinished(_ model: ModelDescriptor) {
+        refreshInstalled()
+        let generateNow = generateAfterQuality == model.id && hasQualityFiles(model)
+        generateAfterQuality = nil
+        if let failure = downloads.qualityFailure(model) {
+            alert = AppAlert(title: "Couldn’t download the Quality files of \(model.name)", message: failure, offersLog: true)
+        } else if generateNow, selectedModelID == model.id {
+            generate()
+        }
+        if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
     }
 
     private func downloadFinished(_ model: ModelDescriptor) {
@@ -418,6 +462,9 @@ final class AppModel {
         guard let model = selectedModel else { return .noModel }
         if downloads.isDownloading(model) { return .modelDownloading }
         if !isInstalled(model) { return .modelNotDownloaded }
+        if settings.fullPipeline(for: model), !hasQualityFiles(model) {
+            return downloads.qualityProgress(model) != nil ? .qualityDownloading : .qualityNotDownloaded
+        }
         if model.family.requiresReferenceImage, !hasReferenceImage { return .missingReference }
         if !model.family.isUpscaler, settings.trimmedPrompt.isEmpty { return .emptyPrompt }
         if model.family.isUpscaler, let size = settings.upscaledSize, size.megapixels > Upscale.maxMegapixels { return .upscaleTooLarge }
@@ -503,6 +550,7 @@ final class AppModel {
         preloadDeclined = false
         let isVideo = model.family.media == .video
         let upscales = model.family.isUpscaler
+        let quality = settings.fullPipeline(for: model)
         // A reference image whose file is gone (a history folder emptied by hand) is dropped.
         let reference = settings.referenceImage.flatMap { name in
             FileManager.default.fileExists(atPath: HistoryStore.referenceURL(name).path) ? name : nil
@@ -515,7 +563,7 @@ final class AppModel {
                 negativePrompt: settings.negativePrompt(for: model),
                 seed: seed,
                 size: settings.size(for: model.family),
-                steps: min(max(settings.steps, model.stepRange.lowerBound), model.stepRange.upperBound),
+                steps: min(max(settings.steps, model.stepRange(quality: quality).lowerBound), model.stepRange(quality: quality).upperBound),
                 guidance: upscales ? 1 : settings.guidance,
                 transparentBackground: settings.transparentBackground && model.family.producesAlpha,
                 lowMemory: settings.lowMemory,
@@ -526,7 +574,8 @@ final class AppModel {
                 upscale: upscales ? settings.upscale : nil,
                 softness: upscales ? settings.softness : nil,
                 halfPrecision: model.family.supportsHalfPrecision && settings.halfPrecision ? true : nil,
-                loras: settings.lora(for: model.family).map { [$0] }
+                loras: settings.lora(for: model.family).map { [$0] },
+                quality: quality ? true : nil
             )
             let output = isVideo ? history.newVideoURL(seed: seed) : history.newImageURL(seed: seed)
             let job = GenerationJob(model: model, request: request, outputURL: output)
@@ -837,8 +886,12 @@ final class AppModel {
             }
             // Only a generation that ran guidance on a model that takes a negative prompt says
             // which it had, none included; the others leave the field as it is.
-            if model?.supportsNegativePrompt == true, request.guidance > 1 {
+            if model?.supportsNegativePrompt(quality: request.quality == true) == true, request.guidance > 1 || request.quality == true {
                 updated.negativePrompt = request.negativePrompt ?? ""
+            }
+            // LTX: the mode the clip was made in.
+            if model?.family.isLTX == true {
+                updated.videoQuality = request.quality ?? false
             }
             // Sides in the family's multiple: SenseNova's 16:9 at 2048 is 2720 wide (32), not 2736
             // (16), and must not turn Custom size on, which locks the resolution.

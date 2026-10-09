@@ -234,6 +234,76 @@ enum VerifyLTX {
         ok = Verify.report("audio decode", got: mel, want: try reference("mel")) && ok
         let waveform = try model.vocode(try reference("mel"))
         ok = Verify.report("vocoder", got: waveform, want: try reference("waveform")) && ok
+
+        // 10. The full pipeline (the app's Quality mode), where the fixture has its references.
+        ok = try verifyQuality(fixture: fixture, model: model, keyframeTokens: keyframes.stage1) && ok
+        return ok
+    }
+
+    /// make_ltx_fixture.py --quality: the schedule (the same doubles), the negative prompt's
+    /// contexts, every guided step's four passes from the reference's own inputs (which decide),
+    /// the guiders' combination of the reference's passes, and the whole guided stage 1 from its
+    /// noise (shown: a bfloat16 latent drifts over the steps, as the distilled loop's does).
+    static func verifyQuality(fixture: URL, model: LTXVideoModel, keyframeTokens: Int) throws -> Bool {
+        let folder = fixture.appending(path: "quality", directoryHint: .isDirectory)
+        guard let data = try? Data(contentsOf: folder.appending(path: "quality.json")),
+              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let sigmaData = try? Data(contentsOf: folder.appending(path: "sigmas.json")),
+              let wantedSigmas = try JSONSerialization.jsonObject(with: sigmaData) as? [Double]
+        else { return true }
+        print("  the full pipeline (Quality):")
+        let references = try loadArrays(url: folder.appending(path: "references.safetensors"))
+        func reference(_ name: String) throws -> MLXArray {
+            guard let array = references[name] else { throw Verify.VerifyError.missingReference("quality/\(name)") }
+            return array
+        }
+        let steps = (json["steps"] as? NSNumber)?.intValue ?? 4
+        let guidance = (json["guidance"] as? NSNumber)?.doubleValue ?? LTXFullPipeline.defaultGuidance
+        var ok = true
+
+        let tokens = try reference("schedule_tokens").item(Int.self)
+        let sigmas = LTXFullPipeline.schedule(steps: steps, tokens: tokens)
+        let sameSchedule = sigmas == wantedSigmas
+        print("  \(sameSchedule ? "✓" : "✗") schedule           \(steps) steps over \(tokens) tokens"
+              + (sameSchedule ? ", the same doubles" : ": \(sigmas), expected \(wantedSigmas)"))
+        ok = sameSchedule && ok
+
+        // The negative prompt through our text side (bfloat16: shown, as the prompt's).
+        let negative = try model.embeddings(LTXFullPipeline.defaultNegativePrompt)
+        ok = Verify.report("negative video", got: negative.video, want: try reference("negative_video_embeds"), counts: false) && ok
+        ok = Verify.report("negative audio", got: negative.audio, want: try reference("negative_audio_embeds"), counts: false) && ok
+
+        let text = (video: try reference("video_embeds"), audio: try reference("audio_embeds"))
+        let negativeText = (video: try reference("negative_video_embeds"), audio: try reference("negative_audio_embeds"))
+        let videoPositions = try reference("video_positions")
+        let audioPositions = try reference("audio_positions")
+        for step in 0 ..< steps {
+            let outputs = try model.guidedPasses(
+                video: try reference("step\(step)_video_in"), audio: try reference("step\(step)_audio_in"), sigma: wantedSigmas[step],
+                text: text, negative: negativeText, guidance: guidance,
+                videoPositions: videoPositions, audioPositions: audioPositions, keyframeTokens: keyframeTokens
+            )
+            for stream in ["video", "audio"] {
+                for pass in ["cond", "uncond", "perturbed", "isolated"] {
+                    guard let got = outputs["\(stream)_\(pass)"] else { print("  ✗ step \(step) \(stream) \(pass): not run"); ok = false; continue }
+                    ok = Verify.report("step \(step) \(stream) \(pass)", got: got, want: try reference("step\(step)_\(stream)_\(pass)")) && ok
+                }
+                let guider = stream == "video" ? LTXGuider.video(cfg: guidance) : LTXGuider.audio
+                let guided = guider.combine(
+                    cond: try reference("step\(step)_\(stream)_cond"), uncond: try reference("step\(step)_\(stream)_uncond"),
+                    perturbed: try reference("step\(step)_\(stream)_perturbed"), isolated: try reference("step\(step)_\(stream)_isolated")
+                )
+                ok = Verify.report("step \(step) \(stream) guided", got: guided, want: try reference("step\(step)_\(stream)_guided")) && ok
+            }
+        }
+
+        let stage1 = try model.guidedStageOne(
+            video: try reference("stage1_video_init"), audio: try reference("stage1_audio_init"), sigmas: wantedSigmas,
+            text: text, negative: negativeText, guidance: guidance,
+            videoPositions: videoPositions, audioPositions: audioPositions, keyframeTokens: keyframeTokens
+        )
+        ok = Verify.report("guided stage 1 video", got: stage1.video, want: try reference("stage1_video_out"), counts: false) && ok
+        ok = Verify.report("guided stage 1 audio", got: stage1.audio, want: try reference("stage1_audio_out"), counts: false) && ok
         return ok
     }
 }

@@ -109,7 +109,7 @@ most), the same math to rounding.
 
 `loras` (a list of files, each with a `scale`) puts LoRAs on the transformer of Z-Image, FLUX.2
 Klein, Qwen-Image and its editor, the families mflux applies them to, and of LTX-2.3 and LTX-2.5
-(both stages), as ltx-2-mlx does (`LoRA/`). A file's keys are
+(both stages, both transformers), as ltx-2-mlx does (`LoRA/`). A file's keys are
 looked up in mflux's own mappings, exported to `LoRAMappingTables.swift` by
 `Fixtures/export_lora_mappings.py`, once their prefixes (`diffusion_model.`, `transformer.`, …) and
 matrix names (`lora_A`, `lora_down`, `lora.down`, …) are stripped; Kohya's underscored keys are
@@ -205,6 +205,27 @@ with the 8-bit pack, 24% with the 4-bit one, where quantizing again moves every 
 Through the protocol, a 2.5 clip with a LoRA is the same bit for bit with and without Save memory,
 also when the transformer is loaded again for it (the LoRA goes back on with it). The LTX-2.3
 fixtures were made again then with the 8-bit pack, the 4-bit one being no longer on this Mac.
+
+The full pipeline (`quality` in a request, the app's *Quality*: `TI2VidTwoStagesPipeline`,
+`LTXGuidance.swift`). Stage 1 runs the pack's `transformer-dev.safetensors`, which the app
+downloads only for it, at half resolution on `ltx2_schedule` (30 steps by default, shifted for
+the stage's token count and stretched to end at 0.1), each step four passes: the prompt, the
+negative prompt (the request's, or the reference's long default list), STG (the self-attention of
+block 28 replaced by its values, video and audio) and the modalities isolated (the audio–video
+cross-attention left out of every block); the reference multiplies what it leaves out by zero, the
+port skips it, the same numbers. The guiders combine them, `cond + (cfg − 1)(cond − uncond) +
+stg(cond − perturbed) + (modality − 1)(cond − isolated)` rescaled 70% towards the conditioned
+prediction's spread, with CFG 3 for the video (the request's guidance) and 7 for the sound, STG 1
+and modality 3 for both. Stage 2 is the distilled pipeline's on the distilled transformer, which
+the reference uses in its low-memory mode in place of the dev one with the distilled LoRA (the
+same weights at the LoRA's strength 1); one transformer is in memory at a time, swapped in a few
+seconds. The sound decoded is stage 1's, as the reference keeps it. `make_ltx_fixture.py --quality`
+runs the reference at the fixture's size with four guided steps: the schedule is the same doubles,
+every step's four passes on the reference's own inputs land within bfloat16's last digits (at most
+0.2% of their scale), the guiders' combination of the reference's passes is bit for bit, and the
+whole guided stage from the reference's noise ends 3.6% apart (bfloat16 drift, which guidance
+amplifies). A 2 s 768 × 512 clip on the 2.5 4-bit pack took 663 s of denoising against 79 s fast,
+peaking at 30.9 GB both ways without Save memory.
 
 The whole pipeline, same prompt and seed through the app's protocol, 768 × 512 × 49 frames with
 the 4-bit pack: the same clip as the reference (PSNR 29–35 dB per frame, 32.6 on average, through
@@ -381,7 +402,9 @@ what to run after an mlx-swift update, before the peaks in `MemoryEstimate.swift
 
 Commands on stdin, one JSON object per line: `generate` (id, model, params), `load` (model),
 `cancel` (id), `unload`, `shutdown`; `params` may carry `precision` ("bf16"), `preview`
-(true) and `loras` (`[{"path": …, "scale": 1}]`), described under Families. Events on stdout: `ready`, `phase`, `progress`, `preview` (id,
+(true), `loras` (`[{"path": …, "scale": 1}]`) and, for LTX-2, `quality` (true: the full pipeline,
+`steps` then its first stage's and `guidance` the video's CFG), described under Families and in
+Checking LTX-2 against ltx-2-mlx. Events on stdout: `ready`, `phase`, `progress`, `preview` (id,
 step, path: a small PNG of the image as it forms, written again at each), `done` (path, seed, size,
 seconds, peak_memory, timings per phase), `failed`, `cancelled`, `model_loaded`, `load_failed` (a
 `load` that did not), `unloaded`. Everything else goes to stderr, which the app shows as the

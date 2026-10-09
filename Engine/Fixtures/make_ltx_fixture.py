@@ -20,6 +20,14 @@ pass with each applied as the engine applies them (each layer adds scale · (x·
 plus the pass with ltx-2-mlx's own fusion of the first (the deltas baked into the weights, which
 are quantized again), which `verify` shows for comparison. Run it with the arguments of an
 existing fixture: `verify` takes the pass's inputs from that fixture.
+
+With --quality <fixture>/quality, the full pipeline instead (`TI2VidTwoStagesPipeline`, which the
+app's Quality mode runs; the pack needs `transformer-dev.safetensors`): --quality-steps guided
+steps of the dev transformer at half resolution, with the default negative prompt, then stage 2
+on the distilled transformer (the reference's own low-memory path, which `verify` mirrors). It
+records the schedule, both prompts' contexts, every step's input and its four passes (the prompt,
+the negative prompt, STG's perturbed self-attention, the isolated modalities) with what the
+guiders made of them, both stages' outputs and the latents the decoders get.
 """
 
 from __future__ import annotations
@@ -175,6 +183,107 @@ def lora_references(model, call, out: Path, scale: float = 0.8, rank: int = 16) 
     print(f"LoRA references written to {out} ({len(matrices)} layers)")
 
 
+def quality_references(args) -> None:
+    """The full pipeline's references (see the module's docstring)."""
+    import ltx_core_mlx.components.guiders as guiders
+    import ltx_pipelines_mlx.ti2vid_two_stages as two_stages
+    from ltx_core_mlx.utils.weights import load_split_safetensors
+
+    out = Path(args.quality)
+    out.mkdir(parents=True, exist_ok=True)
+    found: dict[str, mx.array] = {}
+
+    def keep(name, value):
+        if value is not None and name not in found:
+            mx.eval(value)
+            found[name] = value
+
+    schedule = two_stages.ltx2_schedule
+
+    def schedule_hook(steps, num_tokens=4096, **kwargs):
+        sigmas = schedule(steps, num_tokens=num_tokens, **kwargs)
+        found["sigmas"] = mx.array(sigmas, dtype=mx.float32)
+        found["schedule_tokens"] = mx.array(num_tokens)
+        (out / "sigmas.json").write_text(json.dumps(sigmas))
+        return sigmas
+
+    two_stages.ltx2_schedule = schedule_hook
+
+    calls = {"count": 0}
+    calculate = guiders.MultiModalGuider.calculate
+
+    def calculate_hook(self, cond, uncond_text, uncond_perturbed, uncond_modality):
+        result = calculate(self, cond, uncond_text, uncond_perturbed, uncond_modality)
+        step, modality = divmod(calls["count"], 2)
+        calls["count"] += 1
+        name = "video" if modality == 0 else "audio"
+        for label, value in (("cond", cond), ("uncond", uncond_text), ("perturbed", uncond_perturbed),
+                             ("isolated", uncond_modality), ("guided", result)):
+            keep(f"step{step}_{name}_{label}", value)
+        return result
+
+    guiders.MultiModalGuider.calculate = calculate_hook
+
+    model_call = transformer_model.LTXModel.__call__
+    passes = {"count": 0}
+
+    def model_hook(self, video_latent, audio_latent, timestep, **kwargs):
+        index = passes["count"]
+        passes["count"] += 1
+        if index % 4 == 0 and calls["count"] < 2 * args.quality_steps:
+            step = index // 4
+            keep(f"step{step}_video_in", video_latent)
+            keep(f"step{step}_audio_in", audio_latent)
+            keep(f"step{step}_sigma", timestep)
+            keep("video_positions", kwargs.get("video_positions"))
+            keep("audio_positions", kwargs.get("audio_positions"))
+        return model_call(self, video_latent, audio_latent, timestep, **kwargs)
+
+    transformer_model.LTXModel.__call__ = model_hook
+
+    guided_loop = two_stages.guided_denoise_loop
+
+    def guided_hook(**kwargs):
+        keep("stage1_video_init", kwargs["video_state"].latent)
+        keep("stage1_audio_init", kwargs["audio_state"].latent)
+        output = guided_loop(**kwargs)
+        keep("stage1_video_out", output.video_latent)
+        keep("stage1_audio_out", output.audio_latent)
+        return output
+
+    two_stages.guided_denoise_loop = guided_hook
+
+    pipe = two_stages.TI2VidTwoStagesPipeline(model_dir=args.pack, gemma_model_id=args.gemma, low_memory=True)
+    encode = pipe._encode_text_with_negative
+
+    def encode_hook(prompt, negative_prompt=None):
+        result = encode(prompt, negative_prompt)
+        for name, value in zip(("video_embeds", "audio_embeds", "negative_video_embeds", "negative_audio_embeds"), result):
+            keep(name, value)
+        return result
+
+    pipe._encode_text_with_negative = encode_hook
+
+    # Stage 2 on the distilled transformer, as the reference does in its low-memory mode (the
+    # distilled weights are the dev ones with the distilled LoRA fused at strength 1).
+    def swap_to_distilled(dit):
+        path = pipe._resolve_safetensors(pipe.model_dir, "transformer-distilled")
+        dit.load_weights(list(load_split_safetensors(path, prefix="transformer.").items()))
+        print(f"stage 2 on {path.name}")
+
+    pipe._fuse_distilled_lora = swap_to_distilled
+
+    video_latent, audio_latent = pipe.generate_two_stage(
+        args.prompt, args.height, args.width, args.frames, frame_rate=args.fps, seed=args.seed,
+        stage1_steps=args.quality_steps,
+    )
+    keep("video_latent", video_latent)
+    keep("audio_latent", audio_latent)
+    mx.save_safetensors(str(out / "references.safetensors"), found)
+    (out / "quality.json").write_text(json.dumps({"steps": args.quality_steps, "guidance": 3.0}, indent=2))
+    print(f"quality references written to {out} ({len(found)} tensors, {calls['count'] // 2} guided steps)")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("pack")
@@ -190,7 +299,12 @@ def main() -> None:
     parser.add_argument("--crf", type=int, default=0,
                         help="H.264 round trip of the image before encoding (upstream: 33; 0 compares the ports on the same pixels)")
     parser.add_argument("--lora", help="write LoRA references to this folder and stop after the first pass")
+    parser.add_argument("--quality", help="write the full pipeline's references to this folder instead")
+    parser.add_argument("--quality-steps", type=int, default=4, help="the full pipeline's guided steps (default 4)")
     args = parser.parse_args()
+    if args.quality:
+        quality_references(args)
+        return
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 

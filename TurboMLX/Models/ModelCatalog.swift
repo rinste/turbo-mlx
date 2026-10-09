@@ -64,6 +64,10 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         }
     }
 
+    /// Files of the model's repository that only the Quality mode needs, downloaded when it is first
+    /// chosen: LTX's dev (undistilled) transformer, which its guided first stage runs.
+    var qualityFiles: [String] { isLTX ? ["transformer-dev.safetensors"] : [] }
+
     /// The families that can show the image as it forms: image models, with steps to show it at.
     var showsPreview: Bool { media == .image && !isUpscaler }
 
@@ -177,6 +181,8 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
     /// change upstream never reaches the app untested. Nil (a model added by hand) follows `main`.
     var revision: String?
     var sizeBytes: Int64?
+    /// What the Quality mode's files add (`ModelFamily.qualityFiles`).
+    var qualitySizeBytes: Int64?
     /// mflux registry entry (e.g. "flux2-klein-9b") when the name alone does not identify it.
     var variant: String?
     var license: String?
@@ -258,6 +264,15 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
     var defaultGuidance: Double {
         family == .qwenImage || family == .qwenImageEdit || isKleinBase ? 4 : 1
     }
+
+    // The Quality mode (`GenerationSettings.fullPipeline(for:)`): LTX's full pipeline runs its dev
+    // transformer with guidance for 30 steps, against a negative prompt.
+
+    func stepRange(quality: Bool) -> ClosedRange<Int> { quality && family.isLTX ? 10...50 : stepRange }
+    func defaultSteps(quality: Bool) -> Int { quality && family.isLTX ? 30 : defaultSteps }
+    func defaultGuidance(quality: Bool) -> Double { quality && family.isLTX ? 3 : defaultGuidance }
+    func supportsGuidance(quality: Bool) -> Bool { supportsGuidance || (quality && family.isLTX) }
+    func supportsNegativePrompt(quality: Bool) -> Bool { supportsNegativePrompt || (quality && family.isLTX) }
 
     var stepRange: ClosedRange<Int> {
         switch family {
@@ -372,6 +387,7 @@ enum ModelCatalog {
             source: .huggingFace(repo: "dgrauet/ltx-2.3-mlx-q4"),
             revision: "56a5866d638ecfe37c54d348e88938235185c2d4",
             sizeBytes: 20_479_335_378 + 8_068_018_787,
+            qualitySizeBytes: 11_322_002_285,
             license: "LTX-2 Community",
             recommendedMemoryGB: 32,
             isBuiltIn: true
@@ -383,6 +399,7 @@ enum ModelCatalog {
             source: .huggingFace(repo: "dgrauet/ltx-2.3-mlx-q8"),
             revision: "6671a7572a530862d1d60ce393b5d93491e3f76b",
             sizeBytes: 29_754_522_642 + 8_068_018_787,
+            qualitySizeBytes: 20_597_189_549,
             license: "LTX-2 Community",
             recommendedMemoryGB: 64,
             isBuiltIn: true
@@ -397,6 +414,7 @@ enum ModelCatalog {
             source: .huggingFace(repo: "dgrauet/ltx-2.5-mlx-q4"),
             revision: "e9a20add8c5937fcab635fb8e7a52926487a5776",
             sizeBytes: 28_760_512_454,
+            qualitySizeBytes: 11_320_034_990,
             license: "LTX-2 Community",
             recommendedMemoryGB: 32,
             isBuiltIn: true

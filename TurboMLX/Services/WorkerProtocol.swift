@@ -120,6 +120,7 @@ nonisolated enum WorkerCommand: Sendable {
         if let softness = request.softness { params["softness"] = softness }
         if request.halfPrecision == true { params["precision"] = "bf16" }
         if preview { params["preview"] = true }
+        if request.quality == true { params["quality"] = true }
         if let loras = request.loras, !loras.isEmpty {
             params["loras"] = loras.map { ["path": LoRALibrary.url($0.file).path, "scale": $0.scale] as [String: Any] }
         }

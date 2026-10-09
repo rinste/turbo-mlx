@@ -141,6 +141,8 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     var halfPrecision = false
     /// The image shown as it forms, every few steps, while it is generated.
     var livePreview = true
+    /// LTX: the full pipeline (Quality) instead of the distilled one (Fast).
+    var videoQuality = false
     /// The LoRA chosen for each family that takes them (`ModelFamily.takesLoRAs`), by its raw
     /// value: a LoRA fits one family, so each keeps its own.
     var loras: [String: LoRAChoice] = [:]
@@ -186,6 +188,11 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         videoAutoDuration && family.picksDuration
     }
 
+    /// Whether `model` runs its Quality mode with these settings.
+    func fullPipeline(for model: ModelDescriptor) -> Bool {
+        videoQuality && model.family.isLTX
+    }
+
     func lora(for family: ModelFamily) -> LoRAChoice? {
         family.takesLoRAs ? loras[family.rawValue] : nil
     }
@@ -202,7 +209,10 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     /// is no unconditional pass to use it.
     func negativePrompt(for model: ModelDescriptor) -> String? {
         let text = negativePrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        return model.supportsNegativePrompt && guidance > 1 && !text.isEmpty ? text : nil
+        guard !text.isEmpty else { return nil }
+        // LTX's Quality mode always runs its sound's guidance, which the negative prompt steers too.
+        if fullPipeline(for: model) { return text }
+        return model.supportsNegativePrompt && guidance > 1 ? text : nil
     }
 
     init() {}
@@ -211,7 +221,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         case blocks, negativePrompt, aspect, resolution, usesCustomSize, customWidth, customHeight, steps, guidance,
              randomSeed, seed, batchCount, transparentBackground, lowMemory,
              videoResolution, videoSeconds, videoFrameRate, videoAutoDuration, referenceImage, upscale, softness,
-             halfPrecision, livePreview, loras
+             halfPrecision, livePreview, loras, videoQuality
     }
 
     /// Settings saved before the prompt had blocks kept a single string.
@@ -250,6 +260,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         halfPrecision = try values.decodeIfPresent(Bool.self, forKey: .halfPrecision) ?? halfPrecision
         livePreview = try values.decodeIfPresent(Bool.self, forKey: .livePreview) ?? livePreview
         loras = try values.decodeIfPresent([String: LoRAChoice].self, forKey: .loras) ?? loras
+        videoQuality = try values.decodeIfPresent(Bool.self, forKey: .videoQuality) ?? videoQuality
     }
 
     /// Seeds for the next batch: consecutive from the fixed seed, or fresh random ones.
@@ -307,6 +318,8 @@ nonisolated struct GenerationRequest: Codable, Hashable, Sendable {
     var halfPrecision: Bool?
     /// The LoRAs applied (files of the LoRA library); nil without any.
     var loras: [LoRAChoice]?
+    /// LTX's Quality mode (the full pipeline); nil for Fast, and for the other families.
+    var quality: Bool?
 
     /// What to show for it: the prompt, or for an upscale, what it did ("Upscaled 2×").
     var caption: String {

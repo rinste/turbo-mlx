@@ -19,15 +19,16 @@ struct ControlPanel: View {
                     // No prompt and no format: the picture, and how much larger.
                     UpscaleSection(settings: $app.settings)
                 } else {
+                    let quality = app.settings.fullPipeline(for: model)
                     PromptSection(settings: $app.settings, focus: $focusedBlock)
-                    if model.supportsNegativePrompt {
-                        NegativePromptSection(settings: $app.settings)
+                    if model.supportsNegativePrompt(quality: quality) {
+                        NegativePromptSection(settings: $app.settings, hasOwnDefault: quality)
                     }
                     FormatSection(settings: $app.settings, family: model.family)
                     if model.family.media == .video {
-                        ClipSection(settings: $app.settings, picksDuration: model.family.picksDuration)
+                        ClipSection(settings: $app.settings, model: model)
                     }
-                    if model.supportsGuidance {
+                    if model.supportsGuidance(quality: quality) {
                         ParametersSection(settings: $app.settings, model: model)
                     }
                 }
@@ -64,8 +65,8 @@ private struct ResetButton: View {
 
 // MARK: - Model
 
-/// The model the main button generates with, right above it: the picker, what the model is for,
-/// and whether it's downloaded and in memory.
+/// The model the main button generates with, right above it: the picker, the LoRA under it, what
+/// the model is for, and whether it's downloaded and in memory.
 private struct ModelSelection: View {
     @Environment(AppModel.self) private var app
     @State private var showsAddModel = false
@@ -92,6 +93,10 @@ private struct ModelSelection: View {
             }
 
             if let model = app.selectedModel {
+                // The LoRA goes with the model, right under its picker.
+                if model.family.takesLoRAs {
+                    LoRARow(model: model)
+                }
                 // A line limit, not fixedSize: this bar does not scroll, and a text sized for any
                 // width asks for one character per line when the window measures its minimum
                 // height, which then pushes the whole window's content past its edges.
@@ -101,9 +106,6 @@ private struct ModelSelection: View {
                     .lineLimit(3)
                 ModelStatusRow(model: model)
                 MemoryWarning(model: model)
-                if model.family.takesLoRAs {
-                    LoRARow(model: model)
-                }
             }
         }
         .sheet(isPresented: $showsAddModel) {
@@ -985,6 +987,9 @@ private struct BlockTextEditor: View {
 /// plain field under the blocks, a few lines tall.
 private struct NegativePromptSection: View {
     @Binding var settings: GenerationSettings
+    /// LTX's Quality mode: an empty field means the model's own list, and the sound's guidance
+    /// always uses it.
+    var hasOwnDefault = false
 
     var body: some View {
         Section {
@@ -993,7 +998,9 @@ private struct NegativePromptSection: View {
                 .frame(height: 56)
                 .overlay(alignment: .topLeading) {
                     if settings.negativePrompt.isEmpty {
-                        Text("What to keep out of the image: blur, watermarks, extra fingers.")
+                        Text(hasOwnDefault
+                             ? "Empty: LTX’s own list of flaws to avoid, from blur and flicker to robotic voices."
+                             : "What to keep out of the image: blur, watermarks, extra fingers.")
                             .foregroundStyle(.tertiary)
                             .padding(.leading, 5)
                             .allowsHitTesting(false)
@@ -1005,8 +1012,8 @@ private struct NegativePromptSection: View {
         } header: {
             Text("Negative Prompt")
         } footer: {
-            // Without guidance there is no pass for it to steer.
-            if settings.guidance <= 1 {
+            // Without guidance there is no pass for it to steer (LTX's sound always has some).
+            if settings.guidance <= 1, !hasOwnDefault {
                 Text("Used with guidance above 1.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -1287,12 +1294,46 @@ private struct HistoryImagePicker: View {
 /// A model that can pick the length from the prompt (LTX-2.5) offers to, the slider then setting
 /// the longest it may choose.
 private struct ClipSection: View {
+    @Environment(AppModel.self) private var app
     @Binding var settings: GenerationSettings
-    let picksDuration: Bool
+    let model: ModelDescriptor
+
+    private var picksDuration: Bool { model.family.picksDuration }
+
+    /// Fast or Quality, each mode with its own steps and guidance.
+    private var mode: Binding<Bool> {
+        Binding {
+            settings.videoQuality
+        } set: { quality in
+            // One write: through the binding, each separate one would start from the same old
+            // settings and only the last would stay.
+            var updated = settings
+            updated.videoQuality = quality
+            updated.steps = model.defaultSteps(quality: quality)
+            updated.guidance = model.defaultGuidance(quality: quality)
+            settings = updated
+        }
+    }
 
     var body: some View {
         let automatic = picksDuration && settings.videoAutoDuration
         Section("Clip") {
+            VStack(alignment: .leading, spacing: 6) {
+                Picker("Mode", selection: mode) {
+                    Text("Fast").tag(false)
+                    Text("Quality").tag(true)
+                }
+                .pickerStyle(.segmented)
+                Text(settings.videoQuality
+                     ? "The full model, with guidance and a negative prompt: 30 steps of four passes each. Often truer to the prompt, with fewer flaws, but about ten times slower."
+                     : "The distilled model: 8 steps, a few minutes for 5 seconds.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if settings.videoQuality, !app.hasQualityFiles(model) {
+                    QualityFilesRow(model: model)
+                }
+            }
             if picksDuration {
                 Toggle(isOn: $settings.videoAutoDuration) {
                     Text("Duration from the prompt")
@@ -1324,6 +1365,40 @@ private struct ClipSection: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
+        }
+    }
+}
+
+/// The Quality mode's files, until they are on the Mac: their size, or the download under way.
+private struct QualityFilesRow: View {
+    @Environment(AppModel.self) private var app
+    let model: ModelDescriptor
+
+    var body: some View {
+        if let progress = app.downloads.qualityProgress(model) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    ProgressView(value: progress.fraction ?? 0)
+                    Button {
+                        app.cancelQualityDownload(model)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .help("Cancel the download (you can resume it later)")
+                }
+                Text("Downloading the full model: \(Format.bytes(progress.bytes)) of \(Format.bytes(progress.total))")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            Label(
+                "It needs the full model’s transformer, \(model.qualitySizeBytes.map(Format.bytes) ?? "a large file"), downloaded once.",
+                systemImage: "arrow.down.circle"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
     }
 }
@@ -1400,7 +1475,9 @@ private struct ParametersSection: View {
                 }
             } label: {
                 Text("Guidance")
-                    .help(model.family == .qwenImage || model.family == .qwenImageEdit
+                    .help(model.family.isLTX
+                          ? "How strictly the picture follows the prompt. 3 is the recommended value; the sound keeps its own (7)."
+                          : model.family == .qwenImage || model.family == .qwenImageEdit
                           ? "How strictly to follow the prompt. 4 is the recommended value."
                           : "How strictly to follow the prompt. 1 = off; higher values double the time of each step.")
             }
@@ -1532,7 +1609,7 @@ private struct AdvancedSection: View {
         let size = settings.size(for: family)
         var parts = ["\(size.width) × \(size.height) px"]
         if !family.isUpscaler {
-            let range = model.stepRange
+            let range = model.stepRange(quality: settings.fullPipeline(for: model))
             parts.insert("\(min(max(settings.steps, range.lowerBound), range.upperBound)) steps", at: 0)
         }
         if !settings.randomSeed { parts.append("seed \(settings.seed)") }
@@ -1547,7 +1624,8 @@ private struct StepsRow: View {
     let model: ModelDescriptor
 
     var body: some View {
-        let range = model.stepRange
+        let quality = settings.fullPipeline(for: model)
+        let range = model.stepRange(quality: quality)
         LabeledContent {
             HStack(spacing: 6) {
                 // Steps trade speed for refinement: hare for fewer, tortoise for more.
@@ -1567,7 +1645,7 @@ private struct StepsRow: View {
             }
         } label: {
             Text("Steps")
-                .help("Recommended for this model: \(model.defaultSteps). More steps take longer and don’t always improve the result.")
+                .help("Recommended for this model: \(model.defaultSteps(quality: quality)). More steps take longer and don’t always improve the result.")
         }
     }
 }
@@ -1795,6 +1873,14 @@ private struct GenerateBar: View {
             let percent = model.flatMap { app.downloads.active[$0.id]?.fraction }.map { " · \(Int($0 * 100))%" } ?? ""
             wideButton("Downloading\(percent)", systemImage: "arrow.down.circle") {}
                 .disabled(true)
+        case .qualityNotDownloaded:
+            let size = model?.qualitySizeBytes.map { " · \(Format.bytes($0))" } ?? ""
+            wideButton(app.settings.trimmedPrompt.isEmpty ? "Download for Quality\(size)" : "Download and Generate\(size)",
+                       systemImage: "arrow.down.circle") { app.downloadQuality() }
+        case .qualityDownloading:
+            let percent = model.flatMap { app.downloads.qualityProgress($0)?.fraction }.map { " · \(Int($0 * 100))%" } ?? ""
+            wideButton("Downloading\(percent)", systemImage: "arrow.down.circle") {}
+                .disabled(true)
         case .noModel, .missingReference, .emptyPrompt, .upscaleTooLarge, .notEnoughMemory, .loraMissing, .loraMismatch:
             wideButton(generateTitle, systemImage: generateSymbol, note: note) {}
                 .disabled(true)
@@ -1825,12 +1911,14 @@ private struct GenerateBar: View {
         return TimeEstimate.estimate(
             model: model,
             size: settings.size(for: model.family),
-            steps: min(max(settings.steps, model.stepRange.lowerBound), model.stepRange.upperBound),
+            steps: min(max(settings.steps, model.stepRange(quality: settings.fullPipeline(for: model)).lowerBound),
+                       model.stepRange(quality: settings.fullPipeline(for: model)).upperBound),
             guidance: settings.guidance,
             frames: model.family.media == .video ? settings.videoFrames : nil,
             reference: model.family.takesReferenceImage ? settings.referenceImage : nil,
             lowMemory: settings.lowMemory,
             halfPrecision: model.family.supportsHalfPrecision && settings.halfPrecision,
+            quality: settings.fullPipeline(for: model),
             count: settings.batchCount,
             // A model the queue is using will be in memory by then.
             isLoaded: app.isLoaded(model) || (app.queue.last ?? app.activeJob)?.model.id == model.id,
@@ -1855,6 +1943,7 @@ private struct GenerateBar: View {
     private var caption: String? {
         switch app.blocker {
         case .modelNotDownloaded: "Models download once and stay on this Mac."
+        case .qualityNotDownloaded: "Quality runs the full model, whose transformer downloads once."
         case .missingReference where app.selectedModel?.family.isUpscaler == true: "Add the picture to upscale."
         case .some(let blocker): blocker.hint
         case nil:

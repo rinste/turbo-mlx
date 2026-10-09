@@ -79,6 +79,9 @@ extension Gemma3TextModel: LTXTextTower {}
 /// ×2, three steps at full resolution, then the video and audio decoders. A reference image pins
 /// the first frame (`VideoConditionByLatentIndex`) in both stages. LTX-2.5 packs carry their own
 /// Gemma 4, run stage 1 with the ancestral sampler and mark the first latent frame as a keyframe.
+/// With `quality`, `TI2VidTwoStagesPipeline` instead: stage 1 runs the dev transformer with
+/// guidance (`guidedDenoise`), stage 2 the distilled one (the reference's own low-memory path,
+/// equivalent to its dev transformer with the distilled LoRA), and the sound is stage 1's.
 public final class LTXVideoModel: VideoFamilyModel, LoRAAdaptable {
     public let config: LTXConfig
     public let pack: URL
@@ -90,8 +93,17 @@ public final class LTXVideoModel: VideoFamilyModel, LoRAAdaptable {
     private var prompter: Gemma3Prompter?
     private var textSide: (gemma: LTXTextTower, connector: LTXTextConnector)?
     private var transformer: LTXTransformer?
+    /// Which of the pack's two transformers `transformer` is: one is in memory at a time.
+    private var transformerVariant = TransformerVariant.distilled
     /// The transformer has generated since it was loaded: its weights are resident.
     private var transformerUsed = false
+
+    enum TransformerVariant {
+        /// `transformer-distilled*`: the distilled pipeline, and the full pipeline's stage 2.
+        case distilled
+        /// `transformer-dev`: the full pipeline's guided stage 1.
+        case dev
+    }
     /// On the transformer, both stages, and put back on it whenever it is loaded again (Save
     /// memory releases it for the decoders and the text side).
     public let loras = LoRAAdapters(table: .ltx)
@@ -169,14 +181,21 @@ public final class LTXVideoModel: VideoFamilyModel, LoRAAdaptable {
         return try file("transformer-distilled.safetensors")
     }
 
-    private func loadTransformer() throws {
+    /// The undistilled transformer, which the full pipeline's stage 1 needs (downloaded apart).
+    public var hasDevTransformer: Bool {
+        FileManager.default.fileExists(atPath: pack.appending(path: "transformer-dev.safetensors").path)
+    }
+
+    private func loadTransformer(_ variant: TransformerVariant = .distilled) throws {
         let model = LTXTransformer(config: config.transformer)
-        let tensors = try loadArrays(url: transformerFile())
+        let url = variant == .dev ? try file("transformer-dev.safetensors") : try transformerFile()
+        let tensors = try loadArrays(url: url)
         let weights = LTXTransformer.weights(tensors)
         try WeightLoading.apply(weights, to: model)
         for line in try loras.reapply(on: model) { Emitter.shared.log(line + " (again, on the reloaded transformer)") }
-        bits = Self.storedBits(weights)
+        if variant == .distilled { bits = Self.storedBits(weights) }
         transformer = model
+        transformerVariant = variant
         transformerUsed = false
     }
 
@@ -188,9 +207,14 @@ public final class LTXVideoModel: VideoFamilyModel, LoRAAdaptable {
         return packed.shape[1] * 32 / input
     }
 
-    private func loadedTransformer() throws -> LTXTransformer {
-        if let transformer { return transformer }
-        try loadTransformer()
+    /// The transformer of that variant, the other one released first.
+    func loadedTransformer(_ variant: TransformerVariant = .distilled) throws -> LTXTransformer {
+        if let transformer, transformerVariant == variant { return transformer }
+        if transformer != nil {
+            transformer = nil
+            Memory.clearCache()
+        }
+        try loadTransformer(variant)
         return transformer!
     }
 
@@ -310,7 +334,11 @@ public final class LTXVideoModel: VideoFamilyModel, LoRAAdaptable {
     }
 
     public func totalSteps(_ request: FamilyRequest) -> Int {
-        Self.shortened(LTXConfig.distilledSigmas, steps: request.steps).count - 1 + LTXConfig.stage2Sigmas.count - 1
+        stage1Steps(request) + LTXConfig.stage2Sigmas.count - 1
+    }
+
+    private func stage1Steps(_ request: FamilyRequest) -> Int {
+        request.quality ? max(1, request.steps) : Self.shortened(LTXConfig.distilledSigmas, steps: request.steps).count - 1
     }
 
     public func generateVideo(
@@ -326,12 +354,15 @@ public final class LTXVideoModel: VideoFamilyModel, LoRAAdaptable {
         let previousLimit = Memory.cacheLimit
         Memory.cacheLimit = min(previousLimit, 4 << 30)
         defer { Memory.cacheLimit = previousLimit }
-        let stage1Sigmas = Self.shortened(LTXConfig.distilledSigmas, steps: request.steps)
         let stage2Sigmas = LTXConfig.stage2Sigmas
-        let totalSteps = stage1Sigmas.count - 1 + stage2Sigmas.count - 1
+        let totalSteps = totalSteps(request)
+        if request.quality, !hasDevTransformer { throw LTXError.missingFile("transformer-dev.safetensors", pack) }
 
         phase(.encoding)
         try encode(request.prompt)
+        // The full pipeline steers away from a negative prompt: the request's, or the reference's own.
+        let negativePrompt = request.negativePrompt ?? LTXFullPipeline.defaultNegativePrompt
+        if request.quality { try encode(negativePrompt) }
         promptsEncoded()
         guard let (videoText, audioText) = promptCache[request.prompt] else { throw GenerationError.cancelled }
         if isCancelled() { throw GenerationError.cancelled }
@@ -339,7 +370,6 @@ public final class LTXVideoModel: VideoFamilyModel, LoRAAdaptable {
         let frames = try resolvedFrames(request) ?? 121
         let geometry = LTXGeometry(width: request.width, height: request.height, frames: frames, fps: request.fps ?? 24)
 
-        let transformer = try loadedTransformer()
         let reference = try request.imagePath.map { try LTXReferenceImage(path: $0) }
         var encoder: LTXVideoEncoder? = reference == nil ? nil : try videoEncoder()
 
@@ -355,14 +385,28 @@ public final class LTXVideoModel: VideoFamilyModel, LoRAAdaptable {
         }
         let audio1 = Self.initialState(shape: [1, audioTokens, 128], seed: request.seed + 1)
         var step = 0
-        let (videoHalf, audioLatent) = try denoise(
-            transformer: transformer, video: video1, audio: audio1, sigmas: stage1Sigmas,
-            videoText: videoText, audioText: audioText,
-            videoPositions: Self.videoPositions(frames: f, height: h1, width: w1, fps: geometry.fps),
-            audioPositions: Self.audioPositions(audioTokens), keyframeTokens: h1 * w1,
-            ancestralSeed: config.isLTX25 ? request.seed + LTXConfig.ancestralSeedOffset : nil,
-            onStep: { step += 1; progress(step, totalSteps) }, isCancelled: isCancelled
-        )
+        let videoPositions1 = Self.videoPositions(frames: f, height: h1, width: w1, fps: geometry.fps)
+        let (videoHalf, audioLatent): (MLXArray, MLXArray)
+        if request.quality, let negative = promptCache[negativePrompt] {
+            // The dev transformer's guided steps, on the schedule its token count shifts.
+            (videoHalf, audioLatent) = try guidedDenoise(
+                transformer: try loadedTransformer(.dev), video: video1, audio: audio1,
+                sigmas: LTXFullPipeline.schedule(steps: stage1Steps(request), tokens: f * h1 * w1),
+                text: (videoText, audioText), negative: negative,
+                videoGuider: .video(cfg: request.guidance), audioGuider: .audio,
+                videoPositions: videoPositions1, audioPositions: Self.audioPositions(audioTokens), keyframeTokens: h1 * w1,
+                onStep: { step += 1; progress(step, totalSteps) }, isCancelled: isCancelled
+            )
+        } else {
+            (videoHalf, audioLatent) = try denoise(
+                transformer: try loadedTransformer(), video: video1, audio: audio1,
+                sigmas: Self.shortened(LTXConfig.distilledSigmas, steps: request.steps),
+                videoText: videoText, audioText: audioText,
+                videoPositions: videoPositions1, audioPositions: Self.audioPositions(audioTokens), keyframeTokens: h1 * w1,
+                ancestralSeed: config.isLTX25 ? request.seed + LTXConfig.ancestralSeedOffset : nil,
+                onStep: { step += 1; progress(step, totalSteps) }, isCancelled: isCancelled
+            )
+        }
         transformerUsed = true
 
         // The latent upsampled ×2, in the encoder's un-normalized space.
@@ -379,8 +423,9 @@ public final class LTXVideoModel: VideoFamilyModel, LoRAAdaptable {
         }
         encoder = nil
         let audio2 = Self.renoisedMasked(audioLatent, sigma: start, seed: request.seed + LTXConfig.stage2SeedOffset)
+        // The full pipeline swaps its dev transformer for the distilled one here.
         let (videoFull, audioFull) = try denoise(
-            transformer: transformer, video: video2, audio: audio2, sigmas: stage2Sigmas,
+            transformer: try loadedTransformer(), video: video2, audio: audio2, sigmas: stage2Sigmas,
             videoText: videoText, audioText: audioText,
             videoPositions: Self.videoPositions(frames: f, height: h2, width: w2, fps: geometry.fps),
             audioPositions: Self.audioPositions(audioTokens), keyframeTokens: h2 * w2,
@@ -393,8 +438,9 @@ public final class LTXVideoModel: VideoFamilyModel, LoRAAdaptable {
             self.transformer = nil
             Memory.clearCache()
         }
-        // The sound first (small), so the writer can interleave it with the frames.
-        try audioSink(try decodeAudio(audioFull), 48000)
+        // The sound first (small), so the writer can interleave it with the frames. The full
+        // pipeline's stage 2 refines the video only: its sound is stage 1's.
+        try audioSink(try decodeAudio(request.quality ? audioLatent : audioFull), 48000)
         let latent = videoFull.reshaped([1, f, h2, w2, 128]).transposed(0, 4, 1, 2, 3)
         try decodeVideo(latent, fps: geometry.fps, isCancelled: isCancelled, sink: sink)
 
@@ -528,6 +574,75 @@ public final class LTXVideoModel: VideoFamilyModel, LoRAAdaptable {
             if isCancelled() { throw GenerationError.cancelled }
         }
         return (videoX, audioX)
+    }
+
+    /// `guided_denoise_loop`: at each step the transformer's x0 with the prompt, with the negative
+    /// prompt (CFG), with STG's perturbed self-attention and with the modalities isolated, each pass
+    /// only when a guider needs it; the guiders' combinations, the preserved tokens put back, an
+    /// Euler step.
+    func guidedDenoise(
+        transformer: LTXTransformer, video: LTXLatentState, audio: LTXLatentState, sigmas: [Double],
+        text: (video: MLXArray, audio: MLXArray), negative: (video: MLXArray, audio: MLXArray),
+        videoGuider: LTXGuider, audioGuider: LTXGuider, videoPositions: MLXArray, audioPositions: MLXArray,
+        keyframeTokens: Int = 0, onStep: () -> Void, isCancelled: () -> Bool
+    ) throws -> (video: MLXArray, audio: MLXArray) {
+        var videoX = video.latent
+        var audioX = audio.latent
+        for index in 0 ..< sigmas.count - 1 {
+            let (sigma, next) = (sigmas[index], sigmas[index + 1])
+            let passes = try Self.guidedPasses(
+                transformer: transformer, videoX: videoX, audioX: audioX, sigma: sigma, video: video,
+                text: text, negative: negative, videoGuider: videoGuider, audioGuider: audioGuider,
+                videoPositions: videoPositions, audioPositions: audioPositions, keyframeTokens: keyframeTokens, isCancelled: isCancelled
+            )
+            var videoX0 = videoGuider.combine(cond: passes.cond.video, uncond: passes.uncond?.video,
+                                              perturbed: passes.perturbed?.video, isolated: passes.isolated?.video)
+            var audioX0 = audioGuider.combine(cond: passes.cond.audio, uncond: passes.uncond?.audio,
+                                              perturbed: passes.perturbed?.audio, isolated: passes.isolated?.audio)
+            videoX0 = videoX0 * video.mask + video.clean * (1 - video.mask)
+            audioX0 = audioX0 * audio.mask + audio.clean * (1 - audio.mask)
+            videoX = Self.eulerStep(videoX, x0: videoX0, sigma: sigma, next: next)
+            audioX = Self.eulerStep(audioX, x0: audioX0, sigma: sigma, next: next)
+            eval(videoX, audioX)
+            onStep()
+            if isCancelled() { throw GenerationError.cancelled }
+        }
+        return (videoX, audioX)
+    }
+
+    /// One guided step's passes (`X0Model` each): the x0 predictions before the guiders combine them.
+    static func guidedPasses(
+        transformer: LTXTransformer, videoX: MLXArray, audioX: MLXArray, sigma: Double, video: LTXLatentState,
+        text: (video: MLXArray, audio: MLXArray), negative: (video: MLXArray, audio: MLXArray),
+        videoGuider: LTXGuider, audioGuider: LTXGuider, videoPositions: MLXArray, audioPositions: MLXArray,
+        keyframeTokens: Int, isCancelled: () -> Bool = { false }
+    ) throws -> (cond: (video: MLXArray, audio: MLXArray), uncond: (video: MLXArray, audio: MLXArray)?,
+                 perturbed: (video: MLXArray, audio: MLXArray)?, isolated: (video: MLXArray, audio: MLXArray)?) {
+        let sigmaArray = MLXArray([Float(sigma)]).asType(.bfloat16)
+        let videoTimesteps: MLXArray? = video.uniform ? nil : (video.mask * Float(sigma)).squeezed(axis: -1)
+        func pass(_ texts: (video: MLXArray, audio: MLXArray), _ perturbation: LTXPerturbation) throws -> (video: MLXArray, audio: MLXArray) {
+            let (videoVelocity, audioVelocity) = transformer(
+                video: videoX, audio: audioX, sigma: sigmaArray, videoTimesteps: videoTimesteps,
+                videoText: texts.video, audioText: texts.audio, videoPositions: videoPositions, audioPositions: audioPositions,
+                keyframeTokens: keyframeTokens, perturbation: perturbation
+            )
+            let videoSigma = (videoTimesteps?.expandedDimensions(axis: -1) ?? sigmaArray.reshaped([1, 1, 1])).asType(.float32)
+            let audioSigma = sigmaArray.reshaped([1, 1, 1]).asType(.float32)
+            let videoX0 = (videoX.asType(.float32) - videoSigma * videoVelocity.asType(.float32)).asType(videoX.dtype)
+            let audioX0 = (audioX.asType(.float32) - audioSigma * audioVelocity.asType(.float32)).asType(audioX.dtype)
+            eval(videoX0, audioX0)
+            if isCancelled() { throw GenerationError.cancelled }
+            return (videoX0, audioX0)
+        }
+        let cond = try pass(text, .none)
+        let uncond = videoGuider.unconditional || audioGuider.unconditional ? try pass(negative, .none) : nil
+        var stg = LTXPerturbation()
+        if videoGuider.perturbed { stg.skipsVideoSelfAttention = LTXGuider.stgBlocks }
+        if audioGuider.perturbed { stg.skipsAudioSelfAttention = LTXGuider.stgBlocks }
+        let perturbed = videoGuider.perturbed || audioGuider.perturbed ? try pass(text, stg) : nil
+        let isolated = videoGuider.isolated || audioGuider.isolated
+            ? try pass(text, LTXPerturbation(isolatesModalities: true)) : nil
+        return (cond, uncond, perturbed, isolated)
     }
 
     static func eulerStep(_ x: MLXArray, x0: MLXArray, sigma: Double, next: Double) -> MLXArray {

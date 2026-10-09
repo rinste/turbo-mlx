@@ -28,6 +28,9 @@ public struct FamilyRequest {
     /// runs it in float32 (Z-Image, Qwen-Image and its editor; the other families are in 16 bits
     /// already): faster, at the price of small differences in the pixels.
     public var halfPrecision = false
+    /// LTX-2: the full pipeline (the dev transformer with guidance in stage 1, `LTXFullPipeline`)
+    /// instead of the distilled one; `steps` are then stage 1's, `guidance` the video's CFG.
+    public var quality = false
 
     public init(
         prompt: String, negativePrompt: String? = nil, seed: Int, width: Int, height: Int, steps: Int, guidance: Double,

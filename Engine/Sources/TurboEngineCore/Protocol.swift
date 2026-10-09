@@ -57,6 +57,8 @@ public struct GenerationParams: Decodable {
     /// LoRA files to apply to the model's transformer, each with its strength (families that take
     /// them: `LoRAAdaptable`). Absent or empty, the model as it is.
     public let loras: [LoRASpec]?
+    /// LTX-2: the full pipeline, guided, with the pack's dev transformer (`FamilyRequest.quality`).
+    public let quality: Bool?
 }
 
 public enum Wire {
