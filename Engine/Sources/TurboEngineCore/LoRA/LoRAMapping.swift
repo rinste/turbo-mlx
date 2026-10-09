@@ -3,7 +3,8 @@ import Foundation
 /// Which layer each key of a LoRA file adapts, as mflux's mappings say: their rows are exported to
 /// `LoRAMappingTables.swift` by Engine/Fixtures/export_lora_mappings.py, one per spelling of a
 /// layer's path once the prefixes and the matrix names are stripped (`parse`). A key is looked up
-/// with each number in it standing for the block, as mflux's loader tries them.
+/// with each number in it standing for the block, as mflux's loader tries them. LTX-2 has no rows:
+/// its keys name the model's layers once ltx-2-mlx's renames are made (`renamed`).
 public struct LoRAMapping {
     /// The part of a fused projection's up matrix a layer takes: BFL's `qkv` feeds the query, key
     /// and value layers a third each (mflux's `split_q_up` and friends); the down matrix is shared.
@@ -28,15 +29,37 @@ public struct LoRAMapping {
         case zImage = "Z-Image"
         case flux2 = "FLUX.2"
         case qwen = "Qwen-Image"
+        case ltx = "LTX-2"
 
         var rows: [Row] {
             switch self {
             case .zImage: LoRAMapping.zImageRows
             case .flux2: LoRAMapping.flux2Rows
             case .qwen: LoRAMapping.qwenRows + LoRAMapping.qwenExtraRows
+            case .ltx: []
+            }
+        }
+
+        /// What a path's segments are renamed to before it is looked up.
+        var renames: [(String, String)] {
+            switch self {
+            case .ltx: LoRAMapping.ltxRenames
+            case .zImage, .flux2, .qwen: []
             }
         }
     }
+
+    /// ltx-2-mlx's `LTXV_LORA_COMFY_RENAMING_MAP` (Lightricks' and ComfyUI's keys → its module
+    /// names, which the port keeps), without the `diffusion_model.` it strips first, as `parse` does.
+    static let ltxRenames: [(String, String)] = [
+        (".to_out.0.", ".to_out."),
+        (".ff.net.0.proj.", ".ff.proj_in."),
+        (".ff.net.2.", ".ff.proj_out."),
+        (".linear_1.", ".linear1."),
+        (".linear_2.", ".linear2."),
+        (".audio_ff.net.0.proj.", ".audio_ff.proj_in."),
+        (".audio_ff.net.2.", ".audio_ff.proj_out."),
+    ]
 
     /// Qwen-Image's modulation layers, which diffusers names `img_mod.1` and mflux `img_mod_linear`:
     /// mflux's mapping leaves them out (a file that adapts them reaches only the rest there), the
@@ -104,6 +127,23 @@ public struct LoRAMapping {
     }
 
     // MARK: Lookup
+
+    /// The path with the table's renames made, on whole segments; an underscored path (Kohya's)
+    /// gets them with underscores for the dots.
+    func renamed(_ path: String) -> String {
+        let renames = table.renames
+        guard !renames.isEmpty else { return path }
+        for prefix in Self.underscoredPrefixes where path.hasPrefix(prefix) {
+            var rest = "_" + path.dropFirst(prefix.count) + "_"
+            for (from, to) in renames {
+                rest = rest.replacingOccurrences(of: Self.underscoredForm(from), with: Self.underscoredForm(to))
+            }
+            return prefix + rest.dropFirst().dropLast()
+        }
+        var dotted = "." + path + "."
+        for (from, to) in renames { dotted = dotted.replacingOccurrences(of: from, with: to) }
+        return String(dotted.dropFirst().dropLast())
+    }
 
     /// The layers a path adapts (`{block}` filled in) and the part of the up matrix each takes;
     /// empty when no row names it.

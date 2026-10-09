@@ -108,18 +108,24 @@ are computed a chunk of pixel rows at a time instead (`ChunkedAttention`, 256 MB
 most), the same math to rounding.
 
 `loras` (a list of files, each with a `scale`) puts LoRAs on the transformer of Z-Image, FLUX.2
-Klein, Qwen-Image and its editor, the families mflux applies them to (`LoRA/`). A file's keys are
+Klein, Qwen-Image and its editor, the families mflux applies them to, and of LTX-2.3 and LTX-2.5
+(both stages), as ltx-2-mlx does (`LoRA/`). A file's keys are
 looked up in mflux's own mappings, exported to `LoRAMappingTables.swift` by
 `Fixtures/export_lora_mappings.py`, once their prefixes (`diffusion_model.`, `transformer.`, …) and
 matrix names (`lora_A`, `lora_down`, `lora.down`, …) are stripped; Kohya's underscored keys are
 read through the same rows, and BFL's fused `qkv` gives the query, key and value layers a third of
 its up matrix each, as mflux does. A key no row names is taken as it is when it names a linear
 layer of the model (Qwen-Image's `img_in` or `proj_out`, which mflux's mapping leaves out, as it
-does the modulation layers, here mapped too). Each adapted layer then adds `scale · (x·A)·B` to its
-own output (B times alpha / rank when the file has an alpha), as mflux's `LoRALinear` computes it
-before it bakes the sum into re-quantized weights: the engine never bakes, so the quantized
+does the modulation layers, here mapped too). LTX-2's keys need no table: ltx-2-mlx's renames
+(`to_out.0` → `to_out`, `ff.net.0.proj` → `ff.proj_in`, `linear_1` → `linear1`, …), on whole
+segments and in Kohya's underscored spelling as well, give the names its modules (and the port's)
+have. Each adapted layer then adds `scale · (x·A)·B` to its
+own output (B times alpha / rank when the file has an alpha, as ComfyUI does; ltx-2-mlx leaves
+alphas out, which Lightricks' files do not have), as mflux's `LoRALinear` computes it before it
+bakes the sum into re-quantized weights (ltx-2-mlx always bakes it): the engine never bakes, so the quantized
 weights stay as they are, another LoRA or strength only swaps the small matrices (in well under
-a second, without loading the model again), and none gives the model back bit for bit. A file
+a second, without loading the model again), and none gives the model back bit for bit. Qwen-Image
+and LTX-2 put them back on a transformer that Save memory had released. A file
 whose layers are not the model's, or not of its size, fails the image with a message saying so;
 LoKr and DoRA adapters are refused.
 
@@ -159,6 +165,8 @@ own Gemma 4), recorded stage by stage by hooks around its own functions:
 $PY Engine/Fixtures/make_ltx_fixture.py <pack> build/fixtures/ltx --gemma <gemma>   # 2.3, text to video
 $PY Engine/Fixtures/make_ltx_fixture.py <pack> build/fixtures/ltx-i2v --gemma <gemma> --image picture.png
 $PY Engine/Fixtures/make_ltx_fixture.py <2.5 pack> build/fixtures/ltx25             # 2.5: no --gemma
+#    then, with a fixture's own arguments, random LoRAs and the first pass with them
+$PY Engine/Fixtures/make_ltx_fixture.py <2.5 pack> build/fixtures/ltx25 --lora build/fixtures/ltx25/lora
 build/bin/turbo-engine verify build/fixtures/ltx
 ```
 
@@ -186,6 +194,17 @@ keyframe marker on the first latent frame of both stages; every transformer pass
 (`connector_f32.safetensors`, within 5e-5). Its DurationHead, which picks a clip's length from the
 prompt's contexts (`auto_duration` in a request, `frames` then the longest), gives the reference's
 seconds exactly on its contexts, and the seconds-to-frames rule matches on a table of 26 cases.
+
+LoRAs (9 October 2026): `--lora` writes two random LoRA files over blocks 0, 1 and 47 and the
+layers outside the blocks (130 layers), keyed as Lightricks' (`diffusion_model.….to_out.0`,
+`ff.net.0.proj`, `linear_1`) and as Kohya's (with an alpha), and the first pass with each applied
+unbaked, against which the port's pass lands within 5e-5, video and audio, on 2.3 (8-bit) and 2.5
+(4-bit); taking them off gives the plain pass back bit for bit. ltx-2-mlx's own way, the deltas
+fused into the weights and those quantized again, is shown next to it: 0.6% from the exact sum
+with the 8-bit pack, 24% with the 4-bit one, where quantizing again moves every adapted weight.
+Through the protocol, a 2.5 clip with a LoRA is the same bit for bit with and without Save memory,
+also when the transformer is loaded again for it (the LoRA goes back on with it). The LTX-2.3
+fixtures were made again then with the 8-bit pack, the 4-bit one being no longer on this Mac.
 
 The whole pipeline, same prompt and seed through the app's protocol, 768 × 512 × 49 frames with
 the 4-bit pack: the same clip as the reference (PSNR 29–35 dB per frame, 32.6 on average, through

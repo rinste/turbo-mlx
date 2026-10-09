@@ -25,6 +25,9 @@ nonisolated enum LoRABase: Hashable, Sendable {
     /// FLUX.2 Klein, with the transformer's width when the file shows it: 3072 for 4B, 4096 for 9B.
     case flux2(width: Int?)
     case qwenImage
+    /// LTX-2.3 and LTX-2.5 (4096 wide); another width is LTX-Video 0.9 or another video model
+    /// keyed the same way.
+    case ltx(width: Int?)
     case flux1
     case stableDiffusion
     case unknown
@@ -34,6 +37,7 @@ nonisolated enum LoRABase: Hashable, Sendable {
         case .zImage: "Z-Image"
         case .flux2(let width): width == 4096 ? "FLUX.2 Klein 9B" : width == 3072 ? "FLUX.2 Klein 4B" : "FLUX.2 Klein"
         case .qwenImage: "Qwen-Image"
+        case .ltx(let width): width == nil || width == 4096 ? "LTX-2" : "an older LTX-Video"
         case .flux1: "FLUX.1"
         case .stableDiffusion: "Stable Diffusion"
         case .unknown: "an unknown model"
@@ -47,6 +51,9 @@ nonisolated enum LoRABase: Hashable, Sendable {
         case .flux2(let width): model.family == .flux2Klein && (width == nil || width == model.kleinWidth)
         // Qwen-Image's editor has its transformer: a LoRA of one is a LoRA of the other.
         case .qwenImage: model.family == .qwenImage || model.family == .qwenImageEdit
+        // LTX-2.3's and LTX-2.5's transformers have the same layers: which one a LoRA was made
+        // for shows in its results, not its shapes.
+        case .ltx(let width): model.family.isLTX && (width == nil || width == 4096)
         case .flux1, .stableDiffusion: false
         case .unknown: nil
         }
@@ -56,6 +63,7 @@ nonisolated enum LoRABase: Hashable, Sendable {
     var isSupported: Bool {
         switch self {
         case .zImage, .flux2, .qwenImage, .unknown: true
+        case .ltx(let width): width == nil || width == 4096
         case .flux1, .stableDiffusion: false
         }
     }
@@ -161,6 +169,7 @@ nonisolated struct LoRAFileInfo: Hashable, Sendable {
             .compactMap { $0?.lowercased() }.joined(separator: " ")
         if note.contains("zimage") || note.contains("z-image") || note.contains("z_image") { return .zImage }
         if note.contains("qwen") { return .qwenImage }
+        if note.contains("ltx") { return .ltx(width: ltxWidth(downs)) }
         if note.contains("flux2") || note.contains("flux.2") || note.contains("flux-2") || note.contains("flux_2") { return .flux2(width: width) }
         if note.contains("flux1") || note.contains("flux.1") || note.contains("flux-1") || note.contains("flux_1") { return .flux1 }
         if note.contains("sdxl") || note.contains("sd_xl") || note.contains("stable-diffusion") || note.contains("sd_v1") { return .stableDiffusion }
@@ -171,8 +180,15 @@ nonisolated struct LoRAFileInfo: Hashable, Sendable {
         if any({ $0.hasPrefix("layers.") || $0.hasPrefix("noise.refiner") || $0.hasPrefix("context.refiner") || $0.hasPrefix("noise_refiner") || $0.hasPrefix("context_refiner") }) {
             return .zImage
         }
-        if any({ $0.hasPrefix("down.blocks") || $0.hasPrefix("up.blocks") || $0.hasPrefix("down_blocks") || $0.hasPrefix("up_blocks") || $0.hasPrefix("te.") || $0.hasPrefix("te1.") || $0.hasPrefix("te2.") || $0.hasPrefix("text_encoder") }) {
+        if any({ $0.hasPrefix("down.blocks") || $0.hasPrefix("up.blocks") || $0.hasPrefix("mid.block") || $0.hasPrefix("down_blocks") || $0.hasPrefix("up_blocks") || $0.hasPrefix("mid_block") || $0.hasPrefix("te.") || $0.hasPrefix("te1.") || $0.hasPrefix("te2.") || $0.hasPrefix("text_encoder") }) {
             return .stableDiffusion
+        }
+        // LTX's audio–video blocks, before FLUX.1, whose feed-forward is named alike (`ff.net`).
+        let ltxMarks = ["audio_attn", "audio.attn", "video_to_audio", "video.to.audio", "audio_to_video", "audio.to.video",
+                        "audio_ff", "audio.ff", "patchify_proj", "patchify.proj", "adaln_single", "adaln.single"]
+        if any({ path in ltxMarks.contains { path.contains($0) } })
+            || any({ ($0.hasPrefix("transformer_blocks.") || $0.hasPrefix("transformer.blocks.")) && ($0.contains(".attn1.") || $0.contains(".attn2.")) }) {
+            return .ltx(width: ltxWidth(downs))
         }
         if any({ $0.hasPrefix("transformer") && ($0.contains("img.mlp") || $0.contains("img_mlp") || $0.contains("txt_mlp") || $0.contains("txt.mlp") || $0.contains("img_mod") || $0.contains("img.mod") || $0.contains("txt_mod")) }) {
             return .qwenImage
@@ -199,6 +215,11 @@ nonisolated struct LoRAFileInfo: Hashable, Sendable {
         if let last = blocks.max(), last >= 19 { return .qwenImage }
         if width == 4096 { return .flux2(width: 4096) }
         return .unknown
+    }
+
+    /// LTX's video width, from the input size of the video self-attention's query.
+    static func ltxWidth(_ downs: [String: [Int]]) -> Int? {
+        downs.first { ($0.key.hasSuffix(".attn1.to_q") || $0.key.hasSuffix(".attn1.to.q")) && !$0.key.contains("audio") }?.value.last
     }
 
     /// The transformer's width, from the input size of an attention projection.

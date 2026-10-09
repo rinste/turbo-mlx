@@ -445,6 +445,11 @@ final class AppModel {
         case mismatch(LoRAChoice, LoRABase)
     }
 
+    private func loraGigabytes(for model: ModelDescriptor) -> Double {
+        guard case .ready(_, let entry) = loraState(for: model) else { return 0 }
+        return Double(entry.bytes) / Double(1 << 30)
+    }
+
     func loraState(for model: ModelDescriptor) -> LoRAState {
         guard let choice = settings.lora(for: model.family) else { return .none }
         guard let entry = loraLibrary.entry(choice.file) else { return .missing(choice) }
@@ -457,9 +462,11 @@ final class AppModel {
     private func memoryBlocker(for model: ModelDescriptor) -> Blocker? {
         let size = settings.size(for: model.family)
         let frames = model.family.media == .video ? settings.videoFrames : nil
-        guard let needed = MemoryEstimate.peak(model: model, size: size, frames: frames, lowMemory: settings.lowMemory),
-              needed > MemoryEstimate.available()
+        guard let peak = MemoryEstimate.peak(model: model, size: size, frames: frames, lowMemory: settings.lowMemory)
         else { return nil }
+        // A LoRA's matrices stay in memory beside the model's, as large as its file.
+        let needed = peak + loraGigabytes(for: model)
+        guard needed > MemoryEstimate.available() else { return nil }
         let fitsAtAll = { (candidate: ModelDescriptor) in
             MemoryEstimate.smallestPeak(model: candidate).map { $0 <= MemoryEstimate.available() } ?? false
         }

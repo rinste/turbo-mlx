@@ -55,9 +55,14 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     /// "16-bit precision" option trades for speed (the others run in 16 bits already).
     var supportsHalfPrecision: Bool { self == .zImageTurbo || self == .qwenImage || self == .qwenImageEdit }
 
-    /// The families that take LoRAs: those mflux applies them to, with its mappings (the engine's
-    /// `LoRAAdaptable`).
-    var takesLoRAs: Bool { self == .zImageTurbo || self == .flux2Klein || self == .qwenImage || self == .qwenImageEdit }
+    /// The families that take LoRAs: those mflux applies them to, with its mappings, and LTX-2 as
+    /// ltx-2-mlx does (the engine's `LoRAAdaptable`).
+    var takesLoRAs: Bool {
+        switch self {
+        case .zImageTurbo, .flux2Klein, .qwenImage, .qwenImageEdit, .ltx2, .ltx25: true
+        case .ming, .senseNova, .seedVR2: false
+        }
+    }
 
     /// The families that can show the image as it forms: image models, with steps to show it at.
     var showsPreview: Bool { media == .image && !isUpscaler }

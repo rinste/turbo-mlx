@@ -580,7 +580,7 @@ private struct LoRARow: View {
             // A LoRA for a model the app does not run is not worth a copy.
             let info = try LoRAFileInfo.read(url)
             guard info.base.isSupported else {
-                message = "\(name) is a LoRA for \(info.base.displayName), which Turbo MLX doesn’t run: it takes LoRAs for Z\u{2011}Image, FLUX.2 Klein and Qwen\u{2011}Image."
+                message = "\(name) is a LoRA for \(info.base.displayName), which Turbo MLX doesn’t run: it takes LoRAs for Z\u{2011}Image, FLUX.2 Klein, Qwen\u{2011}Image and LTX\u{2011}2."
                 return
             }
             isAdding = true

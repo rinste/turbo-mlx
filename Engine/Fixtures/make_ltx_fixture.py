@@ -12,6 +12,14 @@ is read in place, so the fixture holds only the recorded tensors and names the p
 mlx-community/gemma-3-12b-it-4bit (2.5 packs carry their own Gemma 4). With --image, the clip starts
 from the picture (image-to-video) and the encoder's tokens for both stages are recorded as well. On
 2.5 stage 1 runs the ancestral sampler: its noise draws are recorded too.
+
+With --lora <fixture>/lora, the run stops at the first transformer pass instead, after writing two
+random LoRA files there (blocks 0, 1 and the last, and the layers around them), one keyed as
+Lightricks and ComfyUI key theirs, one as Kohya's (lora_down / lora_up, with an alpha), and the
+pass with each applied as the engine applies them (each layer adds scale · (x·A)·B to its output),
+plus the pass with ltx-2-mlx's own fusion of the first (the deltas baked into the weights, which
+are quantized again), which `verify` shows for comparison. Run it with the arguments of an
+existing fixture: `verify` takes the pass's inputs from that fixture.
 """
 
 from __future__ import annotations
@@ -21,7 +29,8 @@ import json
 from pathlib import Path
 
 import mlx.core as mx
-from mlx.utils import tree_map
+import mlx.nn as nn
+from mlx.utils import tree_flatten, tree_map
 
 import ltx_core_mlx.components.diffusion_steps as diffusion_steps
 import ltx_core_mlx.text_encoders.gemma.encoders.base_encoder as base_encoder
@@ -44,6 +53,128 @@ def record(name: str, value) -> None:
     refs[name] = value
 
 
+class LoRADone(Exception):
+    """The LoRA references are written: the rest of the run is not needed."""
+
+
+class UnbakedLoRA(nn.Module):
+    """A linear layer plus scale · (x·down)·up, as the engine's LoRALinear computes it."""
+
+    def __init__(self, base, down, up, scale):
+        super().__init__()
+        self.base, self.down, self.up, self.scale = base, down, up, scale
+        self.weight = base.weight  # read by the adaLN deduplication's signature
+
+    def __call__(self, x):
+        return self.base(x) + self.scale * ((x @ self.down) @ self.up)
+
+
+# Lightricks' (and ComfyUI's) names for the module paths ltx-2-mlx (and the port) use: the inverse
+# of LTXV_LORA_COMFY_RENAMING_MAP.
+COMFY_NAMES = [(".to_out.", ".to_out.0."), (".audio_ff.proj_in.", ".audio_ff.net.0.proj."),
+               (".audio_ff.proj_out.", ".audio_ff.net.2."), (".ff.proj_in.", ".ff.net.0.proj."),
+               (".ff.proj_out.", ".ff.net.2."), (".linear1.", ".linear_1."), (".linear2.", ".linear_2.")]
+
+
+def comfy_path(path: str) -> str:
+    dotted = "." + path + "."
+    for ours, theirs in COMFY_NAMES:
+        dotted = dotted.replace(ours, theirs)
+    return dotted[1:-1]
+
+
+def module_at(root, path: str):
+    module = root
+    for part in path.split("."):
+        module = module[int(part)] if part.isdigit() else getattr(module, part)
+    return module
+
+
+def put(root, path: str, layer) -> None:
+    *parents, last = path.split(".")
+    parent = module_at(root, ".".join(parents)) if parents else root
+    if last.isdigit():
+        parent[int(last)] = layer
+    else:
+        setattr(parent, last, layer)
+
+
+def lora_references(model, call, out: Path, scale: float = 0.8, rank: int = 16) -> None:
+    """Writes the LoRA files and the passes with them (see the module's docstring)."""
+    from ltx_core_mlx.loader.fuse_loras import apply_loras
+    from ltx_core_mlx.loader.primitives import LoraStateDictWithStrength, StateDict
+    from ltx_core_mlx.loader.sd_ops import LTXV_LORA_COMFY_RENAMING_MAP
+    from ltx_core_mlx.loader.sft_loader import SafetensorsStateDictLoader
+
+    out.mkdir(parents=True, exist_ok=True)
+    last = len(model.transformer_blocks) - 1
+    blocks = ("transformer_blocks.0.", "transformer_blocks.1.", f"transformer_blocks.{last}.")
+    targets = {}
+    for path, layer in tree_flatten(model.leaf_modules(), is_leaf=lambda m: isinstance(m, nn.Module)):
+        if not isinstance(layer, (nn.Linear, nn.QuantizedLinear)):
+            continue
+        if path.startswith("transformer_blocks.") and not path.startswith(blocks):
+            continue
+        outputs, inputs = layer.weight.shape
+        if isinstance(layer, nn.QuantizedLinear):
+            inputs = inputs * 32 // layer.bits
+        targets[path] = (layer, inputs, outputs)
+
+    key = mx.random.key(2026)
+    comfy, kohya, matrices = {}, {}, {}
+    for path, (layer, inputs, outputs) in sorted(targets.items()):
+        name = comfy_path(path)
+        renamed = LTXV_LORA_COMFY_RENAMING_MAP.apply_to_key(f"diffusion_model.{name}.lora_A.weight")
+        assert renamed == f"{path}.lora_A.weight", (path, renamed)
+        key, a_key, b_key = mx.random.split(key, 3)
+        a = (mx.random.normal((rank, inputs), key=a_key) / inputs ** 0.5).astype(mx.bfloat16)
+        b = (0.5 * mx.random.normal((outputs, rank), key=b_key) / rank ** 0.5).astype(mx.bfloat16)
+        comfy[f"diffusion_model.{name}.lora_A.weight"] = a
+        comfy[f"diffusion_model.{name}.lora_B.weight"] = b
+        # Kohya's: the same delta, its up matrix doubled and an alpha of half the rank.
+        underscored = "lora_unet_" + name.replace(".", "_")
+        kohya[f"{underscored}.lora_down.weight"] = a
+        kohya[f"{underscored}.lora_up.weight"] = (b * 2).astype(mx.bfloat16)
+        kohya[f"{underscored}.alpha"] = mx.array(rank / 2, dtype=mx.float32)
+        matrices[path] = (a, b)
+    mx.save_safetensors(str(out / "comfy.safetensors"), comfy)
+    mx.save_safetensors(str(out / "kohya.safetensors"), kohya)
+
+    results = {}
+    for form in ("comfy", "kohya"):
+        for path, (a, b) in matrices.items():
+            # Kohya's up matrix times alpha / rank, as the engine scales it.
+            up = b if form == "comfy" else (b * 2).astype(mx.bfloat16) * ((rank / 2) / rank)
+            put(model, path, UnbakedLoRA(targets[path][0], a.T, up.T, scale))
+        video, audio = call()
+        mx.eval(video, audio)
+        results[f"video_{form}"], results[f"audio_{form}"] = video, audio
+        for path, (layer, _, _) in targets.items():
+            put(model, path, layer)
+
+    # ltx-2-mlx's own way: the deltas fused into the weights, quantized again.
+    plain = dict(tree_flatten(model.parameters()))
+    lora_sd = SafetensorsStateDictLoader().load(str(out / "comfy.safetensors"), sd_ops=LTXV_LORA_COMFY_RENAMING_MAP)
+    fused = apply_loras(StateDict(sd=plain, size=0, dtype=set()), [LoraStateDictWithStrength(lora_sd, scale)])
+    model.load_weights(list(fused.sd.items()))
+    video, audio = call()
+    mx.eval(video, audio)
+    results["video_comfy_baked"], results["audio_comfy_baked"] = video, audio
+    model.load_weights(list(plain.items()))
+
+    plain_video, plain_audio = call()
+    for name, value in results.items():
+        base = plain_video if name.startswith("video") else plain_audio
+        change = float(mx.abs(value.astype(mx.float32) - base.astype(mx.float32)).max() / mx.abs(base).max())
+        print(f"{name}: differs from the plain pass by {change:.2f} of its scale")
+    mx.save_safetensors(str(out / "references.safetensors"), results)
+    (out / "lora.json").write_text(json.dumps([
+        {"format": "comfy", "file": "comfy.safetensors", "scale": scale, "layers": len(matrices)},
+        {"format": "kohya", "file": "kohya.safetensors", "scale": scale, "layers": len(matrices)},
+    ], indent=2))
+    print(f"LoRA references written to {out} ({len(matrices)} layers)")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("pack")
@@ -58,6 +189,7 @@ def main() -> None:
     parser.add_argument("--image")
     parser.add_argument("--crf", type=int, default=0,
                         help="H.264 round trip of the image before encoding (upstream: 33; 0 compares the ports on the same pixels)")
+    parser.add_argument("--lora", help="write LoRA references to this folder and stop after the first pass")
     args = parser.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -87,6 +219,9 @@ def main() -> None:
     def model_hook(self, video_latent, audio_latent, timestep, **kwargs):
         video_v, audio_v = model_call(self, video_latent, audio_latent, timestep, **kwargs)
         index = passes["count"]
+        if args.lora and index == 0:
+            lora_references(self, lambda: model_call(self, video_latent, audio_latent, timestep, **kwargs), Path(args.lora))
+            raise LoRADone
         passes["count"] += 1
         # Every pass's input and output, to see where two loops part.
         record(f"step{index}_video_in", video_latent)
@@ -193,9 +328,12 @@ def main() -> None:
 
     pipe.prompt_encoder.encode = encode_hook
 
-    video_latent, audio_latent = pipe.generate_two_stage(
-        args.prompt, args.height, args.width, args.frames, frame_rate=args.fps, seed=args.seed, image=args.image
-    )
+    try:
+        video_latent, audio_latent = pipe.generate_two_stage(
+            args.prompt, args.height, args.width, args.frames, frame_rate=args.fps, seed=args.seed, image=args.image
+        )
+    except LoRADone:
+        return
     record("video_latent", video_latent)
     record("audio_latent", audio_latent)
 

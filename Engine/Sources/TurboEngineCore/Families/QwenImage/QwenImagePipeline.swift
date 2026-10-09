@@ -52,7 +52,7 @@ public final class QwenImageModel: PreviewingFamilyModel, LoRAAdaptable {
         let vae = QwenImageVAE(outChannels: 3, baseDim: config.vaeBaseDim, normalization: .meanStd)
         try WeightLoading.apply(try checkpoint.loadComponent("transformer"), to: transformer)
         try WeightLoading.apply(QwenImageVAE.weights(try checkpoint.loadComponent("vae")), to: vae, ignoring: QwenImageVAE.ignoresKey)
-        try loras.reapply(on: transformer)
+        for line in try loras.reapply(on: transformer) { Emitter.shared.log(line + " (again, on the reloaded transformer)") }
         bits = checkpoint.bits
         imageSide = (transformer, vae)
         imageSideUsed = false

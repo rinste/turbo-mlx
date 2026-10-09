@@ -137,6 +137,14 @@ enum VerifyLTX {
         )
         ok = Verify.report("pass 1 video", got: pass1.video, want: try reference("pass1_video_velocity")) && ok
         ok = Verify.report("pass 1 audio", got: pass1.audio, want: try reference("pass1_audio_velocity")) && ok
+        ok = try VerifyLoRA.run(fixture: fixture, model: model, plain: ["video": pass1.video, "audio": pass1.audio]) {
+            let pass = try model.transformerPass(
+                video: try reference("pass1_video_in"), audio: try reference("pass1_audio_in"), sigma: try reference("pass1_sigma"),
+                videoTimesteps: references["pass1_video_timesteps"], videoText: wantedVideoText, audioText: wantedAudioText,
+                videoPositions: positions1.video, audioPositions: positions1.audio, keyframeTokens: keyframes.stage1
+            )
+            return ["video": pass.video, "audio": pass.audio]
+        } && ok
         let stage1 = try model.denoiseStage(
             video: (videoInit, try reference("stage1_video_clean"), try reference("stage1_video_mask")),
             audio: (audioInit, try reference("stage1_audio_clean"), try reference("stage1_audio_mask")),

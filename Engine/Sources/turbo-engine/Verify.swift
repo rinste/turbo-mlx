@@ -227,11 +227,16 @@ enum VerifyKlein {
     }
 }
 
-/// The LoRA files Engine/Fixtures/make_lora_fixture.py added to a fixture (`lora/`), each put on the
-/// port's transformer for the fixture's pass, against mflux's pass with the same file; then taken
-/// off, which must give the plain pass back exactly. A fixture without them passes.
+/// The LoRA files Engine/Fixtures/make_lora_fixture.py (or make_ltx_fixture.py --lora) added to a
+/// fixture (`lora/`), each put on the port's transformer for the fixture's pass, against the
+/// reference's pass with the same file (`<output>_<format>` for each of the pass's outputs); then
+/// taken off, which must give the plain pass back exactly. A fixture without them passes.
 enum VerifyLoRA {
     static func run(fixture: URL, model: LoRAAdaptable, plain: MLXArray, pass: () throws -> MLXArray) throws -> Bool {
+        try run(fixture: fixture, model: model, plain: ["noise": plain]) { ["noise": try pass()] }
+    }
+
+    static func run(fixture: URL, model: LoRAAdaptable, plain: [String: MLXArray], pass: () throws -> [String: MLXArray]) throws -> Bool {
         let folder = fixture.appending(path: "lora", directoryHint: .isDirectory)
         guard let data = try? Data(contentsOf: folder.appending(path: "lora.json")),
               let entries = try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
@@ -242,18 +247,28 @@ enum VerifyLoRA {
             guard let format = entry["format"] as? String, let file = entry["file"] as? String,
                   let scale = (entry["scale"] as? NSNumber)?.doubleValue
             else { continue }
-            guard let wanted = references["noise_\(format)"] else { throw Verify.VerifyError.missingReference("lora/noise_\(format)") }
             for line in try model.loras.set([LoRASpec(path: folder.appending(path: file).path, scale: scale)], on: model.adaptedModule) {
                 print("  " + line.replacingOccurrences(of: "[turbo] ", with: ""))
             }
-            let noise = try pass()
-            eval(noise)
-            ok = Verify.report("LoRA \(format)", got: noise, want: wanted) && ok
+            let outputs = try pass()
+            for (name, output) in outputs.sorted(by: { $0.key > $1.key }) {
+                guard let wanted = references["\(name)_\(format)"] else { throw Verify.VerifyError.missingReference("lora/\(name)_\(format)") }
+                eval(output)
+                let label = outputs.count == 1 ? "LoRA \(format)" : "LoRA \(format) \(name)"
+                ok = Verify.report(label, got: output, want: wanted) && ok
+                // What the reference itself makes of the file when it bakes it (shown).
+                if let baked = references["\(name)_\(format)_baked"] {
+                    _ = Verify.report("  baked by the reference", got: output, want: baked, counts: false)
+                }
+            }
         }
         try model.loras.set([], on: model.adaptedModule)
         let again = try pass()
-        eval(again)
-        let restored = (again .== plain).all().item(Bool.self)
+        let restored = plain.allSatisfy { name, array in
+            guard let output = again[name] else { return false }
+            eval(output)
+            return (output .== array).all().item(Bool.self)
+        }
         print("  \(restored ? "✓" : "✗") LoRAs taken off    \(restored ? "the plain pass again, bit for bit" : "differs from the plain pass")")
         return restored && ok
     }

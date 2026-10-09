@@ -79,7 +79,7 @@ extension Gemma3TextModel: LTXTextTower {}
 /// ×2, three steps at full resolution, then the video and audio decoders. A reference image pins
 /// the first frame (`VideoConditionByLatentIndex`) in both stages. LTX-2.5 packs carry their own
 /// Gemma 4, run stage 1 with the ancestral sampler and mark the first latent frame as a keyframe.
-public final class LTXVideoModel: VideoFamilyModel {
+public final class LTXVideoModel: VideoFamilyModel, LoRAAdaptable {
     public let config: LTXConfig
     public let pack: URL
     /// Where the tokenizer and the Gemma weights are: the pack itself for LTX-2.5.
@@ -92,6 +92,10 @@ public final class LTXVideoModel: VideoFamilyModel {
     private var transformer: LTXTransformer?
     /// The transformer has generated since it was loaded: its weights are resident.
     private var transformerUsed = false
+    /// On the transformer, both stages, and put back on it whenever it is loaded again (Save
+    /// memory releases it for the decoders and the text side).
+    public let loras = LoRAAdapters(table: .ltx)
+    public var adaptedModule: Module? { transformer }
     private var encoderStatistics: LTXEncoderStatistics?
     private var durationHead: LTXDurationHead?
     /// Embeddings per prompt: video [1, T, 4096] and audio [1, T, 2048].
@@ -170,6 +174,7 @@ public final class LTXVideoModel: VideoFamilyModel {
         let tensors = try loadArrays(url: transformerFile())
         let weights = LTXTransformer.weights(tensors)
         try WeightLoading.apply(weights, to: model)
+        for line in try loras.reapply(on: model) { Emitter.shared.log(line + " (again, on the reloaded transformer)") }
         bits = Self.storedBits(weights)
         transformer = model
         transformerUsed = false

@@ -258,12 +258,16 @@ public final class Engine {
         }
         let poster = output.deletingPathExtension().appendingPathExtension("png")
         if let first = writer.firstFrame {
-            try ImageOutput.writePNG(first, to: poster, source: source, metadata: [
+            var metadata: [String: Any] = [
                 "engine": "turbo-engine \(Self.version)",
                 "model": spec.name ?? spec.path,
                 "prompt": params.prompt,
                 "seed": params.seed,
-            ])
+            ]
+            if let loras = (model as? LoRAAdaptable)?.loras.specs, !loras.isEmpty {
+                metadata["loras"] = loras.map { ["name": $0.name, "scale": $0.scale] as [String: Any] }
+            }
+            try ImageOutput.writePNG(first, to: poster, source: source, metadata: metadata)
         }
         mark("save_end")
 

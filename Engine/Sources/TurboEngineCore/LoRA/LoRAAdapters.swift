@@ -165,10 +165,11 @@ public final class LoRAAdapters {
         var parts: [String: Parts] = [:]
         var unmatched: [String] = []
         for (key, array) in arrays {
-            guard let (path, matrix) = LoRAMapping.parse(key) else {
+            guard let (parsed, matrix) = LoRAMapping.parse(key) else {
                 unmatched.append(key)
                 continue
             }
+            let path = mapping.renamed(parsed)
             var targets = mapping.targets(of: path)
             if targets.isEmpty {
                 // A layer named as the model names it.
