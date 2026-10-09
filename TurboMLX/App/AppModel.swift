@@ -29,6 +29,9 @@ final class AppModel {
         case missingReference
         case emptyPrompt
         case upscaleTooLarge
+        /// The LoRA chosen for the model is not in the library any more, or not for this model.
+        case loraMissing(String)
+        case loraMismatch(String, base: String)
         /// The generation should need more memory than this Mac can give (`MemoryEstimate`):
         /// about `needed` GB, and what would bring it within reach.
         case notEnoughMemory(needed: Int, remedy: String)
@@ -41,6 +44,8 @@ final class AppModel {
             case .missingReference: "Add the picture to edit."
             case .emptyPrompt: "Write a prompt."
             case .upscaleTooLarge: "Choose a smaller scale: at most 4096 × 4096 pixels."
+            case .loraMissing(let name): "The LoRA \(name) is no longer among your LoRAs: add it again, or choose None."
+            case .loraMismatch(let name, let base): "The LoRA \(name) is for \(base), not this model: choose another one, or None."
             case .notEnoughMemory(let needed, let remedy):
                 "Needs about \(needed) GB of memory, more than this Mac’s \(MemoryEstimate.installed) GB can give: \(remedy)."
             }
@@ -50,6 +55,7 @@ final class AppModel {
     let backend = BackendController()
     let downloads = DownloadCenter()
     let history = HistoryStore()
+    let loraLibrary = LoRALibrary()
     #if !SEALED
     let updater = AppUpdater()
     #endif
@@ -196,6 +202,7 @@ final class AppModel {
         started = true
         history.load()
         history.pruneReferences(keeping: settings.referenceImage)
+        loraLibrary.refresh()
         // The models folder and local model folders before the engine, which inherits the access
         // they open.
         ModelFolder.restore()
@@ -414,7 +421,35 @@ final class AppModel {
         if model.family.requiresReferenceImage, !hasReferenceImage { return .missingReference }
         if !model.family.isUpscaler, settings.trimmedPrompt.isEmpty { return .emptyPrompt }
         if model.family.isUpscaler, let size = settings.upscaledSize, size.megapixels > Upscale.maxMegapixels { return .upscaleTooLarge }
+        switch loraState(for: model) {
+        case .missing(let choice): return .loraMissing(choice.name)
+        case .mismatch(let choice, let base): return .loraMismatch(choice.name, base: base.displayName)
+        case .none, .ready: break
+        }
         return memoryBlocker(for: model)
+    }
+
+    /// Puts a word (a LoRA's trigger word) at the start of the prompt's first block.
+    func addToPrompt(_ word: String) {
+        guard !settings.trimmedPrompt.localizedCaseInsensitiveContains(word) else { return }
+        if settings.blocks.isEmpty { settings.blocks = PromptBlock.defaults() }
+        let text = settings.blocks[0].text.trimmingCharacters(in: .whitespacesAndNewlines)
+        settings.blocks[0].text = text.isEmpty ? word : "\(word), \(text)"
+    }
+
+    /// The LoRA chosen for a model, as the library has it.
+    enum LoRAState: Equatable {
+        case none
+        case ready(LoRAChoice, LoRALibrary.Entry)
+        case missing(LoRAChoice)
+        case mismatch(LoRAChoice, LoRABase)
+    }
+
+    func loraState(for model: ModelDescriptor) -> LoRAState {
+        guard let choice = settings.lora(for: model.family) else { return .none }
+        guard let entry = loraLibrary.entry(choice.file) else { return .missing(choice) }
+        if let base = entry.info?.base, base.fits(model) == false { return .mismatch(choice, base) }
+        return .ready(choice, entry)
     }
 
     /// A generation this Mac cannot hold: the engine would run out of memory and die with it, so
@@ -483,7 +518,8 @@ final class AppModel {
                 referenceImage: model.family.takesReferenceImage ? reference : nil,
                 upscale: upscales ? settings.upscale : nil,
                 softness: upscales ? settings.softness : nil,
-                halfPrecision: model.family.supportsHalfPrecision && settings.halfPrecision ? true : nil
+                halfPrecision: model.family.supportsHalfPrecision && settings.halfPrecision ? true : nil,
+                loras: settings.lora(for: model.family).map { [$0] }
             )
             let output = isVideo ? history.newVideoURL(seed: seed) : history.newImageURL(seed: seed)
             let job = GenerationJob(model: model, request: request, outputURL: output)
@@ -825,6 +861,10 @@ final class AppModel {
         // Likewise the precision: only the families with the option say which was chosen.
         if model?.family.supportsHalfPrecision == true {
             updated.halfPrecision = request.halfPrecision ?? false
+        }
+        // And the LoRA: the generation's, or none, for a family that takes them.
+        if let family = model?.family, family.takesLoRAs {
+            updated.setLoRA(request.loras?.first, for: family)
         }
         return (updated, model?.id ?? selectedModelID)
     }

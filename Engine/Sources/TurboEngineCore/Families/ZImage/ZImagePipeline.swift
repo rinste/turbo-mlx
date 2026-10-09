@@ -4,7 +4,7 @@ import MLXNN
 
 /// Z-Image Turbo: the Qwen3 encoder, the S3-DiT and the decoder, with the prompt cache and the
 /// sampling loop of mflux's `ZImage.generate_image` (guidance off, the linear schedule).
-public final class ZImageModel: PreviewingFamilyModel {
+public final class ZImageModel: PreviewingFamilyModel, LoRAAdaptable {
     public let config: ZImageConfig
     public let modelPath: URL
     public let textEncoder: Qwen3TextEncoder
@@ -16,6 +16,8 @@ public final class ZImageModel: PreviewingFamilyModel {
     private var prompter: Qwen3Prompter?
     /// Caption features per prompt: [tokens, capFeatDim] bf16.
     private var promptCache: [String: MLXArray] = [:]
+    public let loras = LoRAAdapters(table: .zImage)
+    public var adaptedModule: Module? { transformer }
 
     /// Loads the checkpoint at `modelPath` (mflux format). Weights stay lazy until first use.
     public init(modelPath: URL, config: ZImageConfig, loadTokenizer: Bool = true) throws {

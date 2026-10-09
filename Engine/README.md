@@ -36,9 +36,13 @@ Sources/TurboEngineCore/      protocol, mflux checkpoint loading, PNG output, th
   Families/SeedVR2/           SeedVR2 3B: the causal 3D VAE (tiled encode and decode), the
                               windowed transformer, one flow step, the wavelet and Lab color
                               correction; the picture's preparation with Pillow's bicubic
+  LoRA/                       LoRAs on a transformer: mflux's key mappings (the tables exported by
+                              Fixtures/export_lora_mappings.py) and the adapted linear layer
   Resources/                  SeedVR2's fixed text embedding, as mflux ships it
 VideoOutput.swift             MP4 (H.264 + AAC) with AVAssetWriter, frames as they are decoded
 Fixtures/make_*_fixture.py    build the checkpoint + references `verify` compares against
+                              (make_lora_fixture.py adds LoRA files to three of them)
+Fixtures/export_lora_mappings.py  writes LoRA/LoRAMappingTables.swift from mflux's LoRA mappings
 Fixtures/tokenizers.json      transformers' ids for a corpus of prompts, every family's pipeline
                               (made by make_tokenizer_corpus.py), for `verify-tokenizers`
 Fixtures/requirements.txt     the mflux revision they (and the reference worker) run with
@@ -102,6 +106,22 @@ channels, which MLX's fused attention does not take (its kernels stop at 256), s
 be materialized in full: 1 GB in float32 at 1024 × 1024, and their softmax as much again. They
 are computed a chunk of pixel rows at a time instead (`ChunkedAttention`, 256 MB of scores at
 most), the same math to rounding.
+
+`loras` (a list of files, each with a `scale`) puts LoRAs on the transformer of Z-Image, FLUX.2
+Klein, Qwen-Image and its editor, the families mflux applies them to (`LoRA/`). A file's keys are
+looked up in mflux's own mappings, exported to `LoRAMappingTables.swift` by
+`Fixtures/export_lora_mappings.py`, once their prefixes (`diffusion_model.`, `transformer.`, …) and
+matrix names (`lora_A`, `lora_down`, `lora.down`, …) are stripped; Kohya's underscored keys are
+read through the same rows, and BFL's fused `qkv` gives the query, key and value layers a third of
+its up matrix each, as mflux does. A key no row names is taken as it is when it names a linear
+layer of the model (Qwen-Image's `img_in` or `proj_out`, which mflux's mapping leaves out, as it
+does the modulation layers, here mapped too). Each adapted layer then adds `scale · (x·A)·B` to its
+own output (B times alpha / rank when the file has an alpha), as mflux's `LoRALinear` computes it
+before it bakes the sum into re-quantized weights: the engine never bakes, so the quantized
+weights stay as they are, another LoRA or strength only swaps the small matrices (in well under
+a second, without loading the model again), and none gives the model back bit for bit. A file
+whose layers are not the model's, or not of its size, fails the image with a message saying so;
+LoKr and DoRA adapters are refused.
 
 ## Building
 
@@ -192,6 +212,8 @@ $PY Engine/Fixtures/make_qwen_image_fixture.py build/fixtures/qwen-image
 $PY Engine/Fixtures/make_qwen_image_edit_fixture.py build/fixtures/qwen-image-edit
 $PY Engine/Fixtures/make_ming_fixture.py       build/fixtures/ming
 $PY Engine/Fixtures/make_seedvr2_fixture.py    build/fixtures/seedvr2
+#    random LoRA files for three of them, with the pass mflux computes with each applied
+$PY Engine/Fixtures/make_lora_fixture.py build/fixtures/zimage build/fixtures/klein build/fixtures/qwen-image
 
 # 2. The same computations in Swift, no Python: one fixture (it names its family) or all of them
 build/bin/turbo-engine verify build/fixtures/klein
@@ -210,7 +232,11 @@ checkpoint's format and read back through mflux's own mapping first) the picture
 byte for byte with and without softness, the tiled encode, the noise, the transformer's input and
 one pass (bit-identical), the step, the tiled decode, the color correction, and the whole upscale
 from the picture, shown with its PSNR (about 49 dB: the random weights and the histogram match
-spread the VAE's bf16 rounding over a few pixels). Anything above 3% fails. Identical math lands well below that; a
+spread the VAE's bf16 rounding over a few pixels). Where `make_lora_fixture.py` has run, Z-Image,
+Klein and Qwen-Image also put each of its LoRA files on the transformer for the pass (Z-Image's in
+ai-toolkit's and Kohya's spellings, Klein's in diffusers' and BFL's, with the fused `qkv`,
+Qwen-Image's in ai-toolkit's and Kohya's; some with an alpha), against mflux's pass with the same
+file, then take them off, which must give the plain pass back bit for bit. Anything above 3% fails. Identical math lands well below that; a
 wrong reshape, a swapped rotary pair or a missing cast shows up as a large error at the first stage
 it touches.
 
@@ -236,7 +262,9 @@ checkpoint, prompt, seed and size, and compare the two PNGs with `build/bin/turb
 a.png b.png` (the PSNR and the largest difference; two clips frame by frame, with their sound):
 the same image, with small local differences from bf16 rounding. On 29 September 2026, with the same MLX on both sides, at
 512 × 512: Klein 39 dB, Z-Image 39 dB (4-bit) and 44 dB (8-bit), Qwen-Image 36 dB, Ming 33 dB,
-Qwen-Image Edit 60 dB (27–35 dB before, with mlx-swift 0.31.6).
+Qwen-Image Edit 60 dB (27–35 dB before, with mlx-swift 0.31.6). The reference worker takes
+`params.loras` too, applied unbaked as the engine applies them: on 9 October 2026, Z-Image 8-bit at
+768 × 768 with a LoRA of ai-toolkit's (240 layers) lands 36.9 dB from mflux, 38.5 dB without it.
 
 A Klein edit (`params.image`, the reference picture's path) is compared the same way against
 mflux's `Flux2KleinEdit`, which the Python worker does not run. Give both an sRGB picture: the
@@ -333,8 +361,8 @@ what to run after an mlx-swift update, before the peaks in `MemoryEstimate.swift
 ## Protocol
 
 Commands on stdin, one JSON object per line: `generate` (id, model, params), `load` (model),
-`cancel` (id), `unload`, `shutdown`; `params` may carry `precision` ("bf16") and `preview`
-(true), described under Families. Events on stdout: `ready`, `phase`, `progress`, `preview` (id,
+`cancel` (id), `unload`, `shutdown`; `params` may carry `precision` ("bf16"), `preview`
+(true) and `loras` (`[{"path": …, "scale": 1}]`), described under Families. Events on stdout: `ready`, `phase`, `progress`, `preview` (id,
 step, path: a small PNG of the image as it forms, written again at each), `done` (path, seed, size,
 seconds, peak_memory, timings per phase), `failed`, `cancelled`, `model_loaded`, `load_failed` (a
 `load` that did not), `unloaded`. Everything else goes to stderr, which the app shows as the

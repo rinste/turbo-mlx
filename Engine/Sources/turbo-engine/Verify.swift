@@ -142,6 +142,10 @@ enum VerifyKlein {
         let noise = model.transformer(latents: try reference("latents"), prompt: try reference("prompt_embeds"), timestep: timestep, imageIds: try reference("latent_ids"), textIds: try reference("text_ids"))
         eval(noise)
         ok = Verify.report("transformer pass", got: noise, want: try reference("noise")) && ok
+        ok = try VerifyLoRA.run(fixture: fixture, model: model, plain: noise) {
+            model.transformer(latents: try reference("latents"), prompt: try reference("prompt_embeds"), timestep: timestep,
+                              imageIds: try reference("latent_ids"), textIds: try reference("text_ids"))
+        } && ok
 
         // 4. The scheduler (shifted for the image's token count, as Klein runs it) and the loop.
         let schedule = FlowMatchSchedule(steps: steps, imageSeqLen: initial.latentHeight * initial.latentWidth)
@@ -220,5 +224,37 @@ enum VerifyKlein {
             ok = pass && ok
         }
         return ok
+    }
+}
+
+/// The LoRA files Engine/Fixtures/make_lora_fixture.py added to a fixture (`lora/`), each put on the
+/// port's transformer for the fixture's pass, against mflux's pass with the same file; then taken
+/// off, which must give the plain pass back exactly. A fixture without them passes.
+enum VerifyLoRA {
+    static func run(fixture: URL, model: LoRAAdaptable, plain: MLXArray, pass: () throws -> MLXArray) throws -> Bool {
+        let folder = fixture.appending(path: "lora", directoryHint: .isDirectory)
+        guard let data = try? Data(contentsOf: folder.appending(path: "lora.json")),
+              let entries = try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return true }
+        let references = try loadArrays(url: folder.appending(path: "references.safetensors"))
+        var ok = true
+        for entry in entries {
+            guard let format = entry["format"] as? String, let file = entry["file"] as? String,
+                  let scale = (entry["scale"] as? NSNumber)?.doubleValue
+            else { continue }
+            guard let wanted = references["noise_\(format)"] else { throw Verify.VerifyError.missingReference("lora/noise_\(format)") }
+            for line in try model.loras.set([LoRASpec(path: folder.appending(path: file).path, scale: scale)], on: model.adaptedModule) {
+                print("  " + line.replacingOccurrences(of: "[turbo] ", with: ""))
+            }
+            let noise = try pass()
+            eval(noise)
+            ok = Verify.report("LoRA \(format)", got: noise, want: wanted) && ok
+        }
+        try model.loras.set([], on: model.adaptedModule)
+        let again = try pass()
+        eval(again)
+        let restored = (again .== plain).all().item(Bool.self)
+        print("  \(restored ? "✓" : "✗") LoRAs taken off    \(restored ? "the plain pass again, bit for bit" : "differs from the plain pass")")
+        return restored && ok
     }
 }

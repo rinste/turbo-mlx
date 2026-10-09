@@ -123,12 +123,12 @@ class ZImageTurboFamily:
     """Tongyi-MAI Z-Image-Turbo: guidance-distilled, 9 steps."""
 
     @staticmethod
-    def load(spec: dict):
+    def load(spec: dict, **lora):
         from mflux.models.common.resolution.config_resolution import ConfigResolution
         from mflux.models.z_image.variants.z_image import ZImage
 
         config = ConfigResolution.resolve_restricted(None, "z-image-turbo", model_path=spec["path"])
-        return ZImage(model_config=config, model_path=spec["path"])
+        return ZImage(model_config=config, model_path=spec["path"], **lora)
 
     @staticmethod
     def encode(model, prompt: str, spec: dict, upcoming: list[str] = ()) -> None:
@@ -149,7 +149,7 @@ class Flux2KleinFamily:
     """Black Forest Labs FLUX.2 [klein]: distilled 4B/9B (4 steps) or base (CFG)."""
 
     @staticmethod
-    def load(spec: dict):
+    def load(spec: dict, **lora):
         from mflux.models.common.config.model_config import AVAILABLE_MODELS
         from mflux.models.common.resolution.config_resolution import ConfigResolution
         from mflux.models.flux2.variants import Flux2Klein
@@ -164,7 +164,7 @@ class Flux2KleinFamily:
             extra_keys=siblings,
             base_model=spec.get("variant") or None,
         )
-        return Flux2Klein(model_config=config, model_path=spec["path"])
+        return Flux2Klein(model_config=config, model_path=spec["path"], **lora)
 
     @staticmethod
     def encode(model, prompt: str, spec: dict, upcoming: list[str] = ()) -> None:
@@ -193,12 +193,12 @@ class QwenImageFamily:
     NEGATIVE_PROMPT = " "
 
     @staticmethod
-    def load(spec: dict):
+    def load(spec: dict, **lora):
         from mflux.models.common.resolution.config_resolution import ConfigResolution
         from mflux.models.qwen.variants.txt2img.qwen_image import QwenImage
 
         config = ConfigResolution.resolve_restricted(None, "qwen-image", model_path=spec["path"])
-        return QwenImage(model_config=config, model_path=spec["path"])
+        return QwenImage(model_config=config, model_path=spec["path"], **lora)
 
     @staticmethod
     def is_cached(model, prompt: str) -> bool:
@@ -246,12 +246,12 @@ class QwenImageEditFamily:
     """Alibaba Qwen-Image-Edit 2511: the picture in `image` changed as the prompt says (true CFG)."""
 
     @staticmethod
-    def load(spec: dict):
+    def load(spec: dict, **lora):
         from mflux.models.common.resolution.config_resolution import ConfigResolution
         from mflux.models.qwen.variants.edit.qwen_image_edit import QwenImageEdit
 
         config = ConfigResolution.resolve_restricted(None, "qwen-image-edit", model_path=spec["path"])
-        return QwenImageEdit(model_config=config, model_path=spec["path"])
+        return QwenImageEdit(model_config=config, model_path=spec["path"], **lora)
 
     @staticmethod
     def is_cached(model, prompt: str) -> bool:
@@ -413,16 +413,21 @@ class Worker:
             else:
                 log(f"[turbo] unknown command: {cmd}")
 
-    def _ensure_model(self, spec: dict):
+    def _ensure_model(self, spec: dict, loras: tuple = ()):
         family = FAMILIES.get(spec.get("family", ""))
         if family is None:
             raise ValueError(f"Unsupported model family: {spec.get('family')!r}")
-        key = (spec["family"], spec["path"], spec.get("variant"))
+        # LoRAs are applied when the model is built, unbaked: each adapted layer adds
+        # scale · (x·A)·B to its output, as the native engine computes it.
+        key = (spec["family"], spec["path"], spec.get("variant"), loras)
         if self.model_key != key:
             self._unload()
             emit("phase", id=self.job_id, phase="loading")
             started = time.time()
-            model = family.load(spec)
+            lora = {}
+            if loras:
+                lora = {"lora_paths": [path for path, _ in loras], "lora_scales": [scale for _, scale in loras], "bake_lora": False}
+            model = family.load(spec, **lora)
             model.callbacks.register(ProgressReporter(self))
             self.model, self.model_key, self.model_used = model, key, False
             self.marks["load"] = self.marks.get("load", 0.0) + time.time() - started
@@ -492,15 +497,16 @@ class Worker:
             mx.reset_peak_memory()
             spec = msg.get("model", {})
             low_ram = bool(spec.get("low_ram"))
+            loras = tuple((lora["path"], float(lora["scale"])) for lora in params.get("loras") or [])
             with wired_memory():
-                family, model = self._ensure_model(spec)
+                family, model = self._ensure_model(spec, loras)
                 if (low_ram and getattr(family, "releases_text_encoder", False) and self.model_used
                         and not family.is_cached(model, params["prompt"])):
                     # A new prompt needs the text encoder, but the previous image left the other
                     # weights resident: loading it now would stack both. Start from a fresh, lazily
                     # loaded model, as the mflux CLI does on every run, so they never overlap.
                     self._unload()
-                    family, model = self._ensure_model(spec)
+                    family, model = self._ensure_model(spec, loras)
                 self._apply_memory_mode(model, low_ram)
                 self.raise_if_cancelled()
 

@@ -54,6 +54,9 @@ public struct GenerationParams: Decodable {
     public let precision: String?
     /// Show the image as it forms: a `preview` event, with a small PNG, at some steps.
     public let preview: Bool?
+    /// LoRA files to apply to the model's transformer, each with its strength (families that take
+    /// them: `LoRAAdaptable`). Absent or empty, the model as it is.
+    public let loras: [LoRASpec]?
 }
 
 public enum Wire {

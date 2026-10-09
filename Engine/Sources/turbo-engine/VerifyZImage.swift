@@ -33,6 +33,9 @@ enum VerifyZImage {
         let noise = model.transformer(latents: try reference("latents"), timestep: try reference("timestep"), capFeats: prompt)
         eval(noise)
         ok = Verify.report("transformer pass", got: noise, want: try reference("noise")) && ok
+        ok = try VerifyLoRA.run(fixture: fixture, model: model, plain: noise) {
+            model.transformer(latents: try reference("latents"), timestep: try reference("timestep"), capFeats: prompt)
+        } && ok
 
         // 4. The linear schedule, shifted for the size, and the loop.
         let schedule = LinearSchedule(steps: steps, width: width, height: height, shift: config.shift)

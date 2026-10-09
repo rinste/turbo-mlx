@@ -100,7 +100,7 @@ public struct QwenEditPicture {
 /// follow the image's in every pass. The transformer, the schedule, the guidance and the decoder
 /// are Qwen-Image's. As there, the 7B encoder and the 20B transformer are never in memory together
 /// in low-RAM mode.
-public final class QwenImageEditModel: PreviewingFamilyModel {
+public final class QwenImageEditModel: PreviewingFamilyModel, LoRAAdaptable {
     public let config: QwenImageConfig
     public let modelPath: URL
     public private(set) var bits: Int?
@@ -110,6 +110,9 @@ public final class QwenImageEditModel: PreviewingFamilyModel {
     private var prompter: TemplatePrompter?
     private var textEncoder: Qwen25TextEncoder?
     private var imageSide: (transformer: QwenImageTransformer, vae: QwenImageVAE)?
+    /// On the transformer, and put back on it whenever it is loaded again (Save memory releases it).
+    public let loras = LoRAAdapters(table: .qwen)
+    public var adaptedModule: Module? { imageSide?.transformer }
     /// The transformer has generated: its weights are resident rather than lazy.
     private var imageSideUsed = false
     /// The prompt's and the negative prompt's embeddings [1, T, hidden] in float16, per picture
@@ -145,6 +148,7 @@ public final class QwenImageEditModel: PreviewingFamilyModel {
         let vae = QwenImageVAE(outChannels: 3, baseDim: config.vaeBaseDim, normalization: .meanStd, withEncoder: true)
         try WeightLoading.apply(try checkpoint.loadComponent("transformer"), to: transformer)
         try WeightLoading.apply(QwenImageVAE.weights(try checkpoint.loadComponent("vae")), to: vae, ignoring: QwenImageVAE.ignoresKeyWithEncoder)
+        try loras.reapply(on: transformer)
         bits = checkpoint.bits
         imageSide = (transformer, vae)
         imageSideUsed = false

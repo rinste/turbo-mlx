@@ -101,6 +101,9 @@ private struct ModelSelection: View {
                     .lineLimit(3)
                 ModelStatusRow(model: model)
                 MemoryWarning(model: model)
+                if model.family.takesLoRAs {
+                    LoRARow(model: model)
+                }
             }
         }
         .sheet(isPresented: $showsAddModel) {
@@ -463,6 +466,232 @@ private struct ModelMenu: View {
         .fixedSize()
         .textCase(nil)
         .confirmsTrashing($modelToTrash)
+    }
+}
+
+// MARK: - LoRA
+
+/// The LoRA the model generates with, under it: one of the LoRAs added before or a file added now
+/// (picked, or dropped on the row), and how strongly it applies; under them the words its training
+/// captions used, which a click puts in the prompt.
+private struct LoRARow: View {
+    @Environment(AppModel.self) private var app
+    let model: ModelDescriptor
+    /// What adding a file came to, until the next choice.
+    @State private var message: String?
+    @State private var isAdding = false
+    @State private var isTargeted = false
+
+    var body: some View {
+        let state = app.loraState(for: model)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                // As wide as "Model:" above, so the two pickers start together.
+                ZStack(alignment: .leading) {
+                    Text("Model:").hidden()
+                    Text("LoRA:")
+                }
+                LoRAMenu(model: model, add: chooseFile, choose: { message = nil })
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let choice = app.settings.lora(for: model.family) {
+                    Slider(value: scale(of: choice), in: LoRAChoice.scaleRange)
+                        .controlSize(.small)
+                        .frame(width: 96)
+                        .help("How strongly the LoRA applies: 1 as it was trained, less to tone it down, more to push it further.")
+                        .accessibilityLabel("LoRA strength")
+                    Text(choice.scale, format: .number.precision(.fractionLength(2)))
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 34, alignment: .trailing)
+                }
+            }
+            caption(state)
+        }
+        .padding(isTargeted ? 4 : 0)
+        .background {
+            if isTargeted { RoundedRectangle(cornerRadius: 6).strokeBorder(Color.accentColor, lineWidth: 2) }
+        }
+        .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
+            guard let provider = providers.first, provider.canLoadObject(ofClass: URL.self) else { return false }
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url else { return }
+                Task { @MainActor in await add(url) }
+            }
+            return true
+        }
+        .task(id: model.id) { app.loraLibrary.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            app.loraLibrary.refresh()
+        }
+    }
+
+    @ViewBuilder
+    private func caption(_ state: AppModel.LoRAState) -> some View {
+        Group {
+            if isAdding {
+                Text("Adding the LoRA…").foregroundStyle(.secondary)
+            } else if let message {
+                Text(message).foregroundStyle(.secondary)
+            } else {
+                switch state {
+                case .ready(_, let entry):
+                    if let words = entry.info?.triggerWords, !words.isEmpty {
+                        TriggerWords(words: words)
+                    }
+                case .missing:
+                    Label("No longer among your LoRAs.", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                case .mismatch(_, let base):
+                    Label("Made for \(base.displayName), not this model.", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                case .none:
+                    EmptyView()
+                }
+            }
+        }
+        .font(.caption)
+        .lineLimit(2) // in the bar: see ModelSelection
+    }
+
+    private func scale(of choice: LoRAChoice) -> Binding<Double> {
+        Binding {
+            choice.scale
+        } set: { value in
+            var updated = choice
+            updated.scale = (value * 20).rounded() / 20
+            app.settings.setLoRA(updated, for: model.family)
+        }
+    }
+
+    private func chooseFile() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "safetensors") ?? .data]
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose a LoRA for \(model.family.displayName) (a .safetensors file)"
+        panel.prompt = "Add"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { await add(url) }
+    }
+
+    /// Adds the file to the LoRAs and, when it is for this model, chooses it.
+    private func add(_ url: URL) async {
+        let name = url.deletingPathExtension().lastPathComponent
+        do {
+            // A LoRA for a model the app does not run is not worth a copy.
+            let info = try LoRAFileInfo.read(url)
+            guard info.base.isSupported else {
+                message = "\(name) is a LoRA for \(info.base.displayName), which Turbo MLX doesn’t run: it takes LoRAs for Z\u{2011}Image, FLUX.2 Klein and Qwen\u{2011}Image."
+                return
+            }
+            isAdding = true
+            defer { isAdding = false }
+            let entry = try await app.loraLibrary.add(url)
+            if entry.info?.base.fits(model) == false, let base = entry.info?.base {
+                message = "Added to your LoRAs. It’s for \(base.displayName): choose that model to use it."
+                return
+            }
+            message = nil
+            let scale = app.settings.lora(for: model.family)?.scale ?? 1
+            app.settings.setLoRA(LoRAChoice(file: entry.file, scale: scale), for: model.family)
+        } catch {
+            message = "Couldn’t add \(name): \(error.localizedDescription)"
+        }
+    }
+}
+
+/// The LoRA picker: None, the LoRAs this model can use, those for other models (shown, not
+/// chosen), then adding a file and the folder they are kept in.
+private struct LoRAMenu: View {
+    @Environment(AppModel.self) private var app
+    let model: ModelDescriptor
+    let add: () -> Void
+    let choose: () -> Void
+    @State private var toTrash: LoRALibrary.Entry?
+
+    var body: some View {
+        let current = app.settings.lora(for: model.family)
+        let entries = app.loraLibrary.entries
+        let usable = entries.filter { $0.info?.base.fits(model) != false }
+        let others = entries.filter { $0.info?.base.fits(model) == false }
+        Menu {
+            Toggle("None", isOn: Binding(get: { current == nil }, set: { if $0 { select(nil) } }))
+            if !usable.isEmpty {
+                Divider()
+                ForEach(usable) { entry in
+                    Toggle(isOn: Binding(get: { current?.file == entry.file }, set: { if $0 { select(entry) } })) {
+                        Text(entry.name)
+                    }
+                }
+            }
+            if !others.isEmpty {
+                Section("For Other Models") {
+                    ForEach(others) { entry in
+                        Text("\(entry.name) · \(entry.info?.base.displayName ?? "")")
+                    }
+                }
+            }
+            Divider()
+            Button("Add LoRA File…", action: add)
+            Button("Show LoRAs in Finder") {
+                try? FileManager.default.createDirectory(at: LoRALibrary.directory, withIntermediateDirectories: true)
+                if let entry = current.flatMap({ app.loraLibrary.entry($0.file) }) {
+                    NSWorkspace.shared.activateFileViewerSelecting([LoRALibrary.url(entry.file)])
+                } else {
+                    NSWorkspace.shared.open(LoRALibrary.directory)
+                }
+            }
+            if let entry = current.flatMap({ app.loraLibrary.entry($0.file) }) {
+                Button("Move “\(entry.name)” to Trash…") { toTrash = entry }
+            }
+        } label: {
+            Text(current?.name ?? "None")
+                .foregroundStyle(current == nil ? .secondary : .primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .help("A LoRA adds what it was trained on (a person, an object, a style) to the model's images. Drop a .safetensors file here to add one.")
+        .accessibilityLabel("LoRA")
+        .confirmationDialog(
+            "Move “\(toTrash?.name ?? "")” to the Trash?", isPresented: Binding(get: { toTrash != nil }, set: { if !$0 { toTrash = nil } })
+        ) {
+            Button("Move to Trash", role: .destructive) {
+                if let entry = toTrash {
+                    try? app.loraLibrary.remove(entry.file)
+                    for family in ModelFamily.allCases where app.settings.lora(for: family)?.file == entry.file {
+                        app.settings.setLoRA(nil, for: family)
+                    }
+                }
+                toTrash = nil
+            }
+        } message: {
+            Text("Images made with it keep it in their settings, but can't be made again until it is added back.")
+        }
+    }
+
+    private func select(_ entry: LoRALibrary.Entry?) {
+        choose()
+        let scale = app.settings.lora(for: model.family)?.scale ?? 1
+        app.settings.setLoRA(entry.map { LoRAChoice(file: $0.file, scale: scale) }, for: model.family)
+    }
+}
+
+/// "Trigger word: ohwx": each word a link that puts it at the start of the prompt.
+private struct TriggerWords: View {
+    @Environment(AppModel.self) private var app
+    let words: [String]
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(words.count == 1 ? "Trigger word:" : "Trigger words:")
+                .foregroundStyle(.secondary)
+            ForEach(words, id: \.self) { word in
+                let inPrompt = app.settings.trimmedPrompt.localizedCaseInsensitiveContains(word)
+                Button(word) { app.addToPrompt(word) }
+                    .buttonStyle(.link)
+                    .disabled(inPrompt)
+                    .help(inPrompt ? "Already in the prompt." : "Put “\(word)” at the start of the prompt.")
+            }
+        }
     }
 }
 
@@ -1566,7 +1795,7 @@ private struct GenerateBar: View {
             let percent = model.flatMap { app.downloads.active[$0.id]?.fraction }.map { " · \(Int($0 * 100))%" } ?? ""
             wideButton("Downloading\(percent)", systemImage: "arrow.down.circle") {}
                 .disabled(true)
-        case .noModel, .missingReference, .emptyPrompt, .upscaleTooLarge, .notEnoughMemory:
+        case .noModel, .missingReference, .emptyPrompt, .upscaleTooLarge, .notEnoughMemory, .loraMissing, .loraMismatch:
             wideButton(generateTitle, systemImage: generateSymbol, note: note) {}
                 .disabled(true)
         case nil:

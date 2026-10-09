@@ -372,6 +372,10 @@ private struct ItemInfoBar: View {
                             Text("Negative: \(negativePrompt)")
                                 .foregroundStyle(.secondary)
                         }
+                        if let loras = item.request.loras, !loras.isEmpty {
+                            Text("LoRA: " + loras.map { "\($0.name) \($0.scaleLabel)" }.joined(separator: ", "))
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .font(.callout)
                     .textSelection(.enabled)

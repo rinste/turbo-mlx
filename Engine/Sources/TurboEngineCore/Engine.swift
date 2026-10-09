@@ -90,6 +90,7 @@ public final class Engine {
             Memory.peakMemory = 0
             if isCancelled(id) { throw GenerationError.cancelled }
             let model = try ensureModel(spec, jobID: id)
+            try applyLoRAs(params.loras ?? [], to: model, spec: spec)
             let lowRam = spec.lowRam == true
             model.lowRam = lowRam
             // What mflux's --low-ram does that suits a long-lived process: a small buffer cache
@@ -170,6 +171,9 @@ public final class Engine {
                 "height": image.height,
             ]
             if let negativePrompt { metadata["negative_prompt"] = negativePrompt }
+            if let loras = (model as? LoRAAdaptable)?.loras.specs, !loras.isEmpty {
+                metadata["loras"] = loras.map { ["name": $0.name, "scale": $0.scale] as [String: Any] }
+            }
             if request.halfPrecision { metadata["precision"] = "bf16" }
             try ImageOutput.writePNG(image.pixels, to: output, source: source, metadata: metadata)
             mark("save_end")
@@ -280,6 +284,22 @@ public final class Engine {
         ])
     }
 
+    // MARK: LoRAs
+
+    /// Puts the request's LoRAs on the model (and takes off those it no longer has). A family that
+    /// takes none refuses a request with some.
+    private func applyLoRAs(_ specs: [LoRASpec], to model: FamilyModel, spec: ModelSpec) throws {
+        guard let adaptable = model as? LoRAAdaptable else {
+            if !specs.isEmpty { throw EngineError.noLoRAs(spec.family) }
+            return
+        }
+        let started = Date()
+        let lines = try adaptable.loras.set(specs, on: adaptable.adaptedModule)
+        guard !lines.isEmpty else { return }
+        for line in lines { emitter.log(line) }
+        emitter.log("[turbo] LoRAs set in \(String(format: "%.2f", Date().timeIntervalSince(started)))s")
+    }
+
     // MARK: Previews
 
     /// Where a generation's previews go: the output's name with `.preview` before its extension.
@@ -329,11 +349,13 @@ public final class Engine {
 public enum EngineError: LocalizedError {
     case unsupportedFamily(String)
     case missingTextEncoder(String)
+    case noLoRAs(String)
 
     public var errorDescription: String? {
         switch self {
         case .unsupportedFamily(let family): "The native engine does not run the \(family) family."
         case .missingTextEncoder(let family): "The \(family) model needs the path of its text encoder."
+        case .noLoRAs(let family): "The \(family) family does not take LoRAs."
         }
     }
 }

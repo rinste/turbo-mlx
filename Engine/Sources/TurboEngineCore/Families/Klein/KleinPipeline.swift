@@ -132,7 +132,7 @@ public enum KleinReference {
 }
 
 /// FLUX.2 Klein: the three modules, the prompt cache, and the sampling loop.
-public final class KleinModel: PreviewingFamilyModel {
+public final class KleinModel: PreviewingFamilyModel, LoRAAdaptable {
     /// The negative prompt mflux encodes for a base checkpoint's classifier-free guidance.
     static let negativePrompt = " "
 
@@ -146,6 +146,8 @@ public final class KleinModel: PreviewingFamilyModel {
     public var lowRam = false
     private var prompter: Qwen3Prompter?
     private var promptCache: [String: EncodedPrompt] = [:]
+    public let loras = LoRAAdapters(table: .flux2)
+    public var adaptedModule: Module? { transformer }
 
     /// Loads the checkpoint at `modelPath` (mflux format). Weights stay lazy until first use.
     public init(modelPath: URL, config: KleinConfig, loadTokenizer: Bool = true) throws {

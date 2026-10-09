@@ -55,6 +55,10 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     /// "16-bit precision" option trades for speed (the others run in 16 bits already).
     var supportsHalfPrecision: Bool { self == .zImageTurbo || self == .qwenImage || self == .qwenImageEdit }
 
+    /// The families that take LoRAs: those mflux applies them to, with its mappings (the engine's
+    /// `LoRAAdaptable`).
+    var takesLoRAs: Bool { self == .zImageTurbo || self == .flux2Klein || self == .qwenImage || self == .qwenImageEdit }
+
     /// The families that can show the image as it forms: image models, with steps to show it at.
     var showsPreview: Bool { media == .image && !isUpscaler }
 
@@ -207,6 +211,12 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
     /// FLUX.2 Klein "base" checkpoints are not distilled: many steps and real CFG.
     private var isKleinBase: Bool {
         family == .flux2Klein && (variant ?? id).lowercased().contains("base")
+    }
+
+    /// FLUX.2 Klein's transformer width, which its LoRAs must match: 4096 for 9B, 3072 for 4B.
+    var kleinWidth: Int? {
+        guard family == .flux2Klein else { return nil }
+        return (variant ?? id).lowercased().contains("9b") ? 4096 : 3072
     }
 
     var supportsGuidance: Bool {

@@ -58,6 +58,13 @@ models want more, see the table) and room on the disk for the models you pick.
   slower, often finer), the seed (random by default), several images at once, a transparent or white background, *Save memory*, the
   *Live preview* (the image shown as it forms) and *16-bit precision* for Z-Image and Qwen-Image
   (an experiment: different details, no faster on an M1).
+- **A LoRA**, under the model, for Z-Image Turbo, FLUX.2 Klein, Qwen-Image and Qwen-Image Edit:
+  a small add-on file (`.safetensors`) trained to bring a person, an object or a style into the
+  model's images. Choose *Add LoRA File…* in its menu, or drop the file on it; the app keeps a
+  copy, so it is there next time, and remembers one per model. The slider sets how strongly it
+  applies (1 as trained), and its *trigger word*, when the file names one, goes into the prompt
+  with a click. A LoRA made for another model (FLUX.1, Stable Diffusion) is turned away with a
+  word on why.
 - **Model and Generate**, at the bottom. The model picker groups upscale, image and video models
   and shows how much memory each one needs; an icon marks the ones that take a picture, a small
   arrow the ones not downloaded yet. The big button tells how long the next generation should

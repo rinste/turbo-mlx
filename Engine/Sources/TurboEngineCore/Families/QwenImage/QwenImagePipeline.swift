@@ -6,7 +6,7 @@ import MLXNN
 /// cache and the loop of mflux's `QwenImage.generate_image` (true classifier-free guidance, the
 /// linear schedule). The 7B encoder is kept out of memory while the 20B transformer works in
 /// low-RAM mode, and vice versa: each side reloads lazily when it is next needed.
-public final class QwenImageModel: PreviewingFamilyModel {
+public final class QwenImageModel: PreviewingFamilyModel, LoRAAdaptable {
     public let config: QwenImageConfig
     public let modelPath: URL
     public private(set) var bits: Int?
@@ -16,6 +16,9 @@ public final class QwenImageModel: PreviewingFamilyModel {
     private var prompter: TemplatePrompter?
     private var textEncoder: Qwen25TextEncoder?
     private var imageSide: (transformer: QwenImageTransformer, vae: QwenImageVAE)?
+    /// On the transformer, and put back on it whenever it is loaded again (Save memory releases it).
+    public let loras = LoRAAdapters(table: .qwen)
+    public var adaptedModule: Module? { imageSide?.transformer }
     /// The transformer has generated: its weights are resident rather than lazy.
     private var imageSideUsed = false
     /// Prompt embeddings per prompt, [1, T, joint dim] bf16; a negative prompt of the user's too.
@@ -49,6 +52,7 @@ public final class QwenImageModel: PreviewingFamilyModel {
         let vae = QwenImageVAE(outChannels: 3, baseDim: config.vaeBaseDim, normalization: .meanStd)
         try WeightLoading.apply(try checkpoint.loadComponent("transformer"), to: transformer)
         try WeightLoading.apply(QwenImageVAE.weights(try checkpoint.loadComponent("vae")), to: vae, ignoring: QwenImageVAE.ignoresKey)
+        try loras.reapply(on: transformer)
         bits = checkpoint.bits
         imageSide = (transformer, vae)
         imageSideUsed = false

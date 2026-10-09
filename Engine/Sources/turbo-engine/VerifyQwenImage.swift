@@ -40,6 +40,9 @@ enum VerifyQwenImage {
         let noise = transformer(latents: try reference("latents"), prompt: embeds, timestep: timestep, latentHeight: latentHeight, latentWidth: latentWidth)
         eval(noise)
         ok = Verify.report("transformer pass", got: noise, want: try reference("noise")) && ok
+        ok = try VerifyLoRA.run(fixture: fixture, model: model, plain: noise) {
+            transformer(latents: try reference("latents"), prompt: embeds, timestep: timestep, latentHeight: latentHeight, latentWidth: latentWidth)
+        } && ok
 
         // 4. The schedule and the guided loop.
         let schedule = LinearSchedule(steps: steps, width: width, height: height, shift: config.shift)
