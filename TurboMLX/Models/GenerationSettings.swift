@@ -109,6 +109,8 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     static let upscaleFactors: [Double] = [2, 3, 4]
 
     var blocks = PromptBlock.defaults()
+    /// What the image should not have, for the models that take it (`supportsNegativePrompt`).
+    var negativePrompt = ""
     var aspect = AspectRatio.square
     var resolution = 768
     var usesCustomSize = false
@@ -185,10 +187,17 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     var prompt: String { PromptBlock.joined(blocks) }
     var trimmedPrompt: String { prompt }
 
+    /// The negative prompt `model` would get: nil where it has none, or guidance is off and there
+    /// is no unconditional pass to use it.
+    func negativePrompt(for model: ModelDescriptor) -> String? {
+        let text = negativePrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        return model.supportsNegativePrompt && guidance > 1 && !text.isEmpty ? text : nil
+    }
+
     init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case blocks, aspect, resolution, usesCustomSize, customWidth, customHeight, steps, guidance,
+        case blocks, negativePrompt, aspect, resolution, usesCustomSize, customWidth, customHeight, steps, guidance,
              randomSeed, seed, batchCount, transparentBackground, lowMemory,
              videoResolution, videoSeconds, videoFrameRate, videoAutoDuration, referenceImage, upscale, softness,
              halfPrecision, livePreview
@@ -207,6 +216,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
             let legacy = try decoder.container(keyedBy: LegacyKeys.self)
             blocks = PromptBlock.defaults(subject: try legacy.decodeIfPresent(String.self, forKey: .prompt) ?? "")
         }
+        negativePrompt = try values.decodeIfPresent(String.self, forKey: .negativePrompt) ?? negativePrompt
         aspect = try values.decodeIfPresent(AspectRatio.self, forKey: .aspect) ?? aspect
         resolution = try values.decodeIfPresent(Int.self, forKey: .resolution) ?? resolution
         usesCustomSize = try values.decodeIfPresent(Bool.self, forKey: .usesCustomSize) ?? usesCustomSize
@@ -262,6 +272,8 @@ nonisolated struct GenerationRequest: Codable, Hashable, Sendable {
     /// The blocks the prompt was assembled from, so Reuse Prompt and Settings brings them back
     /// (older history items have none).
     var blocks: [PromptBlock]?
+    /// What guidance steered away from (`GenerationSettings.negativePrompt(for:)`); nil without one.
+    var negativePrompt: String?
     var seed: Int
     var size: PixelSize
     var steps: Int

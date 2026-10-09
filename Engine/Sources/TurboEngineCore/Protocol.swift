@@ -28,6 +28,9 @@ public struct ModelSpec: Decodable, Equatable {
 /// One image to generate.
 public struct GenerationParams: Decodable {
     public let prompt: String
+    /// What classifier-free guidance steers away from (Qwen-Image and its editor, FLUX.2 Klein
+    /// base). Absent or empty, the family's own.
+    public let negativePrompt: String?
     public let seed: Int
     public let width: Int
     public let height: Int

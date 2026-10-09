@@ -18,8 +18,9 @@ public final class QwenImageModel: PreviewingFamilyModel {
     private var imageSide: (transformer: QwenImageTransformer, vae: QwenImageVAE)?
     /// The transformer has generated: its weights are resident rather than lazy.
     private var imageSideUsed = false
-    /// Prompt embeddings per prompt, [1, T, joint dim] bf16.
+    /// Prompt embeddings per prompt, [1, T, joint dim] bf16; a negative prompt of the user's too.
     private var promptCache: [String: MLXArray] = [:]
+    /// Qwen's own negative prompt, encoded once.
     private var negativeEmbeds: MLXArray?
 
     /// Loads the checkpoint at `modelPath` (mflux format). Weights stay lazy until first use.
@@ -132,7 +133,9 @@ public final class QwenImageModel: PreviewingFamilyModel {
 
         phase(.encoding)
         try encode(request.prompt)
-        guard let prompt = promptCache[request.prompt], let negative = negativeEmbeds else { throw GenerationError.cancelled }
+        if let negativePrompt = request.negativePrompt { try encode(negativePrompt) }
+        let negativeEntry = request.negativePrompt.map { promptCache[$0] } ?? negativeEmbeds
+        guard let prompt = promptCache[request.prompt], let negative = negativeEntry else { throw GenerationError.cancelled }
         if isCancelled() { throw GenerationError.cancelled }
 
         phase(.denoising)

@@ -20,6 +20,9 @@ struct ControlPanel: View {
                     UpscaleSection(settings: $app.settings)
                 } else {
                     PromptSection(settings: $app.settings, focus: $focusedBlock)
+                    if model.supportsNegativePrompt {
+                        NegativePromptSection(settings: $app.settings)
+                    }
                     FormatSection(settings: $app.settings, family: model.family)
                     if model.family.media == .video {
                         ClipSection(settings: $app.settings, picksDuration: model.family.picksDuration)
@@ -744,6 +747,42 @@ private struct BlockTextEditor: View {
     private func textHeight(stretchedBy amount: CGFloat) -> CGFloat {
         let start = height.map { CGFloat($0) } ?? Self.defaultHeight
         return min(max(start + amount, Self.heights.lowerBound), Self.heights.upperBound)
+    }
+}
+
+// MARK: - Negative prompt
+
+/// What the image should not have, for the models whose guidance steers away from a text: one
+/// plain field under the blocks, a few lines tall.
+private struct NegativePromptSection: View {
+    @Binding var settings: GenerationSettings
+
+    var body: some View {
+        Section {
+            TextEditor(text: $settings.negativePrompt)
+                .scrollContentBackground(.hidden)
+                .frame(height: 56)
+                .overlay(alignment: .topLeading) {
+                    if settings.negativePrompt.isEmpty {
+                        Text("What to keep out of the image: blur, watermarks, extra fingers.")
+                            .foregroundStyle(.tertiary)
+                            .padding(.leading, 5)
+                            .allowsHitTesting(false)
+                    }
+                }
+                // As large as the blocks' text.
+                .font(.system(size: 15))
+                .accessibilityLabel("Negative prompt")
+        } header: {
+            Text("Negative Prompt")
+        } footer: {
+            // Without guidance there is no pass for it to steer.
+            if settings.guidance <= 1 {
+                Text("Used with guidance above 1.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 }
 

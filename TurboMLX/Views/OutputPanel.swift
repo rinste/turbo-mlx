@@ -366,10 +366,16 @@ private struct ItemInfoBar: View {
         VStack(alignment: .leading, spacing: 8) {
             HeightLimit(maxHeight: Self.promptHeight) {
                 ScrollView {
-                    Text(item.caption)
-                        .font(.callout)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.caption)
+                        if let negativePrompt = item.request.negativePrompt {
+                            Text("Negative: \(negativePrompt)")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .contentMargins(.trailing, Self.scrollBarMargin, for: .scrollContent)
                 .scrollBounceBehavior(.basedOnSize)

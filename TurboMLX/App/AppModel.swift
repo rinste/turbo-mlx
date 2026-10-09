@@ -470,6 +470,7 @@ final class AppModel {
             let request = GenerationRequest(
                 prompt: upscales ? "" : settings.trimmedPrompt,
                 blocks: upscales ? nil : settings.blocks.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
+                negativePrompt: settings.negativePrompt(for: model),
                 seed: seed,
                 size: settings.size(for: model.family),
                 steps: min(max(settings.steps, model.stepRange.lowerBound), model.stepRange.upperBound),
@@ -560,12 +561,15 @@ final class AppModel {
         activeJob = job
         job.phase = .starting
         job.startedAt = Date()
-        // Prompts of the images queued behind this one, for the same model and memory mode, so
-        // the worker can encode them while the text encoder is in memory.
+        // Prompts and negative prompts of the images queued behind this one, for the same model
+        // and memory mode, so the worker can encode them while the text encoder is in memory.
         var upcoming: [String] = []
+        let current = [job.request.prompt, job.request.negativePrompt].compactMap(\.self)
         for queued in queue where queued.model.id == job.model.id && queued.request.lowMemory == job.request.lowMemory {
-            let prompt = queued.request.prompt
-            if prompt != job.request.prompt, !upcoming.contains(prompt) { upcoming.append(prompt) }
+            for prompt in [queued.request.prompt, queued.request.negativePrompt].compactMap(\.self)
+            where !current.contains(prompt) && !upcoming.contains(prompt) {
+                upcoming.append(prompt)
+            }
         }
         do {
             try backend.send(.generate(
@@ -787,6 +791,11 @@ final class AppModel {
                 updated.blocks = blocks
             } else {
                 updated.blocks = PromptBlock.defaults(subject: request.prompt)
+            }
+            // Only a generation that ran guidance on a model that takes a negative prompt says
+            // which it had, none included; the others leave the field as it is.
+            if model?.supportsNegativePrompt == true, request.guidance > 1 {
+                updated.negativePrompt = request.negativePrompt ?? ""
             }
             // Sides in the family's multiple: SenseNova's 16:9 at 2048 is 2720 wide (32), not 2736
             // (16), and must not turn Custom size on, which locks the resolution.

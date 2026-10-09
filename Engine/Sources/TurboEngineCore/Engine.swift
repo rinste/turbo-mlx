@@ -99,16 +99,20 @@ public final class Engine {
 
             emitter.emit("phase", ["id": id, "phase": "encoding"])
             mark("encode_start")
-            // This prompt, then the queued ones, encode now while the text encoder is resident.
-            let upcoming = (params.upcomingPrompts ?? []).filter { !$0.isEmpty && $0 != params.prompt }
-            for text in [params.prompt] + upcoming.prefix(8) where !model.isCached(text) {
+            // A negative prompt only counts where guidance runs an unconditional pass.
+            let negativePrompt = params.guidance > 1 ? params.negativePrompt.flatMap { $0.isEmpty ? nil : $0 } : nil
+            // This prompt and its negative, then the queued ones (their negatives among them),
+            // encode now while the text encoder is resident.
+            let current = [params.prompt] + (negativePrompt.map { [$0] } ?? [])
+            let upcoming = (params.upcomingPrompts ?? []).filter { !$0.isEmpty && !current.contains($0) }
+            for text in current + upcoming.prefix(8) where !model.isCached(text) {
                 try model.encode(text)
                 if isCancelled(id) { throw GenerationError.cancelled }
             }
             model.promptsEncoded()
 
             let request = FamilyRequest(
-                prompt: params.prompt, seed: params.seed, width: params.width, height: params.height,
+                prompt: params.prompt, negativePrompt: negativePrompt, seed: params.seed, width: params.width, height: params.height,
                 steps: params.steps, guidance: params.guidance, flattenAlpha: params.flattenAlpha ?? false,
                 frames: params.frames, fps: params.fps, imagePath: params.image,
                 upscale: params.upscale, softness: params.softness,
@@ -165,6 +169,7 @@ public final class Engine {
                 "width": image.width,
                 "height": image.height,
             ]
+            if let negativePrompt { metadata["negative_prompt"] = negativePrompt }
             if request.halfPrecision { metadata["precision"] = "bf16" }
             try ImageOutput.writePNG(image.pixels, to: output, source: source, metadata: metadata)
             mark("save_end")

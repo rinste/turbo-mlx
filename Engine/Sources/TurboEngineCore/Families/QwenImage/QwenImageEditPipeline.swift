@@ -180,10 +180,13 @@ public final class QwenImageEditModel: PreviewingFamilyModel {
         return prompter.tokenIds(QwenImageConfig.editText(prompt: prompt, imageTokens: imageTokens))
     }
 
-    /// The prompt's and the negative prompt's embeddings with `picture` (identified by `key`). The
-    /// reference reads the picture once for each; its tokens are the same both times, read once here.
-    public func embeds(prompt: String, picture: QwenEditPicture, key: String) throws -> (prompt: MLXArray, negative: MLXArray) {
-        let cacheKey = key + "\u{1F}" + prompt
+    /// The prompt's and the negative prompt's embeddings with `picture` (identified by `key`), the
+    /// negative mflux's empty one unless `negativePrompt` is given. The reference reads the picture
+    /// once for each; its tokens are the same both times, read once here.
+    public func embeds(prompt: String, negativePrompt: String? = nil, picture: QwenEditPicture, key: String) throws
+        -> (prompt: MLXArray, negative: MLXArray) {
+        let negativeText = negativePrompt ?? QwenImageConfig.editNegativePrompt
+        let cacheKey = [key, prompt, negativeText].joined(separator: "\u{1F}")
         if let cached = embedsCache.first(where: { $0.key == cacheKey }) { return (cached.prompt, cached.negative) }
         let encoder = try loadedTextEncoder()
         guard let vision = config.vision else { preconditionFailure("an edit model needs its vision tower") }
@@ -197,7 +200,7 @@ public final class QwenImageEditModel: PreviewingFamilyModel {
             eval(embeds)
             return embeds
         }
-        let result = (prompt: try run(prompt), negative: try run(QwenImageConfig.editNegativePrompt))
+        let result = (prompt: try run(prompt), negative: try run(negativeText))
         embedsCache.append((cacheKey, result.prompt, result.negative))
         if embedsCache.count > Self.cachedEdits { embedsCache.removeFirst() }
         return result
@@ -244,7 +247,8 @@ public final class QwenImageEditModel: PreviewingFamilyModel {
 
         phase(.encoding)
         let picture = try QwenEditPicture(path: path)
-        let (prompt, negative) = try embeds(prompt: request.prompt, picture: picture, key: Self.pictureKey(path))
+        let (prompt, negative) = try embeds(prompt: request.prompt, negativePrompt: request.negativePrompt, picture: picture,
+                                            key: Self.pictureKey(path))
         if lowRam, textEncoder != nil {
             textEncoder = nil
             Memory.clearCache()

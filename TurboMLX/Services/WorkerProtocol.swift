@@ -52,8 +52,9 @@ nonisolated struct BackendInfo: Equatable, Sendable {
 
 /// Commands understood by `turbo-engine serve`.
 nonisolated enum WorkerCommand: Sendable {
-    /// `upcomingPrompts` are the distinct prompts of the images queued behind this one: the
-    /// worker encodes them while the text encoder is resident, so they will not reload the model.
+    /// `upcomingPrompts` are the distinct prompts (and negative prompts) of the images queued
+    /// behind this one: the worker encodes them while the text encoder is resident, so they will
+    /// not reload the model.
     /// `textEncoderPath`: the companion checkpoint of a family that has one (LTX-2's Gemma).
     /// `preview`: the engine shows the image as it forms (`preview` events with a small PNG).
     case generate(jobID: UUID, model: ModelDescriptor, modelPath: String, textEncoderPath: String?, request: GenerationRequest,
@@ -111,6 +112,7 @@ nonisolated enum WorkerCommand: Sendable {
             "output": output.path,
             "upcoming_prompts": upcomingPrompts,
         ]
+        if let negativePrompt = request.negativePrompt { params["negative_prompt"] = negativePrompt }
         if let frames = request.frames { params["frames"] = frames }
         if let fps = request.fps { params["fps"] = Double(fps) }
         if request.autoDuration == true { params["auto_duration"] = true }

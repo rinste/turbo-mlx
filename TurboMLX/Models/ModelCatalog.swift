@@ -218,6 +218,13 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         }
     }
 
+    /// The models whose guidance runs against an encoded text, which the user can write: Qwen-Image,
+    /// its editor and FLUX.2 Klein base. Ming's unconditional pass zeroes the prompt instead, so
+    /// there is no text to give it.
+    var supportsNegativePrompt: Bool {
+        supportsGuidance && family != .ming
+    }
+
     /// LTX-2: the steps of the first stage (three more refine the upscaled clip).
     var defaultSteps: Int {
         switch family {

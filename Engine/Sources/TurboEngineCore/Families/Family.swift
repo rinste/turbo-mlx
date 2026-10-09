@@ -4,6 +4,9 @@ import MLX
 /// One image, as the app asks for it.
 public struct FamilyRequest {
     public var prompt: String
+    /// What classifier-free guidance steers away from, encoded like a prompt (Qwen-Image and its
+    /// editor, FLUX.2 Klein base); nil, the family's own (a space, or nothing).
+    public var negativePrompt: String?
     public var seed: Int
     public var width: Int
     public var height: Int
@@ -27,11 +30,12 @@ public struct FamilyRequest {
     public var halfPrecision = false
 
     public init(
-        prompt: String, seed: Int, width: Int, height: Int, steps: Int, guidance: Double, flattenAlpha: Bool,
-        frames: Int? = nil, fps: Double? = nil, imagePath: String? = nil, upscale: Double? = nil, softness: Double? = nil,
-        halfPrecision: Bool = false
+        prompt: String, negativePrompt: String? = nil, seed: Int, width: Int, height: Int, steps: Int, guidance: Double,
+        flattenAlpha: Bool, frames: Int? = nil, fps: Double? = nil, imagePath: String? = nil, upscale: Double? = nil,
+        softness: Double? = nil, halfPrecision: Bool = false
     ) {
         self.prompt = prompt
+        self.negativePrompt = negativePrompt
         self.seed = seed
         self.width = width
         self.height = height

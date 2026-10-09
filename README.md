@@ -41,7 +41,9 @@ models want more, see the table) and room on the disk for the models you pick.
 ### On the left: what to make
 
 - **The prompt.** You write it in blocks, *Subject* and *Style* to start with, which join into
-  one text. Add more, rename them, resize them, drag them into another order.
+  one text. Add more, rename them, resize them, drag them into another order. Under them, the
+  models whose guidance can use one (Qwen-Image, Qwen-Image Edit, FLUX.2 Klein base) have a
+  *Negative Prompt*: what to keep out of the picture.
 - **Shape and size.** The aspect ratio and the resolution (a bigger picture takes longer) and,
   for the models that use it, *Guidance*: how closely the picture follows the prompt.
 - **A starting picture.** Models that can use one show a *Reference Image* box above the prompt:
