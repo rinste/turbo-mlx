@@ -99,7 +99,10 @@ public struct QwenEditPicture {
 /// into the prompt (about 384 × 384 pixels), and through the VAE's encoder into latents that
 /// follow the image's in every pass. The transformer, the schedule, the guidance and the decoder
 /// are Qwen-Image's. As there, the 7B encoder and the 20B transformer are never in memory together
-/// in low-RAM mode.
+/// in low-RAM mode. Several pictures go in as Qwen's own pipeline takes them from Edit 2509 on:
+/// each through the vision tower, named in the prompt "Picture 1: ", "Picture 2: "…
+/// (`QwenImageConfig.editText`), and each one's latents after the image's, in order, the `n`-th
+/// picture at frame position `n` of the rotary embedding.
 public final class QwenImageEditModel: PreviewingFamilyModel, LoRAAdaptable {
     public let config: QwenImageConfig
     public let modelPath: URL
@@ -178,28 +181,30 @@ public final class QwenImageEditModel: PreviewingFamilyModel, LoRAAdaptable {
     public func encode(_ prompt: String) throws {}
     public func promptsEncoded() {}
 
-    /// The template's token ids for `prompt` with `imageTokens` placeholders for the picture.
-    public func tokenIds(prompt: String, imageTokens: Int) throws -> [Int] {
+    /// The template's token ids for `prompt` with `pictureTokens` placeholders for each picture.
+    public func tokenIds(prompt: String, pictureTokens: [Int]) throws -> [Int] {
         guard let prompter else { throw Qwen3Prompter.PromptError.noTokenizer(modelPath) }
-        return prompter.tokenIds(QwenImageConfig.editText(prompt: prompt, imageTokens: imageTokens))
+        return prompter.tokenIds(QwenImageConfig.editText(prompt: prompt, pictureTokens: pictureTokens))
     }
 
-    /// The prompt's and the negative prompt's embeddings with `picture` (identified by `key`), the
-    /// negative mflux's empty one unless `negativePrompt` is given. The reference reads the picture
-    /// once for each; its tokens are the same both times, read once here.
-    public func embeds(prompt: String, negativePrompt: String? = nil, picture: QwenEditPicture, key: String) throws
+    /// The prompt's and the negative prompt's embeddings with `pictures` (identified by `key`), the
+    /// negative mflux's empty one unless `negativePrompt` is given. The reference reads the pictures
+    /// once for each; their tokens are the same both times, read once here, every picture's in
+    /// one pass of the vision tower (each attends within itself).
+    public func embeds(prompt: String, negativePrompt: String? = nil, pictures: [QwenEditPicture], key: String) throws
         -> (prompt: MLXArray, negative: MLXArray) {
         let negativeText = negativePrompt ?? QwenImageConfig.editNegativePrompt
         let cacheKey = [key, prompt, negativeText].joined(separator: "\u{1F}")
         if let cached = embedsCache.first(where: { $0.key == cacheKey }) { return (cached.prompt, cached.negative) }
         let encoder = try loadedTextEncoder()
         guard let vision = config.vision else { preconditionFailure("an edit model needs its vision tower") }
-        let input = picture.visionInput(vision)
-        let image = encoder.imageEmbeds(pixelValues: input.pixelValues, grids: [input.grid])
+        let inputs = pictures.map { $0.visionInput(vision) }
+        let pixelValues = inputs.count == 1 ? inputs[0].pixelValues : concatenated(inputs.map(\.pixelValues), axis: 0)
+        let image = encoder.imageEmbeds(pixelValues: pixelValues, grids: inputs.map(\.grid))
         eval(image)
-        let tokens = input.grid.patches / (vision.spatialMergeSize * vision.spatialMergeSize)
+        let tokens = inputs.map { $0.grid.patches / (vision.spatialMergeSize * vision.spatialMergeSize) }
         func run(_ text: String) throws -> MLXArray {
-            let ids = try tokenIds(prompt: text, imageTokens: tokens)
+            let ids = try tokenIds(prompt: text, pictureTokens: tokens)
             let embeds = encoder.editEmbeds(inputIds: MLXArray(ids.map { Int32($0) }, [1, ids.count]), imageEmbeds: image)
             eval(embeds)
             return embeds
@@ -244,33 +249,39 @@ public final class QwenImageEditModel: PreviewingFamilyModel, LoRAAdaptable {
         preview: (Preview) -> Void,
         isCancelled: () -> Bool
     ) throws -> GeneratedImage {
-        guard let path = request.imagePath else { throw GenerationError.referenceRequired }
+        let paths = request.imagePaths
+        guard !paths.isEmpty else { throw GenerationError.referenceRequired }
         let width = 16 * (request.width / 16)
         let height = 16 * (request.height / 16)
         guard width >= 16, height >= 16 else { throw GenerationError.sizeTooSmall }
 
         phase(.encoding)
-        let picture = try QwenEditPicture(path: path)
-        let (prompt, negative) = try embeds(prompt: request.prompt, negativePrompt: request.negativePrompt, picture: picture,
-                                            key: Self.pictureKey(path))
+        let pictures = try paths.map { try QwenEditPicture(path: $0) }
+        let (prompt, negative) = try embeds(prompt: request.prompt, negativePrompt: request.negativePrompt, pictures: pictures,
+                                            key: paths.map(Self.pictureKey).joined(separator: "\u{1E}"))
         if lowRam, textEncoder != nil {
             textEncoder = nil
             Memory.clearCache()
         }
         if isCancelled() { throw GenerationError.cancelled }
 
+        // Each picture at about the image's area in its own proportions, its tokens after the
+        // previous one's.
         let (transformer, vae) = try loadedImageSide()
-        let reference = Self.referenceSize(pictureWidth: picture.width, pictureHeight: picture.height, width: width, height: height)
-        let referenceTokens = referenceLatents(picture: picture, width: reference.width, height: reference.height, vae: vae)
-        if isCancelled() { throw GenerationError.cancelled }
+        let references = pictures.map { Self.referenceSize(pictureWidth: $0.width, pictureHeight: $0.height, width: width, height: height) }
+        var referenceTokens: [MLXArray] = []
+        for (picture, reference) in zip(pictures, references) {
+            referenceTokens.append(referenceLatents(picture: picture, width: reference.width, height: reference.height, vae: vae))
+            if isCancelled() { throw GenerationError.cancelled }
+        }
 
         phase(.denoising)
-        let grids = [(height: height / 16, width: width / 16), (height: reference.height / 16, width: reference.width / 16)]
+        let grids = [(height: height / 16, width: width / 16)] + references.map { (height: $0.height / 16, width: $0.width / 16) }
         let schedule = LinearSchedule(steps: request.steps, width: width, height: height, shift: config.shift)
         let guidance = Float(request.guidance)
         var latents = QwenImageModel.initialLatents(width: width, height: height, seed: request.seed)
-        // As in Qwen-Image: the 16-bit option starts the latents, and the picture's, in bf16.
-        var pictureTokens = referenceTokens
+        // As in Qwen-Image: the 16-bit option starts the latents, and the pictures', in bf16.
+        var pictureTokens = referenceTokens.count == 1 ? referenceTokens[0] : concatenated(referenceTokens, axis: 1)
         if request.halfPrecision {
             latents = latents.asType(.bfloat16)
             pictureTokens = pictureTokens.asType(.bfloat16)

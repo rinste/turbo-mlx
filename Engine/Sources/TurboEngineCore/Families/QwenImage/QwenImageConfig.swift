@@ -87,15 +87,30 @@ public struct QwenImageConfig: Equatable, Sendable {
         return config
     }()
 
+    /// The edit template's system prompt and the user turn's start: the 64 tokens `dropIndex` cuts.
+    static let editPreamble = "<|im_start|>system\nDescribe the key features of the input image (color, shape, size, texture, objects, background), "
+        + "then explain how the user's text instruction should alter or modify the image. "
+        + "Generate a new image that meets the user's requirements while maintaining consistency "
+        + "with the original input where appropriate.<|im_end|>\n<|im_start|>user\n"
+
     /// mflux's edit prompt (`QwenVisionLanguageTokenizer` as `init_edit` sets it up, without the
     /// "Picture N:" prefix): the picture's `imageTokens` placeholders, then the prompt.
     public static func editText(prompt: String, imageTokens: Int) -> String {
-        "<|im_start|>system\nDescribe the key features of the input image (color, shape, size, texture, objects, background), "
-            + "then explain how the user's text instruction should alter or modify the image. "
-            + "Generate a new image that meets the user's requirements while maintaining consistency "
-            + "with the original input where appropriate.<|im_end|>\n<|im_start|>user\n<|vision_start|>"
-            + String(repeating: "<|image_pad|>", count: imageTokens)
+        editPreamble + "<|vision_start|>" + String(repeating: "<|image_pad|>", count: imageTokens)
             + "<|vision_end|>\(prompt)<|im_end|>\n<|im_start|>assistant\n"
+    }
+
+    /// The edit prompt for pictures of `pictureTokens` placeholders each. One picture is mflux's
+    /// text above; several are named in order as Qwen's own pipeline names them from Edit 2509 on
+    /// (`QwenImageEditPlusPipeline`), "Picture 1: ", "Picture 2: "…, each before its placeholders,
+    /// so the prompt can tell them apart. (mflux's template has room for one picture: the others'
+    /// tokens would find no place in the prompt.)
+    public static func editText(prompt: String, pictureTokens: [Int]) -> String {
+        guard pictureTokens.count > 1 else { return editText(prompt: prompt, imageTokens: pictureTokens.first ?? 0) }
+        let pictures = pictureTokens.enumerated().map { index, tokens in
+            "Picture \(index + 1): <|vision_start|>" + String(repeating: "<|image_pad|>", count: tokens) + "<|vision_end|>"
+        }
+        return editPreamble + pictures.joined() + "\(prompt)<|im_end|>\n<|im_start|>assistant\n"
     }
 
     /// The edit's negative prompt: mflux's default, empty.

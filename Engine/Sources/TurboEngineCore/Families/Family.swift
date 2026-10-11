@@ -15,12 +15,15 @@ public struct FamilyRequest {
     /// Composite an RGBA result onto white (families that produce alpha).
     public var flattenAlpha: Bool
     /// Video families: how many frames and at what rate; `imagePath` the picture a clip starts
-    /// from, or an image is edited from (FLUX.2 Klein, Qwen-Image Edit).
+    /// from, or an image is edited from (SenseNova, the upscaler's picture).
     public var frames: Int?
     public var fps: Double?
     /// LTX-2.5: the model picks the length the prompt describes, `frames` being the longest.
     public var autoDuration = false
-    public var imagePath: String?
+    /// The pictures an image is edited from, in order: FLUX.2 Klein and Qwen-Image Edit read them
+    /// all, the other families the first (`imagePath`).
+    public var imagePaths: [String]
+    public var imagePath: String? { imagePaths.first }
     /// Upscalers: the factor the picture's shorter side is scaled by, the softening before (0–1).
     public var upscale: Double?
     public var softness: Double?
@@ -34,7 +37,7 @@ public struct FamilyRequest {
 
     public init(
         prompt: String, negativePrompt: String? = nil, seed: Int, width: Int, height: Int, steps: Int, guidance: Double,
-        flattenAlpha: Bool, frames: Int? = nil, fps: Double? = nil, imagePath: String? = nil, upscale: Double? = nil,
+        flattenAlpha: Bool, frames: Int? = nil, fps: Double? = nil, imagePaths: [String] = [], upscale: Double? = nil,
         softness: Double? = nil, halfPrecision: Bool = false
     ) {
         self.prompt = prompt
@@ -47,7 +50,7 @@ public struct FamilyRequest {
         self.flattenAlpha = flattenAlpha
         self.frames = frames
         self.fps = fps
-        self.imagePath = imagePath
+        self.imagePaths = imagePaths
         self.upscale = upscale
         self.softness = softness
         self.halfPrecision = halfPrecision

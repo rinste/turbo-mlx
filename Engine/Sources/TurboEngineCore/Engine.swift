@@ -120,7 +120,7 @@ public final class Engine {
             let request = FamilyRequest(
                 prompt: params.prompt, negativePrompt: negativePrompt, seed: params.seed, width: params.width, height: params.height,
                 steps: params.steps, guidance: params.guidance, flattenAlpha: params.flattenAlpha ?? false,
-                frames: params.frames, fps: params.fps, imagePath: params.image,
+                frames: params.frames, fps: params.fps, imagePaths: params.imagePaths,
                 upscale: params.upscale, softness: params.softness,
                 halfPrecision: params.precision == "bf16"
             )
@@ -148,7 +148,7 @@ public final class Engine {
             }
             let cancelled: () -> Bool = { [self] in isCancelled(id) }
             let output = URL(fileURLWithPath: params.output)
-            let source = Provenance.sourceType(input: params.image.map { URL(fileURLWithPath: $0) })
+            let source = Provenance.sourceType(inputs: params.imagePaths.map { URL(fileURLWithPath: $0) })
             let image: GeneratedImage
             if params.preview == true, let previewing = model as? PreviewingFamilyModel {
                 // The image as it forms: a small PNG beside the output, written again at each
@@ -254,7 +254,7 @@ public final class Engine {
 
         emitter.emit("phase", ["id": id, "phase": "encoding_video"])
         guard let writer, let clip else { throw VideoOutput.OutputError.cannotWrite("no frames were decoded") }
-        let source = Provenance.sourceType(input: params.image.map { URL(fileURLWithPath: $0) })
+        let source = Provenance.sourceType(inputs: params.imagePaths.map { URL(fileURLWithPath: $0) })
         do {
             try writer.finish()
             try Provenance.markVideo(at: output, as: source)

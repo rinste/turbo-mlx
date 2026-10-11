@@ -19,12 +19,11 @@ public enum Provenance {
 
     static let software = "Turbo MLX"
 
-    /// What a result made from `input` is: created by AI from a prompt when there is no input, or
-    /// when the input was itself created by AI (it says so, as the engine's own images do);
+    /// What a result made from `inputs` is: created by AI from a prompt when there is no input, or
+    /// when every input was itself created by AI (it says so, as the engine's own images do);
     /// edited by AI otherwise.
-    public static func sourceType(input: URL?) -> SourceType {
-        guard let input else { return .trainedAlgorithmicMedia }
-        return sourceType(of: input) == .trainedAlgorithmicMedia ? .trainedAlgorithmicMedia : .compositeWithTrainedAlgorithmicMedia
+    public static func sourceType(inputs: [URL]) -> SourceType {
+        inputs.allSatisfy { sourceType(of: $0) == .trainedAlgorithmicMedia } ? .trainedAlgorithmicMedia : .compositeWithTrainedAlgorithmicMedia
     }
 
     /// The Digital Source Type an image file declares in its XMP, if it declares one.

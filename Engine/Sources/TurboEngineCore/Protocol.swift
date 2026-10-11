@@ -45,6 +45,9 @@ public struct GenerationParams: Decodable {
     /// LTX-2.5: the length predicted from the prompt, at most `frames`.
     public let autoDuration: Bool?
     public let image: String?
+    /// The pictures an image is edited from, in order, for the families that read several (FLUX.2
+    /// Klein, Qwen-Image Edit); taken over `image` when there are any.
+    public let images: [String]?
     /// Upscalers (SeedVR2): the factor the picture's shorter side is scaled by, and how much it is
     /// softened first (0–1).
     public let upscale: Double?
@@ -59,6 +62,12 @@ public struct GenerationParams: Decodable {
     public let loras: [LoRASpec]?
     /// LTX-2: the full pipeline, guided, with the pack's dev transformer (`FamilyRequest.quality`).
     public let quality: Bool?
+
+    /// The pictures given, `images` or else `image`.
+    public var imagePaths: [String] {
+        if let images, !images.isEmpty { return images }
+        return image.map { [$0] } ?? []
+    }
 }
 
 public enum Wire {

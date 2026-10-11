@@ -254,7 +254,7 @@ public final class KleinModel: PreviewingFamilyModel, LoRAAdaptable {
         let guidance = config.isBase ? request.guidance : 1
         return try generate(
             prompt: request.prompt, negativePrompt: request.negativePrompt, seed: request.seed, width: request.width,
-            height: request.height, steps: request.steps, guidance: guidance, referencePath: request.imagePath,
+            height: request.height, steps: request.steps, guidance: guidance, referencePaths: request.imagePaths,
             phase: phase, progress: progress, preview: preview, isCancelled: isCancelled
         )
     }
@@ -262,12 +262,13 @@ public final class KleinModel: PreviewingFamilyModel, LoRAAdaptable {
     /// Runs the whole pipeline for a prompt. `progress` gets each finished step, `preview` a small
     /// image of the prediction at some of them; `isCancelled` is consulted between steps. A
     /// `guidance` above 1 runs mflux's classifier-free guidance against an encoded space, as its
-    /// base checkpoints do, or against `negativePrompt` when there is one. With `referencePath`,
-    /// the image is edited from that picture, as `Flux2KleinEdit` does: its tokens follow the
-    /// image's in every pass, and only the image's come out.
+    /// base checkpoints do, or against `negativePrompt` when there is one. With `referencePaths`,
+    /// the image is edited from those pictures, as `Flux2KleinEdit` does: their tokens follow the
+    /// image's in every pass, one picture after the other (each in its own proportions, at its own
+    /// t: 10, 20…), and only the image's come out.
     public func generate(
         prompt: String, negativePrompt: String? = nil, seed: Int, width: Int, height: Int, steps: Int, guidance: Double = 1,
-        referencePath: String? = nil,
+        referencePaths: [String] = [],
         phase: (GenerationPhase) -> Void,
         progress: (Int, Int) -> Void,
         preview: (Preview) -> Void = { _ in },
@@ -280,7 +281,11 @@ public final class KleinModel: PreviewingFamilyModel, LoRAAdaptable {
         phase(.encoding)
         let encoded = try encodePrompt(prompt)
         let negative = guidance > 1 ? try encodePrompt(negativePrompt ?? Self.negativePrompt) : nil
-        let reference = try referencePath.map { referenceTokens(pixels: try KleinReference.pixels(path: $0)) }
+        let references = try referencePaths.enumerated().map { index, path in
+            referenceTokens(pixels: try KleinReference.pixels(path: path), index: index)
+        }
+        let reference = references.isEmpty ? nil
+            : (tokens: concatenated(references.map(\.tokens), axis: 1), ids: concatenated(references.map(\.ids), axis: 1))
         if isCancelled() { throw GenerationError.cancelled }
 
         phase(.denoising)
