@@ -69,10 +69,16 @@ enum VerifyQwenImageEdit {
         let pictureLatents = try reference("reference_latents")
         let timestep = try reference("timestep").asType(.float32).item(Float.self)
         let embeds = try reference("prompt_embeds")
-        let noise = transformer(latents: concatenated([latents, pictureLatents], axis: 1), prompt: embeds, timestep: timestep,
-                                grids: latentGrids)[0..., 0 ..< count]
-        eval(noise)
+        let wholePass = transformer(latents: concatenated([latents, pictureLatents], axis: 1), prompt: embeds, timestep: timestep,
+                                    grids: latentGrids)
+        let noise = wholePass[0..., 0 ..< count]
+        eval(wholePass)
         ok = Verify.report("transformer pass", got: noise, want: try reference("noise")) && ok
+        // The picture's tokens, modulated at timestep 0 in Edit 2511 (zero_cond_t): the stage that
+        // shows it. Fixtures made before it have none.
+        if let picturePass = references["picture_pass"] {
+            ok = Verify.report("picture tokens", got: wholePass[0..., count...], want: picturePass) && ok
+        }
 
         // 6. The schedule and the guided loop.
         let steps = (json["steps"] as? NSNumber)?.intValue ?? 3

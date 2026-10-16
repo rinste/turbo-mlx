@@ -12,6 +12,8 @@ public struct QwenImageConfig: Equatable, Sendable {
         public var outChannels = 16
         public var ropeTheta: Float = 10000
         public var ropeAxesDim = [16, 56, 56]
+        /// Edit 2511: the pictures' tokens are modulated at timestep 0 (diffusers' zero_cond_t).
+        public var zeroCondT = false
 
         public var innerDim: Int { numAttentionHeads * attentionHeadDim }
         public static let patchSize = 2
@@ -78,10 +80,12 @@ public struct QwenImageConfig: Equatable, Sendable {
 
     public static let qwenImage2512 = QwenImageConfig(name: "qwen-image", transformer: Transformer(), textEncoder: TextEncoder())
 
-    /// Qwen-Image-Edit 2511 (mflux's `qwen-image-edit`): Qwen-Image's transformer and decoder, the
-    /// vision tower and the VAE's encoder for the picture, a 64-token system prompt.
+    /// Qwen-Image-Edit 2511 (mflux's `qwen-image-edit-2511`): Qwen-Image's transformer and
+    /// decoder, the pictures' tokens modulated at timestep 0, the vision tower and the VAE's encoder
+    /// for the picture, a 64-token system prompt.
     public static let qwenImageEdit2511: QwenImageConfig = {
         var config = QwenImageConfig(name: "qwen-image-edit", transformer: Transformer(), textEncoder: TextEncoder())
+        config.transformer.zeroCondT = true
         config.textEncoder.dropIndex = 64
         config.vision = Vision()
         return config
@@ -127,6 +131,7 @@ public struct QwenImageConfig: Equatable, Sendable {
         transformer.numAttentionHeads = int(t, "num_attention_heads", transformer.numAttentionHeads)
         transformer.attentionHeadDim = int(t, "attention_head_dim", transformer.attentionHeadDim)
         transformer.jointAttentionDim = int(t, "joint_attention_dim", transformer.jointAttentionDim)
+        transformer.zeroCondT = (t["zero_cond_t"] as? Bool) ?? false
         var encoder = TextEncoder()
         encoder.vocabSize = int(e, "vocab_size", encoder.vocabSize)
         encoder.hiddenSize = int(e, "hidden_size", encoder.hiddenSize)

@@ -1,4 +1,7 @@
-# The mflux revision the engine's ports follow, for the fixture generators and the reference
-# worker (Engine/Reference/turbo_worker.py); the app installed the same one while it had a Python
-# engine. Ming-Image came after mflux 0.20.0, the latest release on PyPI, hence the source archive.
-mflux @ https://github.com/mflux-community/mflux/archive/5e607e29559fb6354268cf6ed41cb6891ca9afcb.zip
+# The mflux release the engine's ports follow, for the fixture generators and the reference
+# worker (Engine/Reference/turbo_worker.py); the app installed an earlier one while it had a Python
+# engine. 0.22 runs Qwen-Image-Edit 2511 with zero_cond_t and keeps Qwen-Image's output norm bias.
+mflux==0.22.0
+# The MLX of the engine's mlx-swift (Engine/Package.resolved): a newer one moves the quantized
+# passes by a few thousandths, and the fixtures then stop matching bit for bit.
+mlx==0.32.2

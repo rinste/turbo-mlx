@@ -75,7 +75,7 @@ names its tensors instead, and only the VAE's convolutions are transposed on loa
 | FLUX.2 Klein | Qwen3 (hidden states of layers 9, 18, 27), padded to 512 | FLUX.2 double/single stream; an edit adds the reference picture's tokens after the image's (t = 10), only the image's come out | FLUX.2, 32 channels; the encoder for references, in their own proportions up to ~1 MP | base checkpoints: negative space |
 | Z-Image Turbo | Qwen3 4B in float32, second-to-last state, real tokens only, thinking on | S3-DiT, tokens padded to 32 with learned pad tokens, float32 stream | FLUX.1-style, 16 channels, tiles with Save memory | off |
 | Qwen-Image 2512 | Qwen2.5-VL 7B (bf16, unquantized), the template's 34 tokens dropped | 60 dual-stream blocks, float32 stream, modulation producers at 8 bits | Wan-derived causal 3D, 16 channels, tiles | true CFG, rescaled to the conditional norm; the unconditional pass is skipped at 1 |
-| Qwen-Image-Edit 2511 | Qwen2.5-VL 7B with its vision tower: the picture at ~384 × 384 (Pillow's bicubic twice, as mflux) in 14-pixel patches, windowed attention, 2 × 2 merged; its tokens replace the placeholders of a 64-token template, everything in float32, then float16 | Qwen-Image's; the picture's latents follow the image's (frame position 1), only the image's come out | Qwen-Image's, plus the encoder for the picture at the image's size (its own proportions when they differ; Pillow's Lanczos) | as Qwen-Image, negative prompt empty |
+| Qwen-Image-Edit 2511 | Qwen2.5-VL 7B with its vision tower: the picture at ~384 × 384 (Pillow's bicubic twice, as mflux) in 14-pixel patches, windowed attention, 2 × 2 merged; its tokens replace the placeholders of a 64-token template, everything in float32, then float16 | Qwen-Image's; the picture's latents follow the image's (frame position 1) and are modulated at timestep 0 (`zero_cond_t`), only the image's come out | Qwen-Image's, plus the encoder for the picture at the image's size (its own proportions when they differ; Pillow's Lanczos) | as Qwen-Image, negative prompt empty |
 | Ming-Image 0.1 Design | Ling-mini-2.0 MoE (256 experts, 8 routed with group-limited top-k, bf16 router as upstream), Qwen2 connector over 256 query tokens, direct-VLM head | S3-DiT in bf16, no padding, two caption streams | Qwen VAE for RGBA, one scaling factor, tiles | zeroed conditions |
 | SenseNova-U1.5 8B-MoT (8-step) | the understanding stack (Qwen3, 42 layers of 4096, each head's first half rotated by text position, the rest by row and column, separate norms) reads the "neo1_0" query with SenseTime's system message into a key–value cache; guidance above 1 adds an unconditional query; an edit's picture (resized with Pillow's Lanczos to about the image's area, within 512² and 2048²) goes in through the stack's own patch embedding, its tokens between `<img>` and `</img>` at one text position, seeing each other; guidance's unconditional query is then the picture alone | the generation stack (the same layers' `_mot_gen` weights) over the image's tokens (32 × 32 pixels: a 16-pixel patch embedding with a 2D rotation, merged 2 × 2) plus time and noise-scale embeddings, attending to the cache without a mask; activations bf16 as the reference | none: a convolutional pixel head (pixel shuffles, two 3 × 3 convolutions) predicts the clean image, the velocity is derived from it; Euler steps from t = 0 on a schedule shifted by 3, noise scaled with the image's size | off (the distilled packs); true CFG otherwise |
 | LTX-2.3 distilled | Gemma 3 12B (4-bit, all 49 hidden states, prompt left-padded to 1024), per-token RMS, two projections and two 8-block connectors with learnable registers | 48 audio–video blocks (4096 + 2048 wide, cross-modal attention both ways), block linears 4 or 8 bits, float32 activations | causal-3D conv VAE (non-causal decoder, 32 × 32 × 8, 128 channels), tiled over frames and pixels; audio VAE + BigVGAN vocoder with bandwidth extension to 48 kHz | none (distilled); two stages: 8 steps at half size, ×2 latent upsampler, 3 steps |
@@ -269,8 +269,9 @@ also the unconditional one), the schedule, the whole denoising loop (guided wher
 guidance), and the decode; for Klein also an edit from a reference picture (the VAE encoder, the
 picture's tokens and ids, one pass and the loop with them, its decode, and the sizes pictures of
 several shapes are encoded at); for Qwen-Image-Edit the picture's resizes byte for byte, its
-patches, the vision tower, the prompt with the picture's tokens, the picture's latents, a pass and
-the loop over the image and the picture; for SeedVR2 (whose fixture is saved in the original
+patches, the vision tower, the prompt with the picture's tokens, the picture's latents, a pass (and
+the picture's own tokens out of it, which `zero_cond_t` modulates at timestep 0) and the loop over
+the image and the picture; for SeedVR2 (whose fixture is saved in the original
 checkpoint's format and read back through mflux's own mapping first) the picture's preparation
 byte for byte with and without softness, the tiled encode, the noise, the transformer's input and
 one pass (bit-identical), the step, the tiled decode, the color correction, and the whole upscale
@@ -309,7 +310,12 @@ Qwen-Image Edit 60 dB (27–35 dB before, with mlx-swift 0.31.6). On 16 October 
 checkpoints mflux-community saved again with mflux 0.22, which carry the output norm's bias that
 mflux 0.16 to 0.21 dropped (mflux PR 839; the engine takes it, and puts zeros in place of it in the
 older checkpoints, which generate as before): Qwen-Image 2512 40.9 dB at 512 × 512 in 20 steps,
-Qwen-Image Edit 53.8 dB, both against mflux 0.22.0 on MLX 0.32.2. The reference worker takes
+Qwen-Image Edit 53.8 dB, both against mflux 0.22.0 on MLX 0.32.2. The same day the editor took
+`zero_cond_t` (mflux PR 844: Edit 2511 modulates the picture's tokens at timestep 0, which
+mflux's 2509 configuration, the one the port first followed, does not): the same edit lands
+37.3 dB from mflux run as 2511, in about the same time, and does what the prompt says where it
+was half done before (a sign rewritten whole, not its new words squeezed under the old ones;
+13.4 dB from the edit without it). The reference worker takes
 `params.loras` too, applied unbaked as the engine applies them: on 9 October 2026, Z-Image 8-bit at
 768 × 768 with a LoRA of ai-toolkit's (240 layers) lands 36.9 dB from mflux, 38.5 dB without it.
 

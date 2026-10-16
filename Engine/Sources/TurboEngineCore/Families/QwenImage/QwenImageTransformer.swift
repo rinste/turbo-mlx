@@ -177,33 +177,50 @@ final class QwenImageTransformerBlock: Module {
         super.init()
     }
 
-    /// Returns (text, image).
+    /// Returns (text, image). With `pictures`, the image tokens it marks (a picture's) are
+    /// modulated with its embedding instead of `temb`'s (Edit 2511's zero_cond_t).
     func callAsFunction(
         image: MLXArray, text: MLXArray, temb: MLXArray,
-        imageCos: MLXArray, imageSin: MLXArray, textCos: MLXArray, textSin: MLXArray
+        imageCos: MLXArray, imageSin: MLXArray, textCos: MLXArray, textSin: MLXArray,
+        pictures: QwenPictureModulation? = nil
     ) -> (MLXArray, MLXArray) {
         let imgMod = imgModLinear(silu(temb)).split(parts: 2, axis: -1)
         let txtMod = txtModLinear(silu(temb)).split(parts: 2, axis: -1)
+        let pictureMod = pictures.map { imgModLinear(silu($0.temb)).split(parts: 2, axis: -1) }
 
-        let (imgModulated, imgGate1) = Self.modulate(imgNorm1(image), imgMod[0])
+        let (imgModulated, imgGate1) = Self.modulate(imgNorm1(image), imgMod[0], pictureMod?[0], where: pictures?.isPicture)
         let (txtModulated, txtGate1) = Self.modulate(txtNorm1(text), txtMod[0])
         let (imgAttn, txtAttn) = attn(image: imgModulated, text: txtModulated, imageCos: imageCos, imageSin: imageSin, textCos: textCos, textSin: textSin)
         var image = image + imgGate1 * imgAttn
         var text = text + txtGate1 * txtAttn
 
-        let (imgModulated2, imgGate2) = Self.modulate(imgNorm2(image), imgMod[1])
+        let (imgModulated2, imgGate2) = Self.modulate(imgNorm2(image), imgMod[1], pictureMod?[1], where: pictures?.isPicture)
         image = image + imgGate2 * imgFF(imgModulated2)
         let (txtModulated2, txtGate2) = Self.modulate(txtNorm2(text), txtMod[1])
         text = text + txtGate2 * txtFF(txtModulated2)
         return (text, image)
     }
 
-    /// (shift, scale, gate) from a modulation row: `x · (1 + scale) + shift`, and the gate.
-    static func modulate(_ x: MLXArray, _ params: MLXArray) -> (MLXArray, MLXArray) {
-        let parts = params.split(parts: 3, axis: -1)
+    /// (shift, scale, gate) from a modulation row: `x · (1 + scale) + shift`, and the gate. With
+    /// `other` and `mask` [1, N, 1], the tokens the mask marks take `other`'s row instead.
+    static func modulate(_ x: MLXArray, _ params: MLXArray, _ other: MLXArray? = nil, where mask: MLXArray? = nil) -> (MLXArray, MLXArray) {
+        var parts = params.split(parts: 3, axis: -1).map { $0.expandedDimensions(axis: 1) }
+        if let other, let mask {
+            let others = other.split(parts: 3, axis: -1).map { $0.expandedDimensions(axis: 1) }
+            parts = zip(others, parts).map { MLX.where(mask, $0, $1) }
+        }
         let (shift, scale, gate) = (parts[0], parts[1], parts[2])
-        return (x * (1 + scale.expandedDimensions(axis: 1)) + shift.expandedDimensions(axis: 1), gate.expandedDimensions(axis: 1))
+        return (x * (1 + scale) + shift, gate)
     }
+}
+
+/// Edit 2511's zero_cond_t (mflux PR 844, diffusers' `zero_cond_t`): the pictures' tokens are
+/// modulated with the embedding of timestep 0, the image's with the step's.
+struct QwenPictureModulation {
+    /// The timestep-0 embedding.
+    let temb: MLXArray
+    /// [1, N, 1], true for the tokens after the image's.
+    let isPicture: MLXArray
 }
 
 /// `QwenEmbedRope` with `scale_rope`: image positions centred on each axis, text positions after
@@ -322,11 +339,20 @@ public final class QwenImageTransformer: Module {
         let timesteps = MLXArray(Array(repeating: timestep, count: batch)).asType(hidden.dtype)
         var text = txtIn(txtNorm(prompt))
         let temb = timeTextEmbed(timesteps, hiddenType: hidden.dtype)
+        var pictures: QwenPictureModulation?
+        if config.zeroCondT, grids.count > 1 {
+            let imageTokens = grids[0].height * grids[0].width
+            pictures = QwenPictureModulation(
+                temb: timeTextEmbed(zeros(like: timesteps), hiddenType: hidden.dtype),
+                isPicture: (MLXArray(Int32(0) ..< Int32(hidden.shape[1])) .>= Int32(imageTokens)).reshaped([1, -1, 1])
+            )
+        }
         let ropes = rope(grids: grids, textLength: prompt.shape[1])
         for block in transformerBlocks {
             (text, hidden) = block(
                 image: hidden, text: text, temb: temb,
-                imageCos: ropes.imageCos, imageSin: ropes.imageSin, textCos: ropes.textCos, textSin: ropes.textSin
+                imageCos: ropes.imageCos, imageSin: ropes.imageSin, textCos: ropes.textCos, textSin: ropes.textSin,
+                pictures: pictures
             )
         }
         return projOut(normOut(hidden, temb: temb))

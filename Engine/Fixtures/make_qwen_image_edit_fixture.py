@@ -52,7 +52,7 @@ VISION_START, VISION_END = 501, 502
 CONFIG = {
     "family": "qwen-image-edit",
     "variant": "fixture",
-    "transformer": {"num_layers": 2, "num_attention_heads": 2, "attention_head_dim": 128, "joint_attention_dim": 256},
+    "transformer": {"num_layers": 2, "num_attention_heads": 2, "attention_head_dim": 128, "joint_attention_dim": 256, "zero_cond_t": True},
     "text_encoder": {
         "vocab_size": 512, "hidden_size": 256, "num_hidden_layers": 2, "num_attention_heads": 2,
         "num_key_value_heads": 1, "intermediate_size": 512, "drop_index": 64, "image_token_id": IMAGE_TOKEN,
@@ -178,10 +178,14 @@ def main(out: Path) -> None:
                     guidance=cfg["guidance"], scheduler="linear")
     latents = QwenLatentCreator.create_noise(seed=cfg["seed"], height=height, width=width)
     timestep = 0.75
-    noise = transformer(t=timestep, config=config, hidden_states=mx.concatenate([latents, reference_latents], axis=1),
-                        encoder_hidden_states=prompt_embeds, encoder_hidden_states_mask=prompt_mask,
-                        qwen_image_ids=image_ids, cond_image_grid=(1, cond_h, cond_w))[:, : latents.shape[1]]
-    mx.eval(noise)
+    whole_pass = transformer(t=timestep, config=config, hidden_states=mx.concatenate([latents, reference_latents], axis=1),
+                             encoder_hidden_states=prompt_embeds, encoder_hidden_states_mask=prompt_mask,
+                             qwen_image_ids=image_ids, cond_image_grid=(1, cond_h, cond_w))
+    noise = whole_pass[:, : latents.shape[1]]
+    # The picture's own tokens, which the pipeline drops: zero_cond_t modulates them at timestep 0,
+    # so they tell it apart far more than the image's do.
+    picture_pass = whole_pass[:, latents.shape[1]:]
+    mx.eval(noise, picture_pass)
     x = latents
     for t in range(cfg["steps"]):
         hidden = mx.concatenate([x, reference_latents], axis=1)
@@ -217,6 +221,7 @@ def main(out: Path) -> None:
         "latents": latents,
         "timestep": mx.array([timestep], dtype=mx.float32),
         "noise": noise,
+        "picture_pass": picture_pass,
         "sigmas": config.scheduler.sigmas,
         "final_latents": final_latents,
         "decoded": decoded,

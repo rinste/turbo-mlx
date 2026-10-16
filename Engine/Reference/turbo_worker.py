@@ -250,7 +250,8 @@ class QwenImageEditFamily:
         from mflux.models.common.resolution.config_resolution import ConfigResolution
         from mflux.models.qwen.variants.edit.qwen_image_edit import QwenImageEdit
 
-        config = ConfigResolution.resolve_restricted(None, "qwen-image-edit", model_path=spec["path"])
+        # 2511, not mflux's default 2509: its pictures' tokens are modulated at timestep 0 (zero_cond_t).
+        config = ConfigResolution.resolve_restricted(None, "qwen-image-edit-2511", model_path=spec["path"])
         return QwenImageEdit(model_config=config, model_path=spec["path"], **lora)
 
     @staticmethod
