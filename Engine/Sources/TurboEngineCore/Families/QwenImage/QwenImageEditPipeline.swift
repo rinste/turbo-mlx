@@ -149,7 +149,7 @@ public final class QwenImageEditModel: PreviewingFamilyModel, LoRAAdaptable {
     private func loadImageSide() throws {
         let transformer = QwenImageTransformer(config: config.transformer)
         let vae = QwenImageVAE(outChannels: 3, baseDim: config.vaeBaseDim, normalization: .meanStd, withEncoder: true)
-        try WeightLoading.apply(try checkpoint.loadComponent("transformer"), to: transformer)
+        try WeightLoading.apply(QwenImageTransformer.weights(try checkpoint.loadComponent("transformer")), to: transformer)
         try WeightLoading.apply(QwenImageVAE.weights(try checkpoint.loadComponent("vae")), to: vae, ignoring: QwenImageVAE.ignoresKeyWithEncoder)
         for line in try loras.reapply(on: transformer) { Emitter.shared.log(line + " (again, on the reloaded transformer)") }
         bits = checkpoint.bits

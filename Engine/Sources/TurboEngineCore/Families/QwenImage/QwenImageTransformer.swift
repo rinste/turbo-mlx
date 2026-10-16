@@ -289,12 +289,24 @@ public final class QwenImageTransformer: Module {
         _transformerBlocks.wrappedValue = (0 ..< config.numLayers).map { _ in
             QwenImageTransformerBlock(dim: inner, heads: config.numAttentionHeads, headDim: config.attentionHeadDim)
         }
-        _normOut.wrappedValue = AdaLayerNormContinuous(embeddingDim: inner, conditioningDim: inner)
+        _normOut.wrappedValue = AdaLayerNormContinuous(embeddingDim: inner, conditioningDim: inner, bias: true)
         _projOut.wrappedValue = Linear(inner, Self.patchSize * Self.patchSize * config.outChannels)
         super.init()
     }
 
     static var patchSize: Int { QwenImageConfig.Transformer.patchSize }
+
+    /// The checkpoint's tensors, with a zero bias for the output norm when they have none. mflux
+    /// 0.16 to 0.21 dropped that bias (mflux PR 839), so the checkpoints those versions saved lack
+    /// it and generate as they did; the ones saved from 0.22 on carry it, as the original does.
+    public static func weights(_ tensors: [String: MLXArray]) -> [String: MLXArray] {
+        var weights = tensors
+        if weights["norm_out.linear.bias"] == nil, let projection = weights["norm_out.linear.weight"] {
+            // [2 × inner] out of [2 × inner, inner], packed or not: quantization packs the inputs.
+            weights["norm_out.linear.bias"] = MLXArray.zeros([projection.shape[0]], dtype: modelPrecision)
+        }
+        return weights
+    }
 
     /// One pass. `latents` [B, h·w, 64] packed (float32, as mflux creates them), `prompt`
     /// [B, T, joint dim] bf16, `timestep` the step's sigma in [0, 1], the latent grid `h` × `w`.

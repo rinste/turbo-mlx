@@ -23,6 +23,9 @@ nonisolated final class HubDownloader: Sendable {
 
     nonisolated enum DownloadError: LocalizedError {
         case http(Int, String)
+        /// The repository is there, the commit the catalog checked is not: its publisher rewrote
+        /// the history (mflux-community recreated its Qwen-Image repositories in October 2026).
+        case revisionGone(String, revision: String)
         case malformedListing
         case truncated(String, expected: Int64, got: Int64)
 
@@ -37,6 +40,8 @@ nonisolated final class HubDownloader: Sendable {
                 "\(repo) was not found on Hugging Face."
             case .http(let status, let repo):
                 "Hugging Face answered \(status) for \(repo)."
+            case .revisionGone(let repo, let revision):
+                "The version of \(repo) this Turbo MLX was tested with (\(revision.prefix(7))) is no longer on Hugging Face: its publisher replaced it. Update Turbo MLX to download the current one."
             case .malformedListing:
                 "Hugging Face returned an unexpected file listing."
             case .truncated(let path, let expected, let got):
@@ -105,7 +110,14 @@ nonisolated final class HubDownloader: Sendable {
     }
 
     private func listOnce(matching patterns: [String]) async throws -> Listing {
-        let info = try await json(from: "https://huggingface.co/api/models/\(repo)/revision/\(revision)")
+        let info: [String: Any]
+        do {
+            info = try await json(from: "https://huggingface.co/api/models/\(repo)/revision/\(revision)")
+        } catch DownloadError.http(404, _) where revision != "main" {
+            // Missing repository, or only the commit? The repository's own page tells.
+            _ = try await json(from: "https://huggingface.co/api/models/\(repo)")
+            throw DownloadError.revisionGone(repo, revision: revision)
+        }
         guard let commit = info["sha"] as? String else { throw DownloadError.malformedListing }
         let regexes = patterns.map(Self.regex(fnmatch:))
         var files: [RemoteFile] = []

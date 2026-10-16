@@ -294,15 +294,16 @@ final class Flux2SingleTransformerBlock: Module {
     }
 }
 
-/// The final norm, modulated by the timestep embedding.
+/// The final norm, modulated by the timestep embedding. Qwen-Image's checkpoint has a bias on its
+/// linear, FLUX.2's has none.
 final class AdaLayerNormContinuous: Module {
     @ModuleInfo(key: "linear") var linear: Linear
     @ModuleInfo(key: "norm") var norm: LayerNorm
     let embeddingDim: Int
 
-    init(embeddingDim: Int, conditioningDim: Int) {
+    init(embeddingDim: Int, conditioningDim: Int, bias: Bool = false) {
         self.embeddingDim = embeddingDim
-        _linear.wrappedValue = Linear(conditioningDim, embeddingDim * 2, bias: false)
+        _linear.wrappedValue = Linear(conditioningDim, embeddingDim * 2, bias: bias)
         _norm.wrappedValue = LayerNorm(dimensions: embeddingDim, eps: 1e-6, affine: false)
         super.init()
     }

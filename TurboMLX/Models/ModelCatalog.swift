@@ -424,8 +424,8 @@ enum ModelCatalog {
             detail: "Alibaba's 20B model: rich scenes and long text inside the image. Thorough but slow: 20 steps.",
             family: .qwenImage,
             source: .huggingFace(repo: "mflux-community/qwen-image-2512-mflux-q4"),
-            revision: "ec35d366eeb701838007c1720c3d80f2f7fbf9f4",
-            sizeBytes: 27_605_801_473,
+            revision: "f30c76ff30977000ffdc27fafdd4516bb1c3b44e",
+            sizeBytes: 27_605_813_920,
             license: "Apache 2.0",
             recommendedMemoryGB: 32,
             isBuiltIn: true
@@ -437,8 +437,8 @@ enum ModelCatalog {
             detail: "Alibaba's 20B editor: changes the reference picture as the prompt says and keeps the rest. Thorough but slow: 20 steps.",
             family: .qwenImageEdit,
             source: .huggingFace(repo: "mflux-community/qwen-image-edit-2511-mflux-q4"),
-            revision: "720ad94d982b3dc22f9122ee96af31221d542d47",
-            sizeBytes: 28_958_972_495,
+            revision: "3c74aab7dd79e6a8148c329cbca78c00c049ec3b",
+            sizeBytes: 28_958_984_942,
             license: "Apache 2.0",
             recommendedMemoryGB: 32,
             isBuiltIn: true

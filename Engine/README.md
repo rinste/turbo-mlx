@@ -305,7 +305,11 @@ checkpoint, prompt, seed and size, and compare the two PNGs with `build/bin/turb
 a.png b.png` (the PSNR and the largest difference; two clips frame by frame, with their sound):
 the same image, with small local differences from bf16 rounding. On 29 September 2026, with the same MLX on both sides, at
 512 × 512: Klein 39 dB, Z-Image 39 dB (4-bit) and 44 dB (8-bit), Qwen-Image 36 dB, Ming 33 dB,
-Qwen-Image Edit 60 dB (27–35 dB before, with mlx-swift 0.31.6). The reference worker takes
+Qwen-Image Edit 60 dB (27–35 dB before, with mlx-swift 0.31.6). On 16 October 2026, with the
+checkpoints mflux-community saved again with mflux 0.22, which carry the output norm's bias that
+mflux 0.16 to 0.21 dropped (mflux PR 839; the engine takes it, and puts zeros in place of it in the
+older checkpoints, which generate as before): Qwen-Image 2512 40.9 dB at 512 × 512 in 20 steps,
+Qwen-Image Edit 53.8 dB, both against mflux 0.22.0 on MLX 0.32.2. The reference worker takes
 `params.loras` too, applied unbaked as the engine applies them: on 9 October 2026, Z-Image 8-bit at
 768 × 768 with a LoRA of ai-toolkit's (240 layers) lands 36.9 dB from mflux, 38.5 dB without it.
 
