@@ -719,16 +719,14 @@ private struct PromptSection: View {
         Section {
             // All the blocks in one row, so the dragged one can be drawn over the others.
             VStack(spacing: 0) {
-                ForEach($settings.blocks) { $block in
-                    // Read once: `block` goes through the binding, which may no longer point
-                    // at this block when a closure runs, after a removal say.
+                ForEach(settings.blocks) { block in
                     let id = block.id
                     let index = position(of: id)
                     let isDragged = reordering?.source == index
                     let offset = reordering?.offset(at: index) ?? 0
                     let place = reordering?.place(of: index) ?? index
                     PromptBlockEditor(
-                        block: $block,
+                        block: binding(to: block),
                         position: index,
                         count: settings.blocks.count,
                         isDragged: isDragged,
@@ -759,6 +757,19 @@ private struct PromptSection: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+    }
+
+    /// A block found by its id, not by its place in the list: a field that was being edited
+    /// saves its text as it goes away, after the block was removed (GitHub issue 2), and a binding
+    /// by place then wrote past the end of the list, or over the block that took its place.
+    /// Writes to a block no longer in the list are dropped.
+    private func binding(to block: PromptBlock) -> Binding<PromptBlock> {
+        Binding {
+            settings.blocks.first { $0.id == block.id } ?? block
+        } set: { updated in
+            guard let index = settings.blocks.firstIndex(where: { $0.id == block.id }) else { return }
+            settings.blocks[index] = updated
         }
     }
 
