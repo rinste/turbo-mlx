@@ -78,6 +78,7 @@ enum TimeEstimate {
                 // too, and Qwen-Image Edit its picture's, encoded at about the image's size.
                 let referenceTokens = switch model.family {
                 case .flux2Klein: Double(TimeEstimate.referenceTokens(reference))
+                case .flux3Klein: Double(TimeEstimate.flux3ReferenceTokens(reference))
                 case .qwenImageEdit: pixels / 256
                 default: 0.0
                 }
@@ -114,6 +115,10 @@ enum TimeEstimate {
     private static func reference(_ model: ModelDescriptor, cfg: Bool) -> Rates {
         switch model.family {
         case .flux2Klein: Rates(denoise: 1.56, decode: 1.2, fixed: 0.8, load: 3)
+        // 16 steps at 512 / 1024 px in 31 and 138 s (1.82 and 1.81 s a unit), edits from a 600 × 450
+        // picture 2.0; decodes 0.3 / 1.1 / 3.4 / 6.1 s at 512 / 1024 / 1536 / 2048 px. Its weights are
+        // read and quantized when first used, a few seconds more.
+        case .flux3Klein: Rates(denoise: 1.85, decode: 1.4, fixed: 0.8, load: 10)
         case .zImageTurbo: Rates(denoise: 2.5, decode: 1, fixed: 0.5, load: 3)
         // With CFG, Ming-Image takes three times as long, not two.
         case .ming: Rates(denoise: cfg ? 3.55 : 2.3, decode: 2, fixed: 1.3, load: 5)
@@ -231,6 +236,25 @@ enum TimeEstimate {
     }
 
     private static var referenceTokenCounts: [String: Int] = [:]
+
+    /// FLUX 3 reads a single picture whole, on a canvas of up to 4 MP (`Flux3References`): its
+    /// tokens, from the PNG's header.
+    static func flux3ReferenceTokens(_ name: String?) -> Int {
+        guard let name else { return 0 }
+        if let known = flux3ReferenceTokenCounts[name] { return known }
+        var tokens = 0
+        if let source = CGImageSourceCreateWithURL(HistoryStore.referenceURL(name) as CFURL, nil),
+           let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+           let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int {
+            let scale = min(1, (4_194_304 / Double(width * height)).squareRoot(), 4096 / Double(max(width, height)))
+            func canvas(_ side: Int) -> Int { min(4096, max(64, (Int((Double(side) * scale).rounded()) + 15) / 16 * 16)) }
+            tokens = (canvas(width) / 16) * (canvas(height) / 16)
+        }
+        flux3ReferenceTokenCounts[name] = tokens
+        return tokens
+    }
+
+    private static var flux3ReferenceTokenCounts: [String: Int] = [:]
 
     private static func median(_ values: [Double]) -> Double? {
         guard !values.isEmpty else { return nil }

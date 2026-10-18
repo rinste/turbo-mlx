@@ -41,6 +41,8 @@ enum Bench {
         var repo: String
         var family: String
         var variant: String? = nil
+        /// The bits an unquantized checkpoint is quantized to on loading (FLUX 3's bf16 repository).
+        var quantize: Int? = nil
         /// A second checkpoint the family reads (LTX-2.3's Gemma 3).
         var companion: String? = nil
         var defaultSteps: Int
@@ -63,6 +65,12 @@ enum Bench {
             Run(label: "512², 4 steps", width: 512, height: 512, steps: 4),
             Run(label: "1024², 4 steps", width: 1024, height: 1024, steps: 4),
             Run(label: "edit, 640 × 512, 4 steps", width: 640, height: 512, steps: 4, picture: (640, 512), prompt: editPrompt),
+        ]),
+        Entry(repo: "black-forest-labs/flux-3-image-klein", family: "flux3-klein", variant: "flux3-image-klein", quantize: 8, defaultSteps: 16, runs: [
+            Run(label: "512², 16 steps", width: 512, height: 512, steps: 16),
+            Run(label: "1024², 16 steps", width: 1024, height: 1024, steps: 16),
+            Run(label: "1024², 16 steps", width: 1024, height: 1024, steps: 16, lowRam: true),
+            Run(label: "edit, 640 × 512, 16 steps", width: 640, height: 512, steps: 16, picture: (640, 512), prompt: editPrompt),
         ]),
         Entry(repo: "mflux-community/z-image-turbo-mflux-q4", family: "z-image-turbo", defaultSteps: 9, runs: [
             Run(label: "512², 9 steps", width: 512, height: 512, steps: 9),
@@ -301,6 +309,7 @@ enum Bench {
         var model: [String: Any] = [
             "family": entry.family, "path": path.path, "name": entry.repo, "variant": entry.variant ?? "", "low_ram": run.lowRam,
         ]
+        if let quantize = entry.quantize { model["quantize"] = quantize }
         if let companion { model["text_encoder_path"] = companion.path }
         var params: [String: Any] = [
             "prompt": run.prompt, "seed": seed, "width": run.width, "height": run.height, "steps": run.steps,

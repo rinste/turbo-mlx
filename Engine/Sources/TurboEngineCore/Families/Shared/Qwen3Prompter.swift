@@ -45,6 +45,16 @@ public final class Qwen3Prompter {
         return (MLXArray(padded.map { Int32($0) }, [1, maxLength]), MLXArray(mask, [1, maxLength]))
     }
 
+    /// Token ids padded only to the next multiple of `multiple` (at most `maxLength`), with the
+    /// mask marking the real ones: FLUX 3's `Flux3PromptEncoder.tokenize`.
+    public func tokenize(_ prompt: String, multipleOf multiple: Int) throws -> (inputIds: MLXArray, attentionMask: MLXArray) {
+        let ids = try tokenIds(prompt)
+        let length = min((ids.count + multiple - 1) / multiple * multiple, maxLength)
+        let padded = ids + Array(repeating: padTokenId, count: length - ids.count)
+        let mask = (0 ..< length).map { $0 < ids.count ? Int32(1) : Int32(0) }
+        return (MLXArray(padded.map { Int32($0) }, [1, length]), MLXArray(mask, [1, length]))
+    }
+
     /// The real tokens only, truncated to `maxLength` (what the padded form's mask would keep).
     public func tokenIds(_ prompt: String) throws -> [Int] {
         var ids = templated(prompt)

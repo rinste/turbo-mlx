@@ -75,6 +75,7 @@ nonisolated enum WorkerCommand: Sendable {
             "low_ram": lowMemory,
         ]
         if let textEncoderPath { object["text_encoder_path"] = textEncoderPath }
+        if let quantize = model.quantize { object["quantize"] = quantize }
         return object
     }
 

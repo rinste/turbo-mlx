@@ -5,6 +5,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     case ming
     case zImageTurbo = "z-image-turbo"
     case flux2Klein = "flux2-klein"
+    case flux3Klein = "flux3-klein"
     case qwenImage = "qwen-image"
     case qwenImageEdit = "qwen-image-edit"
     case senseNova = "sensenova"
@@ -17,6 +18,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .ming: "Ming-Image"
         case .zImageTurbo: "Z-Image Turbo"
         case .flux2Klein: "FLUX.2 Klein"
+        case .flux3Klein: "FLUX 3 Image Klein"
         case .qwenImage: "Qwen-Image"
         case .qwenImageEdit: "Qwen-Image Edit"
         case .senseNova: "SenseNova-U1.5"
@@ -42,8 +44,10 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     var sizeMultiple: Int { self == .senseNova ? 32 : 16 }
 
     /// A reference image: the first frame of a clip (LTX-2), the picture an image is edited from
-    /// as the prompt says (FLUX.2 Klein, Qwen-Image Edit, SenseNova), the picture an upscaler enlarges.
-    var takesReferenceImage: Bool { isLTX || self == .flux2Klein || self == .qwenImageEdit || self == .senseNova || isUpscaler }
+    /// as the prompt says (FLUX.2 Klein, FLUX 3, Qwen-Image Edit, SenseNova), the picture an upscaler enlarges.
+    var takesReferenceImage: Bool {
+        isLTX || self == .flux2Klein || self == .flux3Klein || self == .qwenImageEdit || self == .senseNova || isUpscaler
+    }
 
     /// Qwen-Image Edit only edits and SeedVR2 only upscales: they need the picture.
     var requiresReferenceImage: Bool { self == .qwenImageEdit || isUpscaler }
@@ -59,7 +63,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     /// ltx-2-mlx does (the engine's `LoRAAdaptable`).
     var takesLoRAs: Bool {
         switch self {
-        case .zImageTurbo, .flux2Klein, .qwenImage, .qwenImageEdit, .ltx2, .ltx25: true
+        case .zImageTurbo, .flux2Klein, .flux3Klein, .qwenImage, .qwenImageEdit, .ltx2, .ltx25: true
         case .ming, .senseNova, .seedVR2: false
         }
     }
@@ -76,7 +80,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     var components: [String] {
         switch self {
         case .ming: ["mllm", "connector", "mlp", "transformer", "vae"]
-        case .zImageTurbo, .flux2Klein, .qwenImage, .qwenImageEdit: ["transformer", "text_encoder", "vae"]
+        case .zImageTurbo, .flux2Klein, .flux3Klein, .qwenImage, .qwenImageEdit: ["transformer", "text_encoder", "vae"]
         case .senseNova: ["."]
         case .ltx2, .ltx25, .seedVR2: []
         }
@@ -104,6 +108,8 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         switch self {
         case .ming: "mllm/tokenizer.json"
         case .zImageTurbo, .flux2Klein, .qwenImage, .qwenImageEdit: "tokenizer/tokenizer.json"
+        // Qwen3-VL's, inside the text encoder's folder.
+        case .flux3Klein: "text_encoder/tokenizer.json"
         case .senseNova: "tokenizer.json"
         case .ltx2: nil // in the text encoder's checkpoint
         case .ltx25: "tokenizer.json"
@@ -124,6 +130,10 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .ming: return weights
         case .zImageTurbo: return weights + ["tokenizer/*"]
         case .flux2Klein, .qwenImage, .qwenImageEdit: return weights + ["tokenizer/**", "added_tokens.json", "chat_template.jinja"]
+        // BFL's repository: the diffusers folders (the text encoder's holds the tokenizer), not the
+        // same transformer in BFL's own format at the top, its FP8 and NVFP4 variants or the VAE's
+        // second copy.
+        case .flux3Klein: return weights + ["LICENSE.md", "NOTICE.md", "README.md"]
         case .ltx2:
             return ["LICENSE", "README.md", "config.json", "embedded_config.json", "quantize_config.json", "split_model.json",
                     "transformer-distilled-1.1.safetensors", "connector.safetensors", "vae_decoder.safetensors",
@@ -185,6 +195,9 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
     var qualitySizeBytes: Int64?
     /// mflux registry entry (e.g. "flux2-klein-9b") when the name alone does not identify it.
     var variant: String?
+    /// The bits the engine quantizes an unquantized checkpoint to on loading (FLUX 3: BFL's bf16
+    /// repository, as `mflux-generate-flux3 -q 8`); nil, run as stored.
+    var quantize: Int?
     var license: String?
     /// Smallest Mac memory the model runs well in, with Save memory on.
     var recommendedMemoryGB: Int?
@@ -219,9 +232,9 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         recommendedMemoryGB.map { "\($0) GB RAM" }
     }
 
-    /// FLUX.2 Klein "base" checkpoints are not distilled: many steps and real CFG.
+    /// FLUX.2 Klein and FLUX 3 "base" checkpoints are not distilled: many steps and real CFG.
     private var isKleinBase: Bool {
-        family == .flux2Klein && (variant ?? id).lowercased().contains("base")
+        (family == .flux2Klein || family == .flux3Klein) && (variant ?? id).lowercased().contains("base")
     }
 
     /// FLUX.2 Klein's transformer width, which its LoRAs must match: 4096 for 9B, 3072 for 4B.
@@ -235,15 +248,15 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .ming, .qwenImage, .qwenImageEdit: true
         // The catalog's SenseNova packs are the 8-step distillation, which runs without guidance.
         case .zImageTurbo, .senseNova, .ltx2, .ltx25, .seedVR2: false
-        case .flux2Klein: isKleinBase
+        case .flux2Klein, .flux3Klein: isKleinBase
         }
     }
 
     /// The models whose guidance runs against an encoded text, which the user can write: Qwen-Image,
     /// its editor and FLUX.2 Klein base. Ming's unconditional pass zeroes the prompt instead, so
-    /// there is no text to give it.
+    /// there is no text to give it; FLUX 3 Base's is the empty prompt, as BFL's pipeline has it.
     var supportsNegativePrompt: Bool {
-        supportsGuidance && family != .ming
+        supportsGuidance && family != .ming && family != .flux3Klein
     }
 
     /// LTX-2: the steps of the first stage (three more refine the upscaled clip).
@@ -252,6 +265,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .ming: 12
         case .zImageTurbo: 9
         case .flux2Klein: isKleinBase ? 50 : 4
+        case .flux3Klein: isKleinBase ? 50 : 16
         case .qwenImage, .qwenImageEdit: 20
         case .senseNova: 8
         case .ltx2, .ltx25: 8
@@ -259,10 +273,11 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         }
     }
 
-    /// Qwen-Image (and its editor) and FLUX.2 Klein base run real CFG, recommended at 4; the
-    /// others default to off.
+    /// Qwen-Image (and its editor) and FLUX.2 Klein base run real CFG, recommended at 4, FLUX 3
+    /// Base at mflux's 3.5; the others default to off.
     var defaultGuidance: Double {
-        family == .qwenImage || family == .qwenImageEdit || isKleinBase ? 4 : 1
+        if family == .flux3Klein { return isKleinBase ? 3.5 : 1 }
+        return family == .qwenImage || family == .qwenImageEdit || isKleinBase ? 4 : 1
     }
 
     // The Quality mode (`GenerationSettings.fullPipeline(for:)`): LTX's full pipeline runs its dev
@@ -279,6 +294,8 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .ming: 4...40
         case .zImageTurbo: 4...20
         case .flux2Klein: isKleinBase ? 10...60 : 2...12
+        // A flow map: told each step's target, it holds up with fewer steps than its 16.
+        case .flux3Klein: isKleinBase ? 10...60 : 4...32
         case .qwenImage, .qwenImageEdit: 10...50
         case .senseNova: 4...16
         case .ltx2, .ltx25: 4...8
@@ -358,6 +375,23 @@ enum ModelCatalog {
             variant: "flux2-klein-4b",
             license: "Apache 2.0",
             recommendedMemoryGB: 24,
+            isBuiltIn: true
+        ),
+        // FLUX 3 Image Klein (distilled) from BFL's own repository, whose licence is accepted on
+        // Hugging Face: the transformer and Qwen3-VL's language tower in bf16, quantized to 8 bits on
+        // loading as mflux's `-q 8` does (its 4 and 6 bits lose too much: 25 and 28 dB from bf16).
+        // Measured on an M1 Max: 1024 × 1024 in 140 s, peaking at 11.2 GB with Save memory.
+        ModelDescriptor(
+            name: "FLUX 3 Image Klein · 16 GB RAM",
+            detail: "Black Forest Labs' newest model: photos and legible text in 16 steps; edits a reference image as the prompt says. In 8 bits.",
+            family: .flux3Klein,
+            source: .huggingFace(repo: "black-forest-labs/flux-3-image-klein"),
+            revision: "337337621b8526e120f2275d250242f4a6bedd75",
+            sizeBytes: 20_319_306_856,
+            variant: "flux3-image-klein",
+            quantize: 8,
+            license: "FLUX Kommunity",
+            recommendedMemoryGB: 16,
             isBuiltIn: true
         ),
         // SenseNova-U1.5 8B-MoT (SenseTime) with its official 8-step LoRA merged, in 4 bits: the MLX

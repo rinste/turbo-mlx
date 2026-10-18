@@ -150,6 +150,8 @@ public final class LoRAAdapters {
             throw LoRAError.unreadable(name, error.localizedDescription)
         }
         if arrays.keys.contains(where: { $0.contains("lokr_") }) { throw LoRAError.unsupported(name, "LoKr") }
+        // LyCORIS's LoHa (Hadamard products of two low-rank pairs), which ComfyUI trains for FLUX 3.
+        if arrays.keys.contains(where: { $0.contains(".hada_w1_") }) { throw LoRAError.unsupported(name, "LoHa") }
         if arrays.keys.contains(where: { $0.hasSuffix(".dora_scale") || $0.contains("lora_magnitude_vector") }) {
             throw LoRAError.unsupported(name, "DoRA")
         }
@@ -209,7 +211,10 @@ public final class LoRAAdapters {
                 failures.append("\(path) lacks a matrix")
                 continue
             }
-            if part.split != .none {
+            if part.split == .swapHalves {
+                let half = up.shape[0] / 2
+                up = concatenated([up[half...], up[..<half]], axis: 0)
+            } else if part.split != .none {
                 let third = up.shape[0] / 3
                 let index = part.split == .q ? 0 : part.split == .k ? 1 : 2
                 up = up[(index * third) ..< ((index + 1) * third)]

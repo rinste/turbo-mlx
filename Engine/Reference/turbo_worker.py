@@ -184,6 +184,36 @@ class Flux2KleinFamily:
         )
 
 
+class Flux3KleinFamily:
+    """Black Forest Labs FLUX 3 Image Klein: the distilled flow map (16 steps) or the Base (CFG
+    against the empty prompt); BFL's bf16 repository quantized on loading as the app asks."""
+
+    @staticmethod
+    def load(spec: dict, **lora):
+        from mflux.models.common.config.model_config import ModelConfig
+        from mflux.models.flux3.variants import Flux3KleinEdit
+
+        hint = f"{spec.get('variant') or ''} {spec.get('name') or ''}".lower()
+        config = ModelConfig.flux3_image_klein_base() if "base" in hint else ModelConfig.flux3_image_klein()
+        quantize = spec.get("quantize")
+        # One model for both: without a picture the edit variant runs `Flux3Klein`'s text to image
+        # (both are `_Flux3KleinCore._generate`).
+        return Flux3KleinEdit(model_config=config, model_path=spec["path"], quantize=int(quantize) if quantize else None, **lora)
+
+    @staticmethod
+    def encode(model, prompt: str, spec: dict, upcoming: list[str] = ()) -> None:
+        pass  # the prompt is encoded inside generate_image
+
+    @staticmethod
+    def generate(model, p: dict):
+        images = p.get("images") or ([p["image"]] if p.get("image") else [])
+        common = dict(seed=int(p["seed"]), prompt=p["prompt"], num_inference_steps=int(p["steps"]),
+                      guidance=float(p["guidance"]) if model.model_config.supports_guidance else None)
+        if images:
+            return model.generate_image(image_paths=images, width=int(p["width"]), height=int(p["height"]), **common)
+        return model._generate(height=int(p["height"]), width=int(p["width"]), **common)
+
+
 class QwenImageFamily:
     """Alibaba Qwen-Image 2512: 20B MMDiT, true CFG (two transformer passes per step)."""
 
@@ -279,6 +309,7 @@ FAMILIES = {
     "ming": MingFamily,
     "z-image-turbo": ZImageTurboFamily,
     "flux2-klein": Flux2KleinFamily,
+    "flux3-klein": Flux3KleinFamily,
     "qwen-image": QwenImageFamily,
     "qwen-image-edit": QwenImageEditFamily,
 }
@@ -420,7 +451,7 @@ class Worker:
             raise ValueError(f"Unsupported model family: {spec.get('family')!r}")
         # LoRAs are applied when the model is built, unbaked: each adapted layer adds
         # scale · (x·A)·B to its output, as the native engine computes it.
-        key = (spec["family"], spec["path"], spec.get("variant"), loras)
+        key = (spec["family"], spec["path"], spec.get("variant"), spec.get("quantize"), loras)
         if self.model_key != key:
             self._unload()
             emit("phase", id=self.job_id, phase="loading")

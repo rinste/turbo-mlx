@@ -24,6 +24,8 @@ nonisolated enum LoRABase: Hashable, Sendable {
     case zImage
     /// FLUX.2 Klein, with the transformer's width when the file shows it: 3072 for 4B, 4096 for 9B.
     case flux2(width: Int?)
+    /// FLUX 3 Image Klein (one width, 3072).
+    case flux3
     case qwenImage
     /// LTX-2.3 and LTX-2.5 (4096 wide); another width is LTX-Video 0.9 or another video model
     /// keyed the same way.
@@ -36,6 +38,7 @@ nonisolated enum LoRABase: Hashable, Sendable {
         switch self {
         case .zImage: "Z-Image"
         case .flux2(let width): width == 4096 ? "FLUX.2 Klein 9B" : width == 3072 ? "FLUX.2 Klein 4B" : "FLUX.2 Klein"
+        case .flux3: "FLUX 3 Image Klein"
         case .qwenImage: "Qwen-Image"
         case .ltx(let width): width == nil || width == 4096 ? "LTX-2" : "an older LTX-Video"
         case .flux1: "FLUX.1"
@@ -49,6 +52,7 @@ nonisolated enum LoRABase: Hashable, Sendable {
         switch self {
         case .zImage: model.family == .zImageTurbo
         case .flux2(let width): model.family == .flux2Klein && (width == nil || width == model.kleinWidth)
+        case .flux3: model.family == .flux3Klein
         // Qwen-Image's editor has its transformer: a LoRA of one is a LoRA of the other.
         case .qwenImage: model.family == .qwenImage || model.family == .qwenImageEdit
         // LTX-2.3's and LTX-2.5's transformers have the same layers: which one a LoRA was made
@@ -62,7 +66,7 @@ nonisolated enum LoRABase: Hashable, Sendable {
     /// Whether any model the app knows of could run it.
     var isSupported: Bool {
         switch self {
-        case .zImage, .flux2, .qwenImage, .unknown: true
+        case .zImage, .flux2, .flux3, .qwenImage, .unknown: true
         case .ltx(let width): width == nil || width == 4096
         case .flux1, .stableDiffusion: false
         }
@@ -170,6 +174,7 @@ nonisolated struct LoRAFileInfo: Hashable, Sendable {
         if note.contains("zimage") || note.contains("z-image") || note.contains("z_image") { return .zImage }
         if note.contains("qwen") { return .qwenImage }
         if note.contains("ltx") { return .ltx(width: ltxWidth(downs)) }
+        if ["flux3", "flux.3", "flux-3", "flux_3", "flux 3"].contains(where: note.contains) { return .flux3 }
         if note.contains("flux2") || note.contains("flux.2") || note.contains("flux-2") || note.contains("flux_2") { return .flux2(width: width) }
         if note.contains("flux1") || note.contains("flux.1") || note.contains("flux-1") || note.contains("flux_1") { return .flux1 }
         if note.contains("sdxl") || note.contains("sd_xl") || note.contains("stable-diffusion") || note.contains("sd_v1") { return .stableDiffusion }
@@ -183,6 +188,11 @@ nonisolated struct LoRAFileInfo: Hashable, Sendable {
         if any({ $0.hasPrefix("down.blocks") || $0.hasPrefix("up.blocks") || $0.hasPrefix("mid.block") || $0.hasPrefix("down_blocks") || $0.hasPrefix("up_blocks") || $0.hasPrefix("mid_block") || $0.hasPrefix("te.") || $0.hasPrefix("te1.") || $0.hasPrefix("te2.") || $0.hasPrefix("text_encoder") }) {
             return .stableDiffusion
         }
+        // FLUX 3's per-mode blocks and modulations, before FLUX.2 and FLUX.1, whose single blocks
+        // and stream modulations are named alike.
+        let flux3Marks = ["mode_blocks", "mode.blocks", "early_stream", "early.stream", "emb_in.", "emb.in.", "ref_time_in", "ref.time.in",
+                          "x_embedders", "x.embedders", "target_timestep", "target.timestep"]
+        if any({ path in flux3Marks.contains { path.contains($0) } }) { return .flux3 }
         // LTX's audio–video blocks, before FLUX.1, whose feed-forward is named alike (`ff.net`).
         let ltxMarks = ["audio_attn", "audio.attn", "video_to_audio", "video.to.audio", "audio_to_video", "audio.to.video",
                         "audio_ff", "audio.ff", "patchify_proj", "patchify.proj", "adaln_single", "adaln.single"]

@@ -155,8 +155,11 @@ public final class Qwen3TextEncoder: Module {
     /// reference returns them with `output_hidden_states`.
     /// `computeType` overrides the activations' dtype (the parity check runs it in float32;
     /// Z-Image's encoder runs that way by design). `through` stops after that many layers when a
-    /// caller reads an earlier state (Z-Image reads the second to last).
-    public func hiddenStates(inputIds: MLXArray, attentionMask: MLXArray, computeType: DType? = nil, through: Int? = nil) -> [MLXArray] {
+    /// caller reads an earlier state (Z-Image reads the second to last). `positions` [B, S] are the
+    /// rotary positions when they are not 0..<S (FLUX 3 puts its padding at position 1).
+    public func hiddenStates(
+        inputIds: MLXArray, attentionMask: MLXArray, positions: MLXArray? = nil, computeType: DType? = nil, through: Int? = nil
+    ) -> [MLXArray] {
         let (batch, length) = (inputIds.shape[0], inputIds.shape[1])
         var h = embedTokens(inputIds)
         if let computeType { h = h.asType(computeType) }
@@ -166,14 +169,14 @@ public final class Qwen3TextEncoder: Module {
         let padding = MLX.where(attentionMask .== 1, MLXArray(Float(0)), MLXArray(-Float.infinity))
             .asType(dtype)
             .reshaped([batch, 1, 1, length])
-        let positions = MLXArray(0 ..< Int32(length))
-        let causalBool = positions.expandedDimensions(axis: 0) .> positions.expandedDimensions(axis: 1)
+        let indices = MLXArray(0 ..< Int32(length))
+        let causalBool = indices.expandedDimensions(axis: 0) .> indices.expandedDimensions(axis: 1)
         let causal = MLX.where(causalBool, MLXArray(-Float.infinity), MLXArray(Float(0)))
             .asType(dtype)
             .reshaped([1, 1, length, length])
         let mask = broadcast(causal, to: [batch, 1, length, length]) + padding
 
-        let (cos, sin) = rotary(length: length, dtype: dtype)
+        let (cos, sin) = rotary(length: length, positions: positions, dtype: dtype)
         var states = [h]
         for layer in layers.prefix(through ?? layers.count) {
             h = layer(h, mask: mask, cos: cos, sin: sin)
@@ -183,17 +186,23 @@ public final class Qwen3TextEncoder: Module {
     }
 
     /// The concatenated hidden states of `layers` for every token: the prompt the transformer reads.
-    public func promptEmbeds(inputIds: MLXArray, attentionMask: MLXArray, layers outLayers: [Int], computeType: DType? = nil) -> MLXArray {
-        let states = hiddenStates(inputIds: inputIds, attentionMask: attentionMask, computeType: computeType)
+    public func promptEmbeds(
+        inputIds: MLXArray, attentionMask: MLXArray, positions: MLXArray? = nil, layers outLayers: [Int], computeType: DType? = nil
+    ) -> MLXArray {
+        let states = hiddenStates(
+            inputIds: inputIds, attentionMask: attentionMask, positions: positions, computeType: computeType,
+            through: outLayers.max()
+        )
         return concatenated(outLayers.map { states[$0] }, axis: -1)
     }
 
-    /// `Qwen3TextRotaryEmbedding`: positions 0..<S, the frequencies duplicated over both halves.
-    private func rotary(length: Int, dtype: DType) -> (MLXArray, MLXArray) {
+    /// `Qwen3TextRotaryEmbedding`: positions 0..<S unless given, the frequencies duplicated over both halves.
+    private func rotary(length: Int, positions given: MLXArray?, dtype: DType) -> (MLXArray, MLXArray) {
         let dim = config.headDim
         let exponents = MLXArray(stride(from: 0, to: dim, by: 2).map { Float($0) / Float(dim) })
         let invFreq = 1 / pow(Float(config.ropeTheta), exponents)
-        let positions = MLXArray((0 ..< length).map { Float($0) }).reshaped([1, length, 1])
+        let positions = given.map { $0.asType(.float32).reshaped([-1, length, 1]) }
+            ?? MLXArray((0 ..< length).map { Float($0) }).reshaped([1, length, 1])
         let freqs = positions * invFreq.reshaped([1, 1, dim / 2])
         let emb = concatenated([freqs, freqs], axis: -1)
         return (cos(emb).asType(dtype), sin(emb).asType(dtype))

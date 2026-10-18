@@ -47,7 +47,10 @@ nonisolated enum MemoryEstimate {
     // memory; the first image after one without Save memory still peaks as without); an edit, whose
     // picture is read with the prompt at the image's size, 10.9 / 11.0 / 11.9, with Save memory
     // 7.4–7.7 / 8.2, which the lines follow. Where a size was not measured without Save memory, the decoder's growth is Qwen-Image's,
-    // the same decoder.
+    // the same decoder. FLUX 3 Image Klein, BFL's bf16 checkpoint quantized to 8 bits on loading (18 October 2026,
+    // decoding from bf16): 10.6 / 14.8 / 22.7 / 30.9 GB at 512 / 1024 / 1536 / 2048, with Save memory 6.8 / 11.2 /
+    // 22.8 / 30.1 (a second prompt the same); the decode sets the peak from 1536 px. The lines run through 1024 and
+    // 1536, above 2048 by 3 and 9 GB.
     private static func peaks(_ id: String, lowMemory: Bool) -> Peak? {
         switch (id, lowMemory) {
         case ("mflux-community/flux2-klein-4b-mflux-q4", _): Peak(floor: 6.3, base: 3.8, perMegapixel: 8.46)
@@ -61,6 +64,8 @@ nonisolated enum MemoryEstimate {
         case ("mflux-community/qwen-image-edit-2511-mflux-q4", true): Peak(floor: 16.3, base: 15.0, perMegapixel: 2.06)
         case ("joeynyc/Ming-Image-0.1-Design-mflux-q8-te5", false): Peak(floor: 21.0, base: 20.15, perMegapixel: 5.11)
         case ("joeynyc/Ming-Image-0.1-Design-mflux-q8-te5", true): Peak(floor: 11.7, base: 10.4, perMegapixel: 0.03)
+        case ("black-forest-labs/flux-3-image-klein", false): Peak(floor: 10.7, base: 8.6, perMegapixel: 6.0)
+        case ("black-forest-labs/flux-3-image-klein", true): Peak(floor: 6.8, base: 2.0, perMegapixel: 8.81)
         case ("numz/SeedVR2_comfyUI", _): Peak(floor: 10.7, base: 7.0, perMegapixel: 0.66)
         case ("mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit", false): Peak(floor: 10.9, base: 10.7, perMegapixel: 0.3)
         case ("mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit", true): Peak(floor: 7.7, base: 7.5, perMegapixel: 0.2)

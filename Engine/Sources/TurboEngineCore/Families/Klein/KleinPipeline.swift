@@ -64,6 +64,11 @@ public struct FlowMatchSchedule: Equatable, Sendable {
 public struct EncodedPrompt {
     public let embeds: MLXArray
     public let ids: MLXArray
+
+    public init(embeds: MLXArray, ids: MLXArray) {
+        self.embeds = embeds
+        self.ids = ids
+    }
 }
 
 public struct GeneratedImage {

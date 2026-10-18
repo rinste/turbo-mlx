@@ -7,7 +7,7 @@ checked without Python.
 It reads the tokenizers of the catalog's checkpoints from the Hugging Face cache (the commits the
 catalog names) with `transformers`' fast tokenizers, which mflux and ltx-2-mlx call, and records,
 for each pipeline, the folder it read and the ids of every prompt, built as the families build
-them: FLUX.2 Klein and Z-Image with Qwen3's chat template (thinking off and on), Qwen-Image and
+them: FLUX.2 Klein and Z-Image with Qwen3's chat template (thinking off and on), FLUX 3 with Qwen3-VL's, Qwen-Image and
 Qwen-Image Edit with their templates around the prompt, Ming-Image with its template and no
 special tokens, LTX-2's Gemma 3 with `<bos>` and the prompt stripped, SenseNova-U1.5 with its
 "neo1_0" generation query (and the unconditional one, the same for every prompt), and its edit
@@ -93,6 +93,8 @@ def edit_text(prompt: str, image_tokens: int) -> str:
 PIPELINES = [
     ("qwen3-chat-no-thinking", "mflux-community/flux2-klein-4b-mflux-q4", "794cd159538149ad9830848508c31f0ea7088e58", "tokenizer"),
     ("qwen3-chat-thinking", "mflux-community/z-image-turbo-mflux-q4", "f427e257d8e6ffa03edd4d9ac554a05809da456c", "tokenizer"),
+    # FLUX 3's Qwen3-VL template (BFL's text_encoder/ holds Qwen3-VL-4B-Instruct's tokenizer files, blob for blob).
+    ("qwen3-vl-chat", "black-forest-labs/flux-3-image-klein", "337337621b8526e120f2275d250242f4a6bedd75", "text_encoder"),
     ("qwen-image", "mflux-community/qwen-image-2512-mflux-q4", "ec35d366eeb701838007c1720c3d80f2f7fbf9f4", "tokenizer"),
     ("qwen-image-edit", "mflux-community/qwen-image-edit-2511-mflux-q4", "720ad94d982b3dc22f9122ee96af31221d542d47", "tokenizer"),
     ("ming", "joeynyc/Ming-Image-0.1-Design-mflux-q8-te5", "3adb8aaef779f9b3fa4621acebeba97bb4010d42", "mllm"),
@@ -180,6 +182,10 @@ def pipeline_ids(name: str, tokenizer, prompt: str) -> list[int]:
         text = tokenizer.apply_chat_template([{"role": "user", "content": prompt}], tokenize=False,
                                              add_generation_prompt=True, enable_thinking=True)
         return tokenizer(text, add_special_tokens=False)["input_ids"]
+    if name == "qwen3-vl-chat":
+        # Flux3PromptEncoder.tokenize: the chat template, then the tokenizer's defaults.
+        text = tokenizer.apply_chat_template([{"role": "user", "content": prompt}], tokenize=False, add_generation_prompt=True)
+        return tokenizer(text)["input_ids"]
     if name == "qwen-image":
         return tokenizer(QWEN_IMAGE_TEMPLATE.format(prompt), add_special_tokens=True)["input_ids"]
     if name == "qwen-image-edit":

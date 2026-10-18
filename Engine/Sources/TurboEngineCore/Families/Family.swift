@@ -111,7 +111,7 @@ extension PreviewingFamilyModel {
 /// Loads the model a spec names, by family.
 public enum FamilyLoader {
     /// Families this engine implements, as the app names them.
-    public static let families = ["flux2-klein", "z-image-turbo", "qwen-image", "qwen-image-edit", "ming", "sensenova", "ltx-2", "ltx-2.5", "seedvr2"]
+    public static let families = ["flux2-klein", "flux3-klein", "z-image-turbo", "qwen-image", "qwen-image-edit", "ming", "sensenova", "ltx-2", "ltx-2.5", "seedvr2"]
 
     public static func load(_ spec: ModelSpec, loadTokenizer: Bool = true) throws -> FamilyModel {
         let root = URL(fileURLWithPath: spec.path)
@@ -119,6 +119,9 @@ public enum FamilyLoader {
         case "flux2-klein":
             let config = KleinConfig.forModel(name: spec.name, variant: spec.variant)
             return try KleinModel(modelPath: root, config: config, loadTokenizer: loadTokenizer)
+        case "flux3-klein":
+            return try Flux3Model(modelPath: root, config: .forModel(name: spec.name, variant: spec.variant), quantize: spec.quantize,
+                                  loadTokenizer: loadTokenizer)
         case "z-image-turbo":
             return try ZImageModel(modelPath: root, config: .turbo, loadTokenizer: loadTokenizer)
         case "qwen-image":

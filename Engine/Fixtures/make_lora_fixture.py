@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Adds LoRA checks to existing fixtures (Z-Image, FLUX.2 Klein, Qwen-Image): random LoRA files in
+"""Adds LoRA checks to existing fixtures (Z-Image, FLUX.2 Klein, FLUX 3, Qwen-Image): random LoRA files in
 the spellings real ones come in, and the transformer pass mflux computes with each applied the way
 the engine applies them (unbaked: each layer adds scale · (x·A)·B). `turbo-engine verify` then puts
 the same files on the port and compares the pass, and checks that taking them off gives the plain
@@ -9,10 +9,12 @@ Each family gets two files, keyed as mflux's own mapping spells them (`possible_
   Z-Image      ai-toolkit (`diffusion_model.….lora_A.weight`) and Kohya (`lora_unet_…`, with alpha)
   FLUX.2       diffusers (`transformer.…`) and BFL (`double_blocks.N.img_attn.qkv`, fused: one
                up matrix for the query, key and value layers, a third each; with alpha)
+  FLUX 3       diffusers and BFL (`content_mode_blocks.image.N.q_proj`, …, the final modulation
+               `final_layer.image.adaLN_modulation.1` with its halves the other way; with alpha)
   Qwen-Image   ai-toolkit and Kohya (with alpha)
 
 Run it with a Python that has mflux (Engine/Fixtures/requirements.txt), after the fixtures:
-  $PY Engine/Fixtures/make_lora_fixture.py build/fixtures/zimage build/fixtures/klein build/fixtures/qwen-image
+  $PY Engine/Fixtures/make_lora_fixture.py build/fixtures/zimage build/fixtures/klein build/fixtures/flux3 build/fixtures/qwen-image
 """
 
 import json
@@ -57,6 +59,20 @@ def load_transformer(fixture: Path, cfg: dict):
         transformer = QwenTransformer(**cfg["transformer"])
         predicate = lambda path, m: QwenWeightDefinition.quantization_predicate(path, m, bits)  # noqa: E731
         mapping = QwenLoRAMapping
+    elif family == "flux3-klein":
+        # Saved in BFL's layout and quantized on loading, as make_flux3_fixture.py reads it.
+        from mflux.models.common.weights.loading.weight_applier import WeightApplier
+        from mflux.models.common.weights.loading.weight_loader import WeightLoader
+        from mflux.models.flux3.model.flux3_transformer.flux3_transformer import Flux3Transformer
+        from mflux.models.flux3.weights.flux3_lora_mapping import Flux3LoRAMapping
+        from mflux.models.flux3.weights.flux3_weight_definition import Flux3KleinWeightDefinition
+
+        transformer = Flux3Transformer(**cfg["transformer"])
+        weights = WeightLoader.load(weight_definition=Flux3KleinWeightDefinition, model_path=str(fixture))
+        WeightApplier.apply_and_quantize(weights=weights, quantize_arg=bits, weight_definition=Flux3KleinWeightDefinition,
+                                         models={"transformer": transformer})
+        mx.eval(transformer.parameters())
+        return family, transformer, Flux3LoRAMapping
     else:
         raise SystemExit(f"{fixture}: no LoRA check for {family}")
     nn.quantize(transformer, group_size=64, bits=bits, class_predicate=predicate)
@@ -77,6 +93,16 @@ def transformer_pass(family: str, transformer, cfg: dict, refs: dict):
             hidden_states=refs["latents"], encoder_hidden_states=refs["prompt_embeds"], timestep=refs["timestep"],
             img_ids=refs["latent_ids"], txt_ids=refs["text_ids"], guidance=None,
         )
+    if family == "flux3-klein":
+        # The fixture's pass: the second step of its schedule, towards the third.
+        from mflux.models.flux3.variants.flux3_klein_core import _Flux3KleinCore
+
+        timesteps = refs["timesteps"]
+        return _Flux3KleinCore._predict(transformer)(
+            latents=refs["latents"], latent_ids=refs["latent_ids"], text_tokens=refs["prompt_embeds"],
+            text_ids=refs["text_ids"], uncond_tokens=None, uncond_ids=None, cond_tokens=None, cond_ids=None,
+            guidance=None, timestep=timesteps[1:2], target_timestep=timesteps[2:3],
+        )
     from mflux.models.common.config.config import Config
     from mflux.models.common.config.model_config import ModelConfig
 
@@ -92,6 +118,15 @@ def transformer_pass(family: str, transformer, cfg: dict, refs: dict):
 
 
 BFL = ("double_blocks.", "single_blocks.", "img_in", "txt_in", "time_in.", "final_layer.")
+# FLUX 3's names in BFL's files: the blocks' layers are `q_proj`, `attn_out`, `mlp_in`…
+BFL3 = ("content_mode_blocks.", "single_blocks.", "txt_in", "time_in.", "ref_time_in.", "final_layer.", "emb_in.")
+BFL3_PARTS = (".q_proj.", ".k_proj.", ".v_proj.", ".attn_out.", ".mlp_in.", ".mlp_out.")
+
+
+def bfl3(pattern: str) -> bool:
+    """Whether a FLUX 3 key pattern names its layer as BFL's files do."""
+    path = pattern.split(".", 1)[1]
+    return path.startswith(BFL3) or any(part in path for part in BFL3_PARTS) or ".lin." in path
 
 # Which of a target's down patterns each file uses (the up and alpha keys follow from it).
 FORMATS = {
@@ -105,6 +140,10 @@ FORMATS = {
         and p.split(".", 1)[1].startswith(BFL) and p.endswith(".lora_down.weight")
         or p.startswith("diffusion_model.") and p.endswith(".lin.lora_down.weight"),
     },
+    "flux3-klein": {
+        "diffusers": lambda p: p.startswith("transformer.") and p.endswith(".lora_A.weight") and not bfl3(p),
+        "bfl": lambda p: p.startswith("diffusion_model.") and p.endswith(".lora_down.weight") and bfl3(p),
+    },
     "qwen-image": {
         "aitoolkit": lambda p: p.startswith("diffusion_model.") and p.endswith(".lora_A.weight"),
         "kohya": lambda p: p.startswith("lora_unet_") and p.endswith(".lora_down.weight"),
@@ -115,7 +154,10 @@ FORMATS = {
 def module_at(root, path: str):
     module = root
     for part in path.split("."):
-        module = module[int(part)] if part.isdigit() else getattr(module, part)
+        if isinstance(module, dict) and not isinstance(module, nn.Module):
+            module = module[part]  # FLUX 3's modes: plain dictionaries of modules
+        else:
+            module = module[int(part)] if part.isdigit() else getattr(module, part)
     return module
 
 
@@ -144,7 +186,7 @@ def make_file(transformer, mapping, accepts, seed: int) -> dict:
             path = target.model_path.format(block=block) if block is not None else target.model_path
             try:
                 layer = module_at(transformer, path)
-            except (AttributeError, IndexError):
+            except (AttributeError, IndexError, KeyError):
                 break
             if not hasattr(layer, "weight"):  # absent from this model (Klein has no guidance embedder)
                 break

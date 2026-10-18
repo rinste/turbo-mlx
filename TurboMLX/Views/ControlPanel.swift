@@ -1757,6 +1757,8 @@ private struct MemoryRows: View {
             "Frees the text encoder (about 15 GB) once the prompt and the picture are read, and decodes the image in tiles. Each new prompt or picture loads it again."
         case .zImageTurbo, .flux2Klein:
             "Keeps less in memory and, where it doesn’t affect the image, decodes it in tiles."
+        case .flux3Klein:
+            "Frees the text encoder (about 5 GB) once the prompt is read. A prompt that was not in the queue yet loads it again."
         case .senseNova:
             "Frees the half of the model that reads the prompt (about 6 GB) once it is read: about 6 GB instead of 11 GB. A prompt that was not in the queue yet loads it again, in place of the other half."
         case .ltx2:

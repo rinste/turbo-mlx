@@ -20,9 +20,13 @@ public struct ModelSpec: Decodable, Equatable {
     public let lowRam: Bool?
     /// Families whose text encoder is a checkpoint of its own (LTX-2: Gemma 3).
     public let textEncoderPath: String?
+    /// The bits an unquantized checkpoint is quantized to on loading (FLUX 3: BFL's repository is
+    /// bf16); nil, as it is stored.
+    public let quantize: Int?
 
-    /// What identifies a loaded model: the same triple `turbo_worker.py` keys its cache by.
-    public var key: String { "\(family)|\(path)|\(variant ?? "")" }
+    /// What identifies a loaded model: the same triple `turbo_worker.py` keys its cache by, and
+    /// the bits it is quantized to on loading.
+    public var key: String { "\(family)|\(path)|\(variant ?? "")" + (quantize.map { "|q\($0)" } ?? "") }
 }
 
 /// One image to generate.

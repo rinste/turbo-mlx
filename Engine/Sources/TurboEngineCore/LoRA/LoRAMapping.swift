@@ -8,8 +8,10 @@ import Foundation
 public struct LoRAMapping {
     /// The part of a fused projection's up matrix a layer takes: BFL's `qkv` feeds the query, key
     /// and value layers a third each (mflux's `split_q_up` and friends); the down matrix is shared.
+    /// `swapHalves` reorders the rows instead: FLUX 3's final modulation is (shift, scale) in BFL's
+    /// files and (scale, shift) in the module.
     enum Split {
-        case none, q, k, v
+        case none, q, k, v, swapHalves
     }
 
     struct Row {
@@ -30,11 +32,13 @@ public struct LoRAMapping {
         case flux2 = "FLUX.2"
         case qwen = "Qwen-Image"
         case ltx = "LTX-2"
+        case flux3 = "FLUX 3"
 
         var rows: [Row] {
             switch self {
             case .zImage: LoRAMapping.zImageRows
             case .flux2: LoRAMapping.flux2Rows
+            case .flux3: LoRAMapping.flux3Rows
             case .qwen: LoRAMapping.qwenRows + LoRAMapping.qwenExtraRows
             case .ltx: []
             }
@@ -44,7 +48,7 @@ public struct LoRAMapping {
         var renames: [(String, String)] {
             switch self {
             case .ltx: LoRAMapping.ltxRenames
-            case .zImage, .flux2, .qwen: []
+            case .zImage, .flux2, .flux3, .qwen: []
             }
         }
     }

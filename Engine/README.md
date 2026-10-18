@@ -1,6 +1,6 @@
 # turbo-engine
 
-The engine of Turbo MLX: the catalog's eight families (six image models, LTX-2 for video and the
+The engine of Turbo MLX: the catalog's nine families (seven image models, LTX-2 for video and the
 SeedVR2 upscaler) on
 [MLX Swift](https://github.com/ml-explore/mlx-swift), behind a JSON-lines protocol (below) that
 the app speaks to it; the Python engine the app used to ship, `Reference/turbo_worker.py`, speaks
@@ -18,6 +18,9 @@ Sources/TurboEngineCore/      protocol, mflux checkpoint loading, PNG output, th
                               bicubic and Lanczos resizes
   Families/Klein/             FLUX.2 Klein: Qwen3 text encoder, FLUX.2 transformer, VAE decoder,
                               and the VAE encoder for the pictures an image is edited from
+  Families/Flux3/             FLUX 3 Image Klein: the FLUX 3 transformer (per-mode blocks, then
+                              single-stream ones), the flow-map schedule, the pictures' preparation;
+                              Klein's Qwen3 encoder (Qwen3-VL's language tower) and FLUX.2's VAE
   Families/ZImage/            Z-Image Turbo: the Qwen3 encoder read in float32, the S3-DiT,
                               the 16-channel decoder
   Families/QwenImage/         Qwen-Image 2512: Qwen2.5-VL text encoder, the dual-stream
@@ -73,6 +76,7 @@ names its tensors instead, and only the VAE's convolutions are transposed on loa
 | Family | Text side | Transformer | Decoder | Guidance |
 |---|---|---|---|---|
 | FLUX.2 Klein | Qwen3 (hidden states of layers 9, 18, 27), padded to 512 | FLUX.2 double/single stream; an edit adds the reference picture's tokens after the image's (t = 10), only the image's come out | FLUX.2, 32 channels; the encoder for references, in their own proportions up to ~1 MP | base checkpoints: negative space |
+| FLUX 3 Image Klein | Qwen3-VL-4B's language tower (bf16 or quantized on loading), hidden states of every fourth layer from 4 to 32, padded to a multiple of 80 tokens with the padding at rotary position 1 | 5 per-mode blocks (image, pictures, text: each attends only to itself), then 28 single-stream blocks over [image, pictures, text], each token modulated by its mode; the distilled checkpoint is a flow map, told each step's target time; an edit's pictures (one padded by reflection to a 4 MP canvas, or up to ten cut to 1 MP each) at layers −1, −2… | FLUX.2's, the decoder whole, from the latents in bf16 (mflux: float32) | Base: CFG against the empty prompt |
 | Z-Image Turbo | Qwen3 4B in float32, second-to-last state, real tokens only, thinking on | S3-DiT, tokens padded to 32 with learned pad tokens, float32 stream | FLUX.1-style, 16 channels, tiles with Save memory | off |
 | Qwen-Image 2512 | Qwen2.5-VL 7B (bf16, unquantized), the template's 34 tokens dropped | 60 dual-stream blocks, float32 stream, modulation producers at 8 bits | Wan-derived causal 3D, 16 channels, tiles | true CFG, rescaled to the conditional norm; the unconditional pass is skipped at 1 |
 | Qwen-Image-Edit 2511 | Qwen2.5-VL 7B with its vision tower: the picture at ~384 × 384 (Pillow's bicubic twice, as mflux) in 14-pixel patches, windowed attention, 2 × 2 merged; its tokens replace the placeholders of a 64-token template, everything in float32, then float16 | Qwen-Image's; the picture's latents follow the image's (frame position 1) and are modulated at timestep 0 (`zero_cond_t`), only the image's come out | Qwen-Image's, plus the encoder for the picture at the image's size (its own proportions when they differ; Pillow's Lanczos) | as Qwen-Image, negative prompt empty |
@@ -108,13 +112,14 @@ are computed a chunk of pixel rows at a time instead (`ChunkedAttention`, 256 MB
 most), the same math to rounding.
 
 `loras` (a list of files, each with a `scale`) puts LoRAs on the transformer of Z-Image, FLUX.2
-Klein, Qwen-Image and its editor, the families mflux applies them to, and of LTX-2.3 and LTX-2.5
+Klein, FLUX 3, Qwen-Image and its editor, the families mflux applies them to, and of LTX-2.3 and LTX-2.5
 (both stages, both transformers), as ltx-2-mlx does (`LoRA/`). A file's keys are
 looked up in mflux's own mappings, exported to `LoRAMappingTables.swift` by
 `Fixtures/export_lora_mappings.py`, once their prefixes (`diffusion_model.`, `transformer.`, …) and
 matrix names (`lora_A`, `lora_down`, `lora.down`, …) are stripped; Kohya's underscored keys are
 read through the same rows, and BFL's fused `qkv` gives the query, key and value layers a third of
-its up matrix each, as mflux does. A key no row names is taken as it is when it names a linear
+its up matrix each, as mflux does (and FLUX 3's final modulation, `(shift, scale)` in BFL's files, has
+its halves swapped). A key no row names is taken as it is when it names a linear
 layer of the model (Qwen-Image's `img_in` or `proj_out`, which mflux's mapping leaves out, as it
 does the modulation layers, here mapped too). LTX-2's keys need no table: ltx-2-mlx's renames
 (`to_out.0` → `to_out`, `ff.net.0.proj` → `ff.proj_in`, `linear_1` → `linear1`, …), on whole
@@ -250,13 +255,14 @@ PY=~/.venvs/mflux/bin/python
 # 1. A tiny checkpoint with random weights, and what mflux computes from it (only when a
 #    reference changes: the fixtures are files, kept in build/fixtures, which git ignores)
 $PY Engine/Fixtures/make_klein_fixture.py      build/fixtures/klein
+$PY Engine/Fixtures/make_flux3_fixture.py      build/fixtures/flux3
 $PY Engine/Fixtures/make_zimage_fixture.py     build/fixtures/zimage
 $PY Engine/Fixtures/make_qwen_image_fixture.py build/fixtures/qwen-image
 $PY Engine/Fixtures/make_qwen_image_edit_fixture.py build/fixtures/qwen-image-edit
 $PY Engine/Fixtures/make_ming_fixture.py       build/fixtures/ming
 $PY Engine/Fixtures/make_seedvr2_fixture.py    build/fixtures/seedvr2
 #    random LoRA files for three of them, with the pass mflux computes with each applied
-$PY Engine/Fixtures/make_lora_fixture.py build/fixtures/zimage build/fixtures/klein build/fixtures/qwen-image
+$PY Engine/Fixtures/make_lora_fixture.py build/fixtures/zimage build/fixtures/klein build/fixtures/flux3 build/fixtures/qwen-image
 
 # 2. The same computations in Swift, no Python: one fixture (it names its family) or all of them
 build/bin/turbo-engine verify build/fixtures/klein
@@ -268,7 +274,12 @@ RMS one): the text side, the initial noise for the fixture's seed, one transform
 also the unconditional one), the schedule, the whole denoising loop (guided where the family uses
 guidance), and the decode; for Klein also an edit from a reference picture (the VAE encoder, the
 picture's tokens and ids, one pass and the loop with them, its decode, and the sizes pictures of
-several shapes are encoded at); for Qwen-Image-Edit the picture's resizes byte for byte, its
+several shapes are encoded at); for FLUX 3 (whose fixture is saved in the layout of BFL's own
+repository and read back through mflux's loader, quantized to 8 bits on loading as the catalog
+runs it) the padding's rotary positions, the encoder in float32, one pass and the Base's guided
+pass (both bit-identical), the loop, the decode, two pictures prepared as several (byte for byte)
+with their tokens, a pass and the loop, one picture padded by reflection and the box it covers,
+and the sizes pictures of many shapes are prepared at; for Qwen-Image-Edit the picture's resizes byte for byte, its
 patches, the vision tower, the prompt with the picture's tokens, the picture's latents, a pass (and
 the picture's own tokens out of it, which `zero_cond_t` modulates at timestep 0) and the loop over
 the image and the picture; for SeedVR2 (whose fixture is saved in the original
@@ -277,8 +288,9 @@ byte for byte with and without softness, the tiled encode, the noise, the transf
 one pass (bit-identical), the step, the tiled decode, the color correction, and the whole upscale
 from the picture, shown with its PSNR (about 49 dB: the random weights and the histogram match
 spread the VAE's bf16 rounding over a few pixels). Where `make_lora_fixture.py` has run, Z-Image,
-Klein and Qwen-Image also put each of its LoRA files on the transformer for the pass (Z-Image's in
-ai-toolkit's and Kohya's spellings, Klein's in diffusers' and BFL's, with the fused `qkv`,
+Klein, FLUX 3 and Qwen-Image also put each of its LoRA files on the transformer for the pass (Z-Image's in
+ai-toolkit's and Kohya's spellings, Klein's in diffusers' and BFL's, with the fused `qkv`, FLUX 3's
+in diffusers' and BFL's, with the swapped final modulation,
 Qwen-Image's in ai-toolkit's and Kohya's; some with an alpha), against mflux's pass with the same
 file, then take them off, which must give the plain pass back bit for bit. Anything above 3% fails. Identical math lands well below that; a
 wrong reshape, a swapped rotary pair or a missing cast shows up as a large error at the first stage
@@ -326,6 +338,25 @@ At 1024 × 640 the two land 25 dB apart. Against mflux run in float32, the engin
 mflux in both cases: an edit 25 dB (mflux 27), text-to-image 28.5 dB (mflux 30). An edit carries
 more of the bf16 rounding in both engines, and the engine's encoder is no worse than mflux's:
 both are 3% (RMS) from a float32 encode.
+
+FLUX 3 Image Klein runs through the reference worker too (`flux3-klein`, with the spec's
+`quantize`: BFL's bf16 repository read and quantized to 8 bits by both engines). On 18 October
+2026, against mflux 0.23.0 on MLX 0.32.2, 16 steps: 39.5 dB at 512 × 512, 37.0 dB at 1024 × 1024;
+an edit of a 600 × 450 picture 41.5 dB at 768 × 576 (the picture padded by reflection) and 44.9 dB
+at its own size (made on the padded canvas and cropped back, as mflux does without a size); a
+diffusers LoRA 42.8 dB. On the real weights the passes are not bit for bit as on the fixture:
+the activations reach millions (the single stream about 10⁷), where a bf16 step is thousands, and
+the two builds of MLX round a few values apart from the first image block on (1–2% RMS by the end
+of a pass, which few steps amplify: 27–34 dB at 1 to 8 steps, more again at 16). Against mflux
+with every parameter and activation in float32, mflux's own image is 40.6 dB away at 512 px and
+the native engine's 38.2 dB, the 2 dB Klein shows too; with an ai-toolkit LoRA in BFL's names,
+which makes the model touchier, 29.6 and 30.9 dB (the two engines 26.9 dB apart, the same image).
+Those numbers decode as mflux does, from the loop's float32 state, which keeps FLUX.2's whole decoder
+in float32 (its residual stream): 43–49 GB at 2048 × 2048. The engine rounds the latents to bf16
+first, as Klein's are: 31 GB there, 22.7 instead of 33.6 at 1536, a quarter faster, 47–48 dB from the
+float32 decode and 0.1–0.3 dB further from mflux (39.2 and 36.9 dB at 512 and 1024). Chunking the
+VAE's mid-block attention (512 channels, which MLX's fused kernels do not take) changed neither
+peak: the convolutions at full size set it, not the attention.
 
 SeedVR2 (`params.image` and `params.upscale`, the factor, with `params.softness`) is compared
 against mflux's `SeedVR2(model_path=…).generate_image(resolution=ScaleFactor(…))`, which the

@@ -8,7 +8,8 @@ mflux lists, for every layer a LoRA can adapt, each spelling of its keys it acce
 The engine strips those the same way before it looks a key up (`LoRAMapping.canonical`), so the
 tables keep one entry per layer and spelling of its path: the source path, with `{block}` for the
 block number, the module path it adapts, and how the up matrix is cut when one source matrix
-feeds three layers (BFL's fused `qkv`, split in thirds as mflux's `split_q_up` and friends do).
+feeds three layers (BFL's fused `qkv`, split in thirds as mflux's `split_q_up` and friends do) or
+reordered (FLUX 3's final modulation, its halves swapped).
 
 Run it with a Python that has mflux (Engine/Fixtures/requirements.txt):
   $PY Engine/Fixtures/export_lora_mappings.py
@@ -19,6 +20,7 @@ from importlib.metadata import version
 from pathlib import Path
 
 from mflux.models.flux2.weights.flux2_lora_mapping import Flux2LoRAMapping
+from mflux.models.flux3.weights.flux3_lora_mapping import Flux3LoRAMapping
 from mflux.models.qwen.weights.qwen_lora_mapping import QwenLoRAMapping
 from mflux.models.z_image.weights.z_image_lora_mapping import ZImageLoRAMapping
 
@@ -28,6 +30,7 @@ OUT = Path(__file__).resolve().parents[1] / "Sources/TurboEngineCore/LoRA/LoRAMa
 MAPPINGS = {
     "zImage": ZImageLoRAMapping,
     "flux2": Flux2LoRAMapping,
+    "flux3": Flux3LoRAMapping,
     "qwen": QwenLoRAMapping,
 }
 
@@ -47,6 +50,8 @@ SPLITS = {
     "split_q_up": "q",
     "split_k_up": "k",
     "split_v_up": "v",
+    # FLUX 3's final modulation: BFL stores (shift, scale), mflux's module (scale, shift).
+    "_swap_halves": "swapHalves",
 }
 IDENTITY_DOWNS = {None, "split_q_down", "split_k_down", "split_v_down"}
 
@@ -83,6 +88,11 @@ def rows(mapping) -> list[tuple[str, str, str]]:
     rows: dict[tuple[str, str], str] = {}
     for target in mapping.get_mapping():
         up = target.up_transform.__name__ if target.up_transform else None
+        if up == "<lambda>":
+            # Z-Image's ComfyUI `attention.qkv` (mflux 0.23): `_split_qkv(weight, index)`, the index
+            # bound as the lambda's default.
+            index = target.up_transform.__defaults__[0]
+            up = ("split_q_up", "split_k_up", "split_v_up")[index]
         down = target.down_transform.__name__ if target.down_transform else None
         if up not in SPLITS:
             raise ValueError(f"{target.model_path}: the engine has no {up}")

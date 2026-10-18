@@ -41,6 +41,7 @@ enum Verify {
             let ok: Bool
             switch family {
             case "flux2-klein": ok = try VerifyKlein.run(fixture: fixture, json: json, references: references)
+            case "flux3-klein": ok = try VerifyFlux3.run(fixture: fixture, json: json, references: references)
             case "z-image-turbo": ok = try VerifyZImage.run(fixture: fixture, json: json, references: references)
             case "qwen-image": ok = try VerifyQwenImage.run(fixture: fixture, json: json, references: references)
             case "qwen-image-edit": ok = try VerifyQwenImageEdit.run(fixture: fixture, json: json, references: references)
