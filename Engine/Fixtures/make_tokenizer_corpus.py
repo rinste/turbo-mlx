@@ -2,12 +2,13 @@
 prompts, for every family's prompt pipeline, so the engine's own tokenizer (`Tokenizer/`) can be
 checked without Python.
 
-    $PY Engine/Fixtures/make_tokenizer_corpus.py Engine/Fixtures/tokenizers.json
+    $PY Engine/Fixtures/make_tokenizer_corpus.py Engine/Fixtures/tokenizers.json [--only <pipeline> …]
 
 It reads the tokenizers of the catalog's checkpoints from the Hugging Face cache (the commits the
 catalog names) with `transformers`' fast tokenizers, which mflux and ltx-2-mlx call, and records,
 for each pipeline, the folder it read and the ids of every prompt, built as the families build
-them: FLUX.2 Klein and Z-Image with Qwen3's chat template (thinking off and on), FLUX 3 with Qwen3-VL's, Qwen-Image and
+them: FLUX.2 Klein and Z-Image with Qwen3's chat template (thinking off and on), FLUX 3 with Qwen3-VL's,
+MOSS-Image with Qwen3.5's (thinking on), Qwen-Image and
 Qwen-Image Edit with their templates around the prompt, Ming-Image with its template and no
 special tokens, LTX-2's Gemma 3 with `<bos>` and the prompt stripped, SenseNova-U1.5 with its
 "neo1_0" generation query (and the unconditional one, the same for every prompt), and its edit
@@ -95,6 +96,8 @@ PIPELINES = [
     ("qwen3-chat-thinking", "mflux-community/z-image-turbo-mflux-q4", "f427e257d8e6ffa03edd4d9ac554a05809da456c", "tokenizer"),
     # FLUX 3's Qwen3-VL template (BFL's text_encoder/ holds Qwen3-VL-4B-Instruct's tokenizer files, blob for blob).
     ("qwen3-vl-chat", "black-forest-labs/flux-3-image-klein", "337337621b8526e120f2275d250242f4a6bedd75", "text_encoder"),
+    # MOSS-Image's Qwen3.5 template with thinking on (it opens the think block), as `encode_prompt` renders it.
+    ("qwen35-chat-thinking", "mlx-community/MOSS-Image-SFT-bf16", "ea698e99312015505884559ebad94b4a5a0d0753", "tokenizer"),
     ("qwen-image", "mflux-community/qwen-image-2512-mflux-q4", "ec35d366eeb701838007c1720c3d80f2f7fbf9f4", "tokenizer"),
     ("qwen-image-edit", "mflux-community/qwen-image-edit-2511-mflux-q4", "720ad94d982b3dc22f9122ee96af31221d542d47", "tokenizer"),
     ("ming", "joeynyc/Ming-Image-0.1-Design-mflux-q8-te5", "3adb8aaef779f9b3fa4621acebeba97bb4010d42", "mllm"),
@@ -182,6 +185,10 @@ def pipeline_ids(name: str, tokenizer, prompt: str) -> list[int]:
         text = tokenizer.apply_chat_template([{"role": "user", "content": prompt}], tokenize=False,
                                              add_generation_prompt=True, enable_thinking=True)
         return tokenizer(text, add_special_tokens=False)["input_ids"]
+    if name == "qwen35-chat-thinking":
+        text = tokenizer.apply_chat_template([{"role": "user", "content": prompt}], tokenize=False,
+                                             add_generation_prompt=True, enable_thinking=True)
+        return tokenizer(text)["input_ids"]
     if name == "qwen3-vl-chat":
         # Flux3PromptEncoder.tokenize: the chat template, then the tokenizer's defaults.
         text = tokenizer.apply_chat_template([{"role": "user", "content": prompt}], tokenize=False, add_generation_prompt=True)
@@ -218,12 +225,27 @@ def load_tokenizer(name: str, folder: Path):
 
 def main() -> None:
     out = Path(sys.argv[1])
+    # `--only name …` redoes those pipelines in an existing corpus (the others' checkpoints may be gone).
+    only = sys.argv[sys.argv.index("--only") + 1:] if "--only" in sys.argv else None
     corpus = {"prompts": PROMPTS, "pipelines": []}
+    if only:
+        corpus = json.loads(out.read_text())
+        assert corpus["prompts"] == PROMPTS, "the corpus's prompts changed: make it again whole"
     for name, repo, commit, sub in PIPELINES:
+        if only and name not in only:
+            continue
         folder = HUB / f"models--{repo.replace('/', '--')}" / "snapshots" / commit / sub
         tokenizer = load_tokenizer(name, folder)
         ids = [pipeline_ids(name, tokenizer, p) for p in PROMPTS]
-        corpus["pipelines"].append({"name": name, "repo": repo, "commit": commit, "folder": sub, "ids": ids})
+        entry = {"name": name, "repo": repo, "commit": commit, "folder": sub, "ids": ids}
+        names = [p["name"] for p in corpus["pipelines"]]
+        if name in names:
+            corpus["pipelines"][names.index(name)] = entry
+        else:
+            # In PIPELINES' order among the ones already there.
+            order = [p[0] for p in PIPELINES]
+            at = next((i for i, p in enumerate(corpus["pipelines"]) if order.index(p["name"]) > order.index(name)), len(names))
+            corpus["pipelines"].insert(at, entry)
         print(f"{name:24} {sum(map(len, ids)):7d} ids  ({type(tokenizer).__name__})")
     out.write_text(json.dumps(corpus, ensure_ascii=False, separators=(",", ":")))
     print("wrote", out, f"{out.stat().st_size / 1e6:.2f} MB")

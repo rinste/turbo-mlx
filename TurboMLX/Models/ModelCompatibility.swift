@@ -23,6 +23,8 @@ nonisolated enum ModelCompatibility {
         "black-forest-labs/flux.2-klein-9b": (.flux2Klein, "flux2-klein-9b"),
         "black-forest-labs/flux.2-klein-base-4b": (.flux2Klein, "flux2-klein-base-4b"),
         "black-forest-labs/flux.2-klein-base-9b": (.flux2Klein, "flux2-klein-base-9b"),
+        "openmoss-team/moss-image-sft": (.mossImage, nil),
+        "openmoss-team/moss-image-base": (.mossImage, nil),
         "qwen/qwen-image": (.qwenImage, nil),
         "qwen/qwen-image-2512": (.qwenImage, nil),
         "qwen/qwen-image-edit-2511": (.qwenImageEdit, nil),
@@ -55,6 +57,7 @@ nonisolated enum ModelCompatibility {
         }
         let name = model.id.lowercased()
         if name.contains("ming-image") { return (.ming, nil) }
+        if name.contains("moss-image") { return (.mossImage, nil) }
         if name.contains("z-image-turbo") { return (.zImageTurbo, nil) }
         if name.contains("qwen-image-edit-2511") { return (.qwenImageEdit, nil) }
         if name.contains("klein"), ["flux2", "flux.2", "flux-2"].contains(where: name.contains), !name.contains("kv") {

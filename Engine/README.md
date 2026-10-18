@@ -21,6 +21,10 @@ Sources/TurboEngineCore/      protocol, mflux checkpoint loading, PNG output, th
   Families/Flux3/             FLUX 3 Image Klein: the FLUX 3 transformer (per-mode blocks, then
                               single-stream ones), the flow-map schedule, the pictures' preparation;
                               Klein's Qwen3 encoder (Qwen3-VL's language tower) and FLUX.2's VAE
+  Families/MossImage/         MOSS-Image: Qwen3.5-9B's language model (gated delta net layers, their
+                              recurrence in a Metal kernel, and gated attention), the single-stream
+                              DiT with one shared modulation, the snapped schedule; FLUX.2's VAE with
+                              BFL's small decoder
   Families/ZImage/            Z-Image Turbo: the Qwen3 encoder read in float32, the S3-DiT,
                               the 16-channel decoder
   Families/QwenImage/         Qwen-Image 2512: Qwen2.5-VL text encoder, the dual-stream
@@ -51,11 +55,14 @@ Fixtures/tokenizers.json      transformers' ids for a corpus of prompts, every f
 Fixtures/requirements.txt     the mflux revision they (and the reference worker) run with
 Fixtures/requirements-ltx.txt the ltx-2-mlx revision the LTX-2 port follows
 Fixtures/requirements-sensenova.txt  SenseTime's code and the Python the SenseNova checks run with
+Fixtures/requirements-moss.txt  OpenMOSS's pipeline file and the Python the MOSS-Image checks run with
 Reference/turbo_worker.py     mflux behind the same protocol, to compare real images
 Reference/sensenova_reference.py  SenseTime's code on an MLX pack's weights, for SenseNova's
+Reference/moss_image_reference.py  OpenMOSS's pipeline on a checkpoint, for MOSS-Image's
 Licenses/                     the licenses of the projects the ports follow (mflux, ltx-2-mlx,
-                              SenseNova-U1, mlx-lm with mlx-swift-lm for the mixture-of-experts
-                              layers, Pillow for its resizes, tokenizers for the tokenizer), which
+                              SenseNova-U1, OpenMOSS's MOSS-Image pipeline, mlx-lm with
+                              mlx-swift-lm for the mixture-of-experts layers and the gated delta
+                              rule's kernel, Pillow for its resizes, tokenizers for the tokenizer), which
                               the app's acknowledgements reproduce
 ```
 
@@ -77,6 +84,7 @@ names its tensors instead, and only the VAE's convolutions are transposed on loa
 |---|---|---|---|---|
 | FLUX.2 Klein | Qwen3 (hidden states of layers 9, 18, 27), padded to 512 | FLUX.2 double/single stream; an edit adds the reference picture's tokens after the image's (t = 10), only the image's come out | FLUX.2, 32 channels; the encoder for references, in their own proportions up to ~1 MP | base checkpoints: negative space |
 | FLUX 3 Image Klein | Qwen3-VL-4B's language tower (bf16 or quantized on loading), hidden states of every fourth layer from 4 to 32, padded to a multiple of 80 tokens with the padding at rotary position 1 | 5 per-mode blocks (image, pictures, text: each attends only to itself), then 28 single-stream blocks over [image, pictures, text], each token modulated by its mode; the distilled checkpoint is a flow map, told each step's target time; an edit's pictures (one padded by reflection to a 4 MP canvas, or up to ten cut to 1 MP each) at layers −1, −2… | FLUX.2's, the decoder whole, from the latents in bf16 (mflux: float32) | Base: CFG against the empty prompt |
+| MOSS-Image (SFT) | Qwen3.5-9B's last hidden state over the whole chat-templated prompt (thinking on, the text trimmed, at most 4096 tokens), unpadded: three layers in four a gated delta net (causal depthwise convolution, l2-normalized keys, the decay-gated delta rule in float32), the fourth gated attention with a quarter of each head rotated | 42 single-stream blocks over [image, text], all modulated by one shared adaLN of the timestep, SiTU-gated feed-forward; the prompt first refined by two text blocks; a 4-axis rotation (the image's rows and columns centred, its frame at the prompt's length); bf16, or 8 bits on loading | FLUX.2's encoder with BFL's small decoder (96–384 channels), from the latents in bf16 (OpenMOSS: float32) | CFG 3 against the empty prompt, its pass skipping block 22 |
 | Z-Image Turbo | Qwen3 4B in float32, second-to-last state, real tokens only, thinking on | S3-DiT, tokens padded to 32 with learned pad tokens, float32 stream | FLUX.1-style, 16 channels, tiles with Save memory | off |
 | Qwen-Image 2512 | Qwen2.5-VL 7B (bf16, unquantized), the template's 34 tokens dropped | 60 dual-stream blocks, float32 stream, modulation producers at 8 bits | Wan-derived causal 3D, 16 channels, tiles | true CFG, rescaled to the conditional norm; the unconditional pass is skipped at 1 |
 | Qwen-Image-Edit 2511 | Qwen2.5-VL 7B with its vision tower: the picture at ~384 × 384 (Pillow's bicubic twice, as mflux) in 14-pixel patches, windowed attention, 2 × 2 merged; its tokens replace the placeholders of a 64-token template, everything in float32, then float16 | Qwen-Image's; the picture's latents follow the image's (frame position 1) and are modulated at timestep 0 (`zero_cond_t`), only the image's come out | Qwen-Image's, plus the encoder for the picture at the image's size (its own proportions when they differ; Pillow's Lanczos) | as Qwen-Image, negative prompt empty |
@@ -396,10 +404,41 @@ patch embedding, the query's positions, both prefixes, the first step's velociti
 all within 1e-5. With the real pack, an edit of a 1024 × 1024 image ("make it winter") lands
 36.7 dB from the reference (43.7 dB at 512 px): the picture holds the two runs together.
 
+## Checking MOSS-Image against OpenMOSS's pipeline
+
+MOSS-Image has no MLX reference either: its reference is OpenMOSS's own diffusers pipeline,
+`pipeline_moss_image.py` in [OpenMOSS-Team/MOSS-Image-SFT](https://huggingface.co/OpenMOSS-Team/MOSS-Image-SFT)
+(the revision in `Fixtures/requirements-moss.txt`), with transformers' `Qwen3_5Model` for the text
+encoder, in a venv of its own. The fixture is a small checkpoint with random weights in the
+repositories' layout (a Qwen3.5 of 8 layers with a vision tower nobody reads, a DiT of 24 blocks so
+that block 22 exists to be skipped, FLUX.2's VAE with the small decoder at its real size), and what
+the pipeline computes from it in float32: the encoder layer by layer for prompts shorter and longer
+than the delta rule's 64-token chunk, the snapped schedule for 1 to 100 steps (bit for bit), the
+rotary table, one forward plain, with a long prompt and with block 22 skipped, the loop with
+guidance and without, and the decode. The port matches all of it within 1e-5 but the decode, which
+runs in bf16 here: a random decoder turns rounding into a percent or two of the image, so it passes
+when it is no further from the float32 image than twice the reference's own bf16 decode.
+
+```bash
+build/moss-venv/bin/python Engine/Fixtures/make_moss_image_fixture.py <pipeline_moss_image.py> build/fixtures/moss-image
+build/bin/turbo-engine verify build/fixtures/moss-image
+```
+
+For real images, `Reference/moss_image_reference.py` runs the pipeline as OpenMOSS ships it (bf16,
+the VAE in float32) on MPS from the engine's own noise for the seed; `--record <dir>` writes the
+token ids, the prompts' states, the first step's velocities, the final latents and the image, which
+`verify` compares with the checkpoint's own weights (`"quantize": 8` in its `fixture.json` loads
+them as the app does), and `--truth <dir> <snapshot>` adds Qwen3.5's states in float32. On 18
+October 2026, 512 × 512, 50 steps, guidance 3: the tokens identical; the image 31.6 dB from the
+reference's in bf16, 30.4 dB in 8 bits; from the reference's own prompt states 43 dB, and its
+latents decoded here 52 dB from its float32 decode. Both bf16 encoders sit 1.2% (RMS) from the
+float32 one, which is what moves the prompt's states 1.6% apart.
+
 ## Checking the tokenizers
 
 The engine tokenizes on its own (`Tokenizer/`), with no library: each family's prompt pipeline
-(Qwen3's chat template with thinking off and on, Qwen-Image's and Qwen-Image Edit's templates, Ming's,
+(Qwen3's chat template with thinking off and on, Qwen3.5's, which trims the prompt as Jinja's `trim`
+does and opens a think block, Qwen-Image's and Qwen-Image Edit's templates, Ming's,
 Gemma's with `<bos>`, SenseNova's queries, against the tokenizer its code builds from the original's
 vocabulary and merges) is checked id for id against `transformers` on a corpus of 64 prompts, from
 empty and whitespace-only to Italian, Chinese, Arabic, Thai, emoji sequences, decomposed accents,
@@ -408,6 +447,7 @@ special tokens typed by hand and prompts past the encoders' limits:
 ```bash
 build/bin/turbo-engine verify-tokenizers                   # Engine/Fixtures/tokenizers.json
 $PY Engine/Fixtures/make_tokenizer_corpus.py Engine/Fixtures/tokenizers.json   # to regenerate it
+$PY Engine/Fixtures/make_tokenizer_corpus.py Engine/Fixtures/tokenizers.json --only qwen35-chat-thinking   # one pipeline
 ```
 
 It reads the catalog's tokenizers from the Hugging Face cache (a pipeline whose checkpoint is not

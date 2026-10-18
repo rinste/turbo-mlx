@@ -249,10 +249,12 @@ public final class Flux2VAE: Module {
 
     static let latentChannels = 32
 
-    public override init() {
+    /// `decoderChannels`: the decoder's widths, FLUX.2's own by default; MOSS-Image ships BFL's
+    /// small decoder ([96, 192, 384, 384]) behind the same encoder.
+    public init(decoderChannels: [Int] = [128, 256, 512, 512]) {
         _encoder.wrappedValue = Flux2Encoder()
         _quantConv.wrappedValue = Conv2d(inputChannels: 2 * Self.latentChannels, outputChannels: 2 * Self.latentChannels, kernelSize: 1, stride: 1, padding: 0)
-        _decoder.wrappedValue = Flux2Decoder()
+        _decoder.wrappedValue = Flux2Decoder(blockOutChannels: decoderChannels)
         _postQuantConv.wrappedValue = Conv2d(inputChannels: Self.latentChannels, outputChannels: Self.latentChannels, kernelSize: 1, stride: 1, padding: 0)
         _bn.wrappedValue = Flux2BatchNormStats(features: 4 * Self.latentChannels)
         super.init()

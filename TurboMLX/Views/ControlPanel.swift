@@ -1759,6 +1759,8 @@ private struct MemoryRows: View {
             "Keeps less in memory and, where it doesn’t affect the image, decodes it in tiles."
         case .flux3Klein:
             "Frees the text encoder (about 5 GB) once the prompt is read. A prompt that was not in the queue yet loads it again."
+        case .mossImage:
+            "Frees the text encoder (about 8 GB) once the prompt is read: about 9 GB instead of 17 GB at 1024 px. A prompt that was not in the queue yet loads it again, in place of the transformer."
         case .senseNova:
             "Frees the half of the model that reads the prompt (about 6 GB) once it is read: about 6 GB instead of 11 GB. A prompt that was not in the queue yet loads it again, in place of the other half."
         case .ltx2:

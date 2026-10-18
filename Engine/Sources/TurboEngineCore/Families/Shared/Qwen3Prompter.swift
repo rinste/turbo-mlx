@@ -19,12 +19,21 @@ public final class Qwen3Prompter {
     private let padTokenId: Int
     private let maxLength: Int
     private let enableThinking: Bool
+    private let template: ChatTemplate
+
+    /// Which model's Jinja template the prompt is rendered as.
+    public enum ChatTemplate: Sendable {
+        case qwen3
+        /// Qwen3.5's (MOSS-Image): the user's text trimmed, and with thinking on the think block
+        /// opened (`<think>\n`) where Qwen3's leaves the turn empty.
+        case qwen35
+    }
 
     /// - Parameters:
     ///   - folder: the tokenizer folder inside the checkpoint (`tokenizer/` for both families).
     ///   - enableThinking: the `enable_thinking` the chat template is rendered with (Klein: off,
     ///     Z-Image: on).
-    public init(modelPath: URL, folder: String = "tokenizer", maxLength: Int, enableThinking: Bool = false) throws {
+    public init(modelPath: URL, folder: String = "tokenizer", maxLength: Int, enableThinking: Bool = false, template: ChatTemplate = .qwen3) throws {
         let tokenizerFolder = modelPath.appending(path: folder, directoryHint: .isDirectory)
         guard FileManager.default.fileExists(atPath: tokenizerFolder.appending(path: "tokenizer.json").path) else {
             throw PromptError.noTokenizer(tokenizerFolder)
@@ -33,6 +42,7 @@ public final class Qwen3Prompter {
         padTokenId = tokenizer.id(of: "<|endoftext|>") ?? 0
         self.maxLength = maxLength
         self.enableThinking = enableThinking
+        self.template = template
     }
 
     /// Token ids padded to `maxLength` and the mask marking the real ones, as `LanguageTokenizer`
@@ -67,9 +77,26 @@ public final class Qwen3Prompter {
     /// (the checkpoints' `chat_template.jinja`), which with thinking off closes an empty think
     /// block. `turbo-engine verify-tokenizers` checks it against the template itself.
     private func templated(_ prompt: String) -> [Int] {
-        let think = enableThinking ? "" : "<think>\n\n</think>\n\n"
-        let text = "<|im_start|>user\n\(prompt)<|im_end|>\n<|im_start|>assistant\n\(think)"
+        let think = !enableThinking ? "<think>\n\n</think>\n\n" : template == .qwen35 ? "<think>\n" : ""
+        let content = template == .qwen35 ? Self.trimmed(prompt) : prompt
+        let text = "<|im_start|>user\n\(content)<|im_end|>\n<|im_start|>assistant\n\(think)"
         return tokenizer.encode(text, addSpecialTokens: false)
+    }
+
+    /// Jinja's `trim`, Python's `str.strip()`: the code points `str.isspace` counts as whitespace
+    /// taken off both ends, one scalar at a time (a space before a combining mark goes too).
+    static func trimmed(_ text: String) -> String {
+        let scalars = Array(text.unicodeScalars)
+        func isSpace(_ scalar: Unicode.Scalar) -> Bool {
+            switch scalar.value {
+            case 0x09 ... 0x0D, 0x1C ... 0x20, 0x85, 0xA0, 0x1680, 0x2000 ... 0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000: true
+            default: false
+            }
+        }
+        guard let first = scalars.firstIndex(where: { !isSpace($0) }), let last = scalars.lastIndex(where: { !isSpace($0) }) else { return "" }
+        var result = String.UnicodeScalarView()
+        result.append(contentsOf: scalars[first ... last])
+        return String(result)
     }
 }
 

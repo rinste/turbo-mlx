@@ -72,6 +72,14 @@ enum Bench {
             Run(label: "1024², 16 steps", width: 1024, height: 1024, steps: 16, lowRam: true),
             Run(label: "edit, 640 × 512, 16 steps", width: 640, height: 512, steps: 16, picture: (640, 512), prompt: editPrompt),
         ]),
+        Entry(repo: "mlx-community/MOSS-Image-SFT-bf16", family: "moss-image", quantize: 8, defaultSteps: 50, defaultGuidance: 3, runs: [
+            Run(label: "512², 50 steps, CFG", width: 512, height: 512, steps: 50, guidance: 3, lowRam: true),
+            // A prompt the worker has not read: the encoder comes back, after the transformer goes.
+            Run(label: "512², 50 steps, CFG, a new prompt", width: 512, height: 512, steps: 50, guidance: 3, lowRam: true,
+                prompt: "A hand-painted wooden sign on a cafe door that reads OPEN LATE, warm evening light, photo"),
+            Run(label: "1024², 50 steps, CFG", width: 1024, height: 1024, steps: 50, guidance: 3),
+            Run(label: "1024², 50 steps, CFG", width: 1024, height: 1024, steps: 50, guidance: 3, lowRam: true),
+        ]),
         Entry(repo: "mflux-community/z-image-turbo-mflux-q4", family: "z-image-turbo", defaultSteps: 9, runs: [
             Run(label: "512², 9 steps", width: 512, height: 512, steps: 9),
             Run(label: "1024², 9 steps", width: 1024, height: 1024, steps: 9, lowRam: true),

@@ -1,0 +1,14 @@
+# MOSS-Image has no MLX port to follow: its reference is OpenMOSS's own diffusers pipeline,
+# `pipeline_moss_image.py` in https://huggingface.co/OpenMOSS-Team/MOSS-Image-SFT (Apache 2.0,
+# revision fc5de0d56fc910cbca6f6625a70f5f582b26deb1; the same file sits at the top, in transformer/
+# and in scheduler/), with transformers' Qwen3_5Model for the text encoder. Download that file and
+# give its path to make_moss_image_fixture.py / moss_image_reference.py; the Python that runs them
+# needs these packages (mlx only to draw the engine's noise in moss_image_reference.py).
+torch==2.14.0
+transformers==5.17.0
+diffusers==0.38.0
+safetensors
+pillow<13
+numpy
+accelerate
+mlx==0.32.2

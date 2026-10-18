@@ -116,6 +116,7 @@ the disk.
 | [Z-Image Turbo](https://huggingface.co/mflux-community/z-image-turbo-mflux-q8) | 24 GB | 11 GB | the 8-bit version, closer to the original |
 | [FLUX.2 Klein 4B](https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4) | 24 GB | 4.6 GB | the fastest: 4 steps; also edits a picture as the prompt says · Apache 2.0 |
 | [FLUX 3 Image Klein](https://huggingface.co/black-forest-labs/flux-3-image-klein) | 16 GB | 20.3 GB | Black Forest Labs' newest: photos and legible text in 16 steps; also edits a picture as the prompt says · 5.6B, 8-bit on loading · FLUX Kommunity (free commercial use below $5M yearly revenue), gated: accept its terms on Hugging Face |
+| [MOSS-Image](https://huggingface.co/mlx-community/MOSS-Image-SFT-bf16) | 16 GB | 27.2 GB | long text in English and Chinese, line breaks kept; layouts from JSON prompts with boxes · 5B + Qwen3.5-9B, 8-bit on loading · 50 steps · Apache 2.0 |
 | [Qwen-Image 2512](https://huggingface.co/mflux-community/qwen-image-2512-mflux-q4) | 32 GB | 27.6 GB | rich scenes and long text · 20B, 4-bit · 20 steps · Apache 2.0 |
 | [Qwen-Image Edit 2511](https://huggingface.co/mflux-community/qwen-image-edit-2511-mflux-q4) | 32 GB | 29 GB | changes a picture as the prompt says and keeps the rest · 20B, 4-bit · 20 steps · Apache 2.0 |
 | [SenseNova-U1.5](https://huggingface.co/mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit) | 16 GB | 11.8 GB | photos, posters and infographics with legible text; also edits a picture as the prompt says · 8B + 8B, 4-bit · 8 steps · Apache 2.0 |
@@ -127,7 +128,8 @@ the disk.
 **Which one?** For a first try, Z-Image Turbo (4-bit) or SenseNova-U1.5, which both run on 16 GB
 (so does FLUX 3 Image Klein, more slowly).
 For quick ideas, FLUX.2 Klein; for the finest photos and lettering in a couple of minutes, FLUX 3
-Image Klein. For logos, layouts and lettering, Ming-Image. For crowded scenes
+Image Klein. For logos, layouts and lettering, Ming-Image; for long text, Chinese included, or a
+layout given box by box, MOSS-Image, slow (its 50 steps run the model twice each). For crowded scenes
 and long text, Qwen-Image 2512, if you have time to wait. To edit a picture: FLUX.2 Klein in
 seconds, SenseNova-U1.5, or Qwen-Image Edit, the slowest but the one that touches the least
 besides what you asked. For video, LTX-2.5.
@@ -150,6 +152,8 @@ adds a few seconds to load it).
 | FLUX 3 Image Klein | image, 512 × 512 | 32 s |
 | FLUX 3 Image Klein | image, 1024 × 1024 | 2⅓ min |
 | FLUX 3 Image Klein | edit a 600 × 450 picture into 768 × 576 | 1¾ min |
+| MOSS-Image | image, 512 × 512 | 4 min |
+| MOSS-Image | image, 1024 × 1024 | 16½ min |
 | Z-Image Turbo 4-bit | image, 1024 × 1024, *Save memory* | 1½ min |
 | Z-Image Turbo 8-bit | image, 768 × 768 | 52 s |
 | Ming-Image 0.1 Design | image, 512 × 512, *Save memory* | 37 s |
@@ -194,6 +198,7 @@ PNG next to the prompt and settings, in an MP4 in an XMP box.
 | Z-Image Turbo 4-bit / 8-bit | 8.5 GB / ~13.6 GB at 1024 px | mflux |
 | FLUX.2 Klein 4B | 14.1 GB at 1024 px with mflux, 10.1 GB with the native engine | mflux |
 | FLUX 3 Image Klein | 11.2 GB at 1024 px (14.8 GB without *Save memory*), 30 GB at 2048 px | mflux 0.23, to 37–45 dB |
+| MOSS-Image | 9.1 GB at 1024 px (17.1 GB without *Save memory*), 24 GB at 2048 px | OpenMOSS's PyTorch pipeline, to 30–32 dB |
 | Qwen-Image 2512 | 21.3 GB at 1024 px (~43 GB without *Save memory*) | mflux |
 | Qwen-Image Edit 2511 | 33 GB at 672 × 880, without *Save memory* | mflux, to 68 dB |
 | SenseNova-U1.5 | 11.6 GB at 1024 px, 6.9 GB with *Save memory* | SenseTime's PyTorch code, to 29–44 dB |
@@ -217,6 +222,13 @@ images.
   every block: against mflux run in float32, mflux is at 40.6 dB and the native engine at 38.2.
   The engine decodes FLUX 3's final latents from bf16, as Klein's (mflux decodes them in float32):
   at 2048 × 2048 the peak is 31 GB instead of 43–49, the image 47–48 dB from a float32 decode.
+- **MOSS-Image** is measured against OpenMOSS's own pipeline (`pipeline_moss_image.py`, PyTorch on
+  the Mac's GPU in bf16, as OpenMOSS ships it) on the same checkpoint and starting noise: 512 × 512
+  in 50 steps took 248 s (the reference 257 s), 1024 × 1024 16½ minutes. Its images match the
+  reference's to 31.6 dB in bf16 and 30.4 dB in the 8 bits the app loads it in, the lettering the
+  same; both engines' bf16 text encoders are as far from Qwen3.5 run in float32 (1.2% RMS), and from
+  the reference's own prompt states the rest of the engine lands at 43 dB. Every step runs the
+  transformer twice (guidance, its negative pass skipping block 22).
 - **LTX-2.3** is measured with the native engine against dgrauet's
   [ltx-2-mlx](https://github.com/dgrauet/ltx-2-mlx), with *Save memory*: a 5-second 768 × 512 clip
   with sound takes 206 s, a 3-second one from an image 122 s; the 8-bit version, without *Save
@@ -296,7 +308,7 @@ SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo-engine serve ──▶ 
 ```
 
 - **Engine.** `Engine/` is a Swift package that runs every family of the catalog (FLUX.2 Klein,
-  FLUX 3 Image Klein from BFL's own checkpoint, Z-Image Turbo, Qwen-Image 2512 and Qwen-Image-Edit 2511, Ming-Image from mflux's checkpoints,
+  FLUX 3 Image Klein from BFL's own checkpoint, MOSS-Image from OpenMOSS's (checked against its PyTorch pipeline), Z-Image Turbo, Qwen-Image 2512 and Qwen-Image-Edit 2511, Ming-Image from mflux's checkpoints,
   SenseNova-U1.5 from mlx-community's, LTX-2.3 and LTX-2.5 from dgrauet's, the SeedVR2 upscaler from its
   original one) on MLX Swift. The app's
   build embeds its `turbo-engine` binary in the bundle (`Contents/MacOS`, signed with the app),

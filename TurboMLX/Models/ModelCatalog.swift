@@ -6,6 +6,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     case zImageTurbo = "z-image-turbo"
     case flux2Klein = "flux2-klein"
     case flux3Klein = "flux3-klein"
+    case mossImage = "moss-image"
     case qwenImage = "qwen-image"
     case qwenImageEdit = "qwen-image-edit"
     case senseNova = "sensenova"
@@ -19,6 +20,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .zImageTurbo: "Z-Image Turbo"
         case .flux2Klein: "FLUX.2 Klein"
         case .flux3Klein: "FLUX 3 Image Klein"
+        case .mossImage: "MOSS-Image"
         case .qwenImage: "Qwen-Image"
         case .qwenImageEdit: "Qwen-Image Edit"
         case .senseNova: "SenseNova-U1.5"
@@ -64,7 +66,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     var takesLoRAs: Bool {
         switch self {
         case .zImageTurbo, .flux2Klein, .flux3Klein, .qwenImage, .qwenImageEdit, .ltx2, .ltx25: true
-        case .ming, .senseNova, .seedVR2: false
+        case .ming, .mossImage, .senseNova, .seedVR2: false
         }
     }
 
@@ -80,7 +82,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     var components: [String] {
         switch self {
         case .ming: ["mllm", "connector", "mlp", "transformer", "vae"]
-        case .zImageTurbo, .flux2Klein, .flux3Klein, .qwenImage, .qwenImageEdit: ["transformer", "text_encoder", "vae"]
+        case .zImageTurbo, .flux2Klein, .flux3Klein, .mossImage, .qwenImage, .qwenImageEdit: ["transformer", "text_encoder", "vae"]
         case .senseNova: ["."]
         case .ltx2, .ltx25, .seedVR2: []
         }
@@ -107,7 +109,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     var tokenizerFile: String? {
         switch self {
         case .ming: "mllm/tokenizer.json"
-        case .zImageTurbo, .flux2Klein, .qwenImage, .qwenImageEdit: "tokenizer/tokenizer.json"
+        case .zImageTurbo, .flux2Klein, .mossImage, .qwenImage, .qwenImageEdit: "tokenizer/tokenizer.json"
         // Qwen3-VL's, inside the text encoder's folder.
         case .flux3Klein: "text_encoder/tokenizer.json"
         case .senseNova: "tokenizer.json"
@@ -134,6 +136,8 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         // same transformer in BFL's own format at the top, its FP8 and NVFP4 variants or the VAE's
         // second copy.
         case .flux3Klein: return weights + ["LICENSE.md", "NOTICE.md", "README.md"]
+        // The diffusers folders (OpenMOSS's custom pipeline code is not read), the scheduler's settings.
+        case .mossImage: return weights + ["tokenizer/*", "scheduler/*.json", "model_index.json", "LICENSE", "README.md"]
         case .ltx2:
             return ["LICENSE", "README.md", "config.json", "embedded_config.json", "quantize_config.json", "split_model.json",
                     "transformer-distilled-1.1.safetensors", "connector.safetensors", "vae_decoder.safetensors",
@@ -245,7 +249,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
 
     var supportsGuidance: Bool {
         switch family {
-        case .ming, .qwenImage, .qwenImageEdit: true
+        case .ming, .mossImage, .qwenImage, .qwenImageEdit: true
         // The catalog's SenseNova packs are the 8-step distillation, which runs without guidance.
         case .zImageTurbo, .senseNova, .ltx2, .ltx25, .seedVR2: false
         case .flux2Klein, .flux3Klein: isKleinBase
@@ -253,7 +257,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
     }
 
     /// The models whose guidance runs against an encoded text, which the user can write: Qwen-Image,
-    /// its editor and FLUX.2 Klein base. Ming's unconditional pass zeroes the prompt instead, so
+    /// its editor, MOSS-Image and FLUX.2 Klein base. Ming's unconditional pass zeroes the prompt instead, so
     /// there is no text to give it; FLUX 3 Base's is the empty prompt, as BFL's pipeline has it.
     var supportsNegativePrompt: Bool {
         supportsGuidance && family != .ming && family != .flux3Klein
@@ -266,6 +270,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .zImageTurbo: 9
         case .flux2Klein: isKleinBase ? 50 : 4
         case .flux3Klein: isKleinBase ? 50 : 16
+        case .mossImage: 50
         case .qwenImage, .qwenImageEdit: 20
         case .senseNova: 8
         case .ltx2, .ltx25: 8
@@ -274,9 +279,10 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
     }
 
     /// Qwen-Image (and its editor) and FLUX.2 Klein base run real CFG, recommended at 4, FLUX 3
-    /// Base at mflux's 3.5; the others default to off.
+    /// Base at mflux's 3.5, MOSS-Image at OpenMOSS's 3; the others default to off.
     var defaultGuidance: Double {
         if family == .flux3Klein { return isKleinBase ? 3.5 : 1 }
+        if family == .mossImage { return 3 }
         return family == .qwenImage || family == .qwenImageEdit || isKleinBase ? 4 : 1
     }
 
@@ -296,6 +302,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .flux2Klein: isKleinBase ? 10...60 : 2...12
         // A flow map: told each step's target, it holds up with fewer steps than its 16.
         case .flux3Klein: isKleinBase ? 10...60 : 4...32
+        case .mossImage: 10...60
         case .qwenImage, .qwenImageEdit: 10...50
         case .senseNova: 4...16
         case .ltx2, .ltx25: 4...8
@@ -391,6 +398,23 @@ enum ModelCatalog {
             variant: "flux3-image-klein",
             quantize: 8,
             license: "FLUX Kommunity",
+            recommendedMemoryGB: 16,
+            isBuiltIn: true
+        ),
+        // MOSS-Image SFT (OpenMOSS): the bf16 diffusers checkpoint as mlx-community mirrors it, byte
+        // for byte OpenMOSS-Team/MOSS-Image-SFT at fc5de0d5; the transformer and Qwen3.5-9B quantized
+        // to 8 bits on loading (30.4 dB from OpenMOSS's bf16 pipeline, 31.6 in bf16). 50 steps of
+        // guidance, two passes each, the negative one skipping block 22. Measured on an M1 Max:
+        // 1024 × 1024 in 16½ minutes, peaking at 9.1 GB with Save memory (17.1 without).
+        ModelDescriptor(
+            name: "MOSS-Image · 16 GB RAM",
+            detail: "OpenMOSS's 5B model with Qwen3.5 reading the prompt: long text in English and Chinese, layouts from JSON prompts. In 8 bits.",
+            family: .mossImage,
+            source: .huggingFace(repo: "mlx-community/MOSS-Image-SFT-bf16"),
+            revision: "ea698e99312015505884559ebad94b4a5a0d0753",
+            sizeBytes: 27_219_787_624,
+            quantize: 8,
+            license: "Apache 2.0",
             recommendedMemoryGB: 16,
             isBuiltIn: true
         ),

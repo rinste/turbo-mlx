@@ -72,6 +72,10 @@ enum VerifyTokenizers {
             let prompter = try Qwen3Prompter(modelPath: snapshot, folder: folder.lastPathComponent, maxLength: .max,
                                               enableThinking: name == "qwen3-chat-thinking")
             return { try prompter.tokenIds($0) }
+        case "qwen35-chat-thinking":
+            let prompter = try Qwen3Prompter(modelPath: snapshot, folder: folder.lastPathComponent, maxLength: .max,
+                                              enableThinking: true, template: .qwen35)
+            return { try prompter.tokenIds($0) }
         // Qwen3-VL's template renders a user turn as Qwen3's does with thinking on: no think block.
         case "qwen3-vl-chat":
             let sub = folder.standardizedFileURL == snapshot.standardizedFileURL ? "" : folder.lastPathComponent

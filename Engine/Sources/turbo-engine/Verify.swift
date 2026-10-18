@@ -42,6 +42,7 @@ enum Verify {
             switch family {
             case "flux2-klein": ok = try VerifyKlein.run(fixture: fixture, json: json, references: references)
             case "flux3-klein": ok = try VerifyFlux3.run(fixture: fixture, json: json, references: references)
+            case "moss-image": ok = try VerifyMossImage.run(fixture: fixture, json: json, references: references)
             case "z-image-turbo": ok = try VerifyZImage.run(fixture: fixture, json: json, references: references)
             case "qwen-image": ok = try VerifyQwenImage.run(fixture: fixture, json: json, references: references)
             case "qwen-image-edit": ok = try VerifyQwenImageEdit.run(fixture: fixture, json: json, references: references)
@@ -52,7 +53,8 @@ enum Verify {
             default:
                 print("fixture.json names an unknown family: \(family)"); return false
             }
-            let reference = family == "ltx-2" ? "ltx-2-mlx" : family == "sensenova" ? "SenseTime's PyTorch code" : "mflux"
+            let reference = family == "ltx-2" ? "ltx-2-mlx" : family == "sensenova" ? "SenseTime's PyTorch code"
+                : family == "moss-image" ? "OpenMOSS's PyTorch pipeline" : "mflux"
             print(ok ? "OK: the \(family) port matches \(reference) on this checkpoint" : "FAILED: see the stages above")
             return ok
         } catch {

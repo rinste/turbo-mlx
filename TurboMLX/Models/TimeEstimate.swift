@@ -119,6 +119,10 @@ enum TimeEstimate {
         // picture 2.0; decodes 0.3 / 1.1 / 3.4 / 6.1 s at 512 / 1024 / 1536 / 2048 px. Its weights are
         // read and quantized when first used, a few seconds more.
         case .flux3Klein: Rates(denoise: 1.85, decode: 1.4, fixed: 0.8, load: 10)
+        // 8 bits, guidance's two passes: 50 steps at 512 / 1024 px in 245 and 983 s (2.30 and 2.06 s a
+        // unit), decodes 0.3 / 1.0 s; reading the prompt 1.4 s. Its weights are read and quantized
+        // when first used, and with Save memory the transformer again after a new prompt (~14 s).
+        case .mossImage: Rates(denoise: 2.2, decode: 1, fixed: 1.5, load: 12)
         case .zImageTurbo: Rates(denoise: 2.5, decode: 1, fixed: 0.5, load: 3)
         // With CFG, Ming-Image takes three times as long, not two.
         case .ming: Rates(denoise: cfg ? 3.55 : 2.3, decode: 2, fixed: 1.3, load: 5)
