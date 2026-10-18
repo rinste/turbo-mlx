@@ -319,7 +319,12 @@ nonisolated final class HubDownloader: Sendable {
     // MARK: Requests
 
     private func request(_ urlString: String) -> URLRequest {
-        var request = URLRequest(url: URL(string: urlString)!)
+        Self.request(URL(string: urlString)!, token: token)
+    }
+
+    /// A request to the hub as Turbo MLX: the token if there is one, and the app's User-Agent.
+    static func request(_ url: URL, token: String?) -> URLRequest {
+        var request = URLRequest(url: url)
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         request.setValue("turbo-mlx", forHTTPHeaderField: "User-Agent")
         return request
