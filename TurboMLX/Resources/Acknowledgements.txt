@@ -34,7 +34,7 @@ ByteDance's SeedVR2 under the Apache License 2.0, as mflux ships it:
 
 The app contains these libraries:
 
-  mlx-swift 0.32.2
+  mlx-swift 0.32.3
     https://github.com/ml-explore/mlx-swift
   Sparkle 2.10.0
     https://github.com/sparkle-project/Sparkle
