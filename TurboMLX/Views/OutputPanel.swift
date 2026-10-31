@@ -403,6 +403,9 @@ private struct ItemInfoBar: View {
                             MetadataChip(systemImage: "photo", text: "From an image",
                                          help: item.kind == .video ? "The clip started from a reference image" : "Made from a reference image")
                         }
+                        if item.request.lastFrameImage != nil {
+                            MetadataChip(systemImage: "photo", text: "To an image", help: "The clip ended on a reference image")
+                        }
                         if item.request.quality == true {
                             MetadataChip(systemImage: "sparkles", text: "Quality",
                                          help: "The full model with guidance (CFG \(Format.guidance(item.request.guidance))) and a negative prompt")
@@ -473,7 +476,10 @@ struct HistoryItemMenu: View {
 
     var body: some View {
         if let selected = app.selectedModel, selected.family.takesReferenceImage, !selected.family.isUpscaler {
-            Button("Use as Reference Image") { app.useAsReference(item) }
+            Button(selected.family.takesLastFrame ? "Use as First Frame" : "Use as Reference Image") { app.useAsReference(item) }
+            if selected.family.takesLastFrame {
+                Button("Use as Last Frame") { app.useAsReference(item, lastFrame: true) }
+            }
         }
         if item.kind == .image, app.upscaler != nil {
             Button("Upscale…") { app.upscale(item, undoManager: undoManager) }

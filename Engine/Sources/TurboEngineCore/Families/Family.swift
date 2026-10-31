@@ -24,6 +24,8 @@ public struct FamilyRequest {
     /// all, the other families the first (`imagePath`).
     public var imagePaths: [String]
     public var imagePath: String? { imagePaths.first }
+    /// LTX: the picture a clip ends on (its last frame), with or without `imagePath` to start from.
+    public var lastImagePath: String?
     /// Upscalers: the factor the picture's shorter side is scaled by, the softening before (0–1).
     public var upscale: Double?
     public var softness: Double?

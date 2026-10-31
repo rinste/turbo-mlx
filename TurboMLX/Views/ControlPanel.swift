@@ -1091,19 +1091,21 @@ private struct Reordering {
 
 /// The image a clip starts from, or an image is made from: dropped from Finder or from the history
 /// strip, chosen with the open panel, or picked among the generated images. A clip takes it as its
-/// first frame and the prompt says what happens next; FLUX.2 Klein and Qwen-Image Edit change it as
-/// the prompt says.
+/// first frame and the prompt says what happens next, and LTX a second one as its last frame;
+/// FLUX.2 Klein and Qwen-Image Edit change it as the prompt says.
 private struct ReferenceImageSection: View {
     @Environment(AppModel.self) private var app
     @Binding var settings: GenerationSettings
-    @State private var isTargeted = false
-    @State private var showsHistory = false
     @State private var failure: String?
 
     private var isVideo: Bool { app.selectedModel?.family.media == .video }
     private var isUpscaler: Bool { app.selectedModel?.family.isUpscaler == true }
+    private var takesLastFrame: Bool { app.selectedModel?.family.takesLastFrame == true }
 
     private var caption: String {
+        if isVideo, takesLastFrame {
+            return "Optional, each. They are fitted to the clip’s size, cropped from the middle; with both, the prompt says how the clip gets from one to the other."
+        }
         if isVideo { return "Optional. It is fitted to the clip’s size, cropped from the middle." }
         if isUpscaler { return "Needed. It keeps its proportions; a picture larger than 2048 pixels is reduced to that first." }
         if app.selectedModel?.family.requiresReferenceImage == true {
@@ -1117,47 +1119,16 @@ private struct ReferenceImageSection: View {
 
     var body: some View {
         Section {
-            HStack(alignment: .center, spacing: 12) {
-                preview
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(prompt)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: 8) {
-                        Button("Choose…") { choose() }
-                            .help("Choose an image file")
-                        Button("From History…") { showsHistory = true }
-                            .help("Pick one of the images generated here, or a clip’s first frame")
-                            .disabled(app.history.items.isEmpty)
-                            .popover(isPresented: $showsHistory, arrowEdge: .trailing) {
-                                HistoryImagePicker { item in
-                                    showsHistory = false
-                                    use(app.url(for: item))
-                                }
-                            }
-                        if settings.referenceImage != nil {
-                            Button("Remove", role: .destructive) {
-                                withAnimation(.snappy) { settings.referenceImage = nil }
-                            }
-                        }
-                    }
-                    .controlSize(.small)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.vertical, 2)
-            .contentShape(Rectangle())
-            .onDrop(of: [.fileURL, .image, .movie], isTargeted: $isTargeted) { providers in accept(providers) }
-            .overlay {
-                if isTargeted {
-                    RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(Color.active, lineWidth: 2)
-                        .padding(-6)
-                }
+            ReferenceSlot(name: $settings.referenceImage, prompt: prompt, panelMessage: panelMessage, failure: $failure)
+            if takesLastFrame {
+                ReferenceSlot(
+                    name: $settings.lastFrameImage,
+                    prompt: settings.lastFrameImage == nil ? "Drop an image here, or pick one: the clip ends on it." : "The clip ends on this image.",
+                    panelMessage: "Choose the image the clip ends on", failure: $failure
+                )
             }
         } header: {
-            Text(isUpscaler ? "Picture to Upscale" : "Reference Image")
+            Text(isUpscaler ? "Picture to Upscale" : takesLastFrame ? "First and Last Frames" : "Reference Image")
         } footer: {
             if let failure {
                 Text(failure).font(.caption).foregroundStyle(.red)
@@ -1180,10 +1151,68 @@ private struct ReferenceImageSection: View {
         }
     }
 
+    private var panelMessage: String {
+        isUpscaler ? "Choose the picture to upscale" : isVideo ? "Choose the image the clip starts from" : "Choose the reference image"
+    }
+}
+
+/// One reference image of the section: its thumbnail or an empty well to drop on, and the buttons
+/// to choose, pick from the history or remove it. `name` is a file in the references folder.
+private struct ReferenceSlot: View {
+    @Environment(AppModel.self) private var app
+    @Binding var name: String?
+    let prompt: String
+    let panelMessage: String
+    @Binding var failure: String?
+    @State private var isTargeted = false
+    @State private var showsHistory = false
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            preview
+            VStack(alignment: .leading, spacing: 8) {
+                Text(prompt)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    Button("Choose…") { choose() }
+                        .help("Choose an image file")
+                    Button("From History…") { showsHistory = true }
+                        .help("Pick one of the images generated here, or a clip’s first frame")
+                        .disabled(app.history.items.isEmpty)
+                        .popover(isPresented: $showsHistory, arrowEdge: .trailing) {
+                            HistoryImagePicker { item in
+                                showsHistory = false
+                                use(app.url(for: item))
+                            }
+                        }
+                    if name != nil {
+                        Button("Remove", role: .destructive) {
+                            withAnimation(.snappy) { name = nil }
+                        }
+                    }
+                }
+                .controlSize(.small)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .onDrop(of: [.fileURL, .image, .movie], isTargeted: $isTargeted) { providers in accept(providers) }
+        .overlay {
+            if isTargeted {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(Color.active, lineWidth: 2)
+                    .padding(-6)
+            }
+        }
+    }
+
     @ViewBuilder
     private var preview: some View {
         let shape = RoundedRectangle(cornerRadius: 6)
-        if let name = settings.referenceImage {
+        if let name {
             FileImage(url: HistoryStore.referenceURL(name), maxPixelSize: 320)
                 .aspectRatio(contentMode: .fill)
                 .frame(width: 96, height: 72)
@@ -1206,7 +1235,7 @@ private struct ReferenceImageSection: View {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
-        panel.message = isUpscaler ? "Choose the picture to upscale" : isVideo ? "Choose the image the clip starts from" : "Choose the reference image"
+        panel.message = panelMessage
         guard panel.runModal() == .OK, let url = panel.url else { return }
         use(url)
     }
@@ -1220,9 +1249,9 @@ private struct ReferenceImageSection: View {
 
     private func importing(_ load: () async throws -> String) async {
         do {
-            let name = try await load()
+            let imported = try await load()
             failure = nil
-            withAnimation(.snappy) { settings.referenceImage = name }
+            withAnimation(.snappy) { name = imported }
         } catch {
             failure = error.localizedDescription
         }
@@ -1931,6 +1960,7 @@ private struct GenerateBar: View {
             guidance: settings.guidance,
             frames: model.family.media == .video ? settings.videoFrames : nil,
             reference: model.family.takesReferenceImage ? settings.referenceImage : nil,
+            lastFrame: model.family.takesLastFrame && settings.lastFrameImage != nil,
             lowMemory: settings.lowMemory,
             halfPrecision: model.family.supportsHalfPrecision && settings.halfPrecision,
             quality: settings.fullPipeline(for: model),

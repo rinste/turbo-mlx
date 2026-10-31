@@ -128,6 +128,7 @@ public final class Engine {
                 var request = request
                 request.autoDuration = params.autoDuration ?? false
                 request.quality = params.quality ?? false
+                request.lastImagePath = params.lastImage
                 try generateVideo(video, request: request, id: id, spec: spec, params: params, started: started)
                 return
             }
@@ -254,7 +255,8 @@ public final class Engine {
 
         emitter.emit("phase", ["id": id, "phase": "encoding_video"])
         guard let writer, let clip else { throw VideoOutput.OutputError.cannotWrite("no frames were decoded") }
-        let source = Provenance.sourceType(inputs: params.imagePaths.map { URL(fileURLWithPath: $0) })
+        let inputs = params.imagePaths + (params.lastImage.map { [$0] } ?? [])
+        let source = Provenance.sourceType(inputs: inputs.map { URL(fileURLWithPath: $0) })
         do {
             try writer.finish()
             try Provenance.markVideo(at: output, as: source)

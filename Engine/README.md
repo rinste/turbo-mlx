@@ -178,6 +178,7 @@ own Gemma 4), recorded stage by stage by hooks around its own functions:
 $PY Engine/Fixtures/make_ltx_fixture.py <pack> build/fixtures/ltx --gemma <gemma>   # 2.3, text to video
 $PY Engine/Fixtures/make_ltx_fixture.py <pack> build/fixtures/ltx-i2v --gemma <gemma> --image picture.png
 $PY Engine/Fixtures/make_ltx_fixture.py <2.5 pack> build/fixtures/ltx25             # 2.5: no --gemma
+$PY Engine/Fixtures/make_ltx_fixture.py <2.5 pack> build/fixtures/ltx25-kf --image start.png --last-image end.png
 #    then, with a fixture's own arguments, random LoRAs and the first pass with them
 $PY Engine/Fixtures/make_ltx_fixture.py <2.5 pack> build/fixtures/ltx25 --lora build/fixtures/ltx25/lora
 build/bin/turbo-engine verify build/fixtures/ltx
@@ -242,6 +243,23 @@ peaking at 30.9 GB both ways without Save memory (13 GB with it), and the refere
 the same request is the same clip: 27.8 dB per frame on average through H.264, the same loudness
 (a distilled clip lands at 32.6: thirty guided steps carry more bfloat16 drift, which guidance
 amplifies).
+
+The last frame (31 October 2026, `last_image` in a request, beside `image` or alone): the
+reference binds an image at any frame but the first as a keyframe, `VideoConditionByKeyframeIndex`
+(`generate --image end.png <last frame> 1.0` in ltx-2-mlx). Its tokens, encoded like the first
+frame's, are appended after the clip's in both stages, preserved by the mask (timestep 0, no
+keyframe marker, the attention unmasked), at positions of their own: the cells' pixel centers,
+and as time the middle of that single pixel frame, not of the eight a latent frame covers. Stage 1
+leaves them behind before the upsampler, stage 2 before the decoder; the Quality pipeline does
+the same, its schedule shifted for the clip's tokens only. `--last-image` records them: with and
+without a first image (`ltx25-kf`, `ltx25-last`, the reference's own hedgehog pair), the noise,
+the conditioned states of both stages, their masks and positions are identical, the image tokens
+match in float32, and every transformer pass is within 2e-4 with the appended tokens. A 4-second
+768 × 512 clip from both images (the 2.5 4-bit pack, seed 5) took 201 s, 177 of them denoising,
+peaking at 33 GB without Save memory; its last frame is 25.5 dB from the end image fitted to the
+clip (the first frame, pinned, 28.5 dB from its own through the same measure), about the gap
+ltx-2-mlx reports between its first and last frames: past the first, an image is a strong hint,
+not a pin.
 
 The whole pipeline, same prompt and seed through the app's protocol, 768 × 512 × 49 frames with
 the 4-bit pack: the same clip as the reference (PSNR 29–35 dB per frame, 32.6 on average, through

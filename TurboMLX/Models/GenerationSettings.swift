@@ -131,6 +131,8 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     /// The image a clip starts from, or an image is made from: a file in the references folder
     /// (`HistoryStore`).
     var referenceImage: String?
+    /// The image a clip ends on (`ModelFamily.takesLastFrame`), in the same folder.
+    var lastFrameImage: String?
     /// Upscalers: the factor, and how much the picture is softened before it is enlarged (0–1),
     /// which gives smoother results from a noisy or over-sharpened picture.
     var upscale = 2.0
@@ -220,7 +222,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case blocks, negativePrompt, aspect, resolution, usesCustomSize, customWidth, customHeight, steps, guidance,
              randomSeed, seed, batchCount, transparentBackground, lowMemory,
-             videoResolution, videoSeconds, videoFrameRate, videoAutoDuration, referenceImage, upscale, softness,
+             videoResolution, videoSeconds, videoFrameRate, videoAutoDuration, referenceImage, lastFrameImage, upscale, softness,
              halfPrecision, livePreview, loras, videoQuality
     }
 
@@ -255,6 +257,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         videoFrameRate = try values.decodeIfPresent(Int.self, forKey: .videoFrameRate) ?? videoFrameRate
         videoAutoDuration = try values.decodeIfPresent(Bool.self, forKey: .videoAutoDuration) ?? videoAutoDuration
         referenceImage = try values.decodeIfPresent(String.self, forKey: .referenceImage)
+        lastFrameImage = try values.decodeIfPresent(String.self, forKey: .lastFrameImage)
         upscale = try values.decodeIfPresent(Double.self, forKey: .upscale) ?? upscale
         softness = try values.decodeIfPresent(Double.self, forKey: .softness) ?? softness
         halfPrecision = try values.decodeIfPresent(Bool.self, forKey: .halfPrecision) ?? halfPrecision
@@ -310,6 +313,8 @@ nonisolated struct GenerationRequest: Codable, Hashable, Sendable {
     var autoDuration: Bool?
     /// Video only: the image the clip starts from, a file in the references folder.
     var referenceImage: String?
+    /// LTX only: the image the clip ends on, in the same folder.
+    var lastFrameImage: String?
     /// Upscalers only: the factor and the softening (`GenerationSettings`).
     var upscale: Double?
     var softness: Double?

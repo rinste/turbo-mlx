@@ -89,7 +89,8 @@ unchanged, and runs its `DistilledPipeline`: Gemma's 49 states through the text 
 steps at half size, the ×2 latent upsampler, three steps at full size, the video decoder (tiled
 over frames and pixels when the clip would not fit half the memory), the audio decoder and the
 BigVGAN vocoder with bandwidth extension, then an MP4 written with `AVAssetWriter` (H.264 and
-48 kHz AAC) and a poster. A reference image pins the first frame in both stages. The fixture is a
+48 kHz AAC) and a poster. A reference image pins the first frame in both stages, and a last image
+is appended after the clip's tokens as a keyframe at the last frame. The fixture is a
 tiny run of the reference's own pipeline on the real pack, recorded by hooks (Engine/README.md):
 every transformer pass matches within 1e-4 given the reference's inputs, the connector is
 bit-identical, the encoder and decoder match in float32; at 768 × 512 × 49 frames the whole clip

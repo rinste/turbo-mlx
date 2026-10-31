@@ -49,6 +49,8 @@ public struct GenerationParams: Decodable {
     /// LTX-2.5: the length predicted from the prompt, at most `frames`.
     public let autoDuration: Bool?
     public let image: String?
+    /// LTX: the image the clip ends on, with or without `image` to start from.
+    public let lastImage: String?
     /// The pictures an image is edited from, in order, for the families that read several (FLUX.2
     /// Klein, Qwen-Image Edit); taken over `image` when there are any.
     public let images: [String]?

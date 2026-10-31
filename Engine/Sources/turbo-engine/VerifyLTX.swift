@@ -6,8 +6,8 @@ import TurboEngineCore
 /// (Engine/Fixtures/make_ltx_fixture.py): each stage fed the reference's own inputs, so an error
 /// shows where it starts. The tokenizer, Gemma's states, the connector, the noise and positions,
 /// the first transformer pass of each stage, both loops (2.5's stage 1 ancestral, with its noise),
-/// the upsampler, the image encoder (image-to-video), the video decoder, the audio decoder and the
-/// vocoder.
+/// the upsampler, the image encoder (image-to-video, and an image the clip ends on, with the states
+/// it is put in), the video decoder, the audio decoder and the vocoder.
 enum VerifyLTX {
     static func run(fixture: URL, json: [String: Any], references: [String: MLXArray]) throws -> Bool {
         func reference(_ name: String) throws -> MLXArray {
@@ -87,17 +87,22 @@ enum VerifyLTX {
         // 4. Noise and positions.
         let videoInit = try reference("stage1_video_init")
         let audioInit = try reference("stage1_audio_init")
-        // With a reference image, the first frame's tokens are the image's: the noise is compared after them.
-        let noise = LTXVideoModel.stageOneNoise(shape: videoInit.shape, seed: seed)
-        let skipped = references["stage1_image_tokens"]?.shape[1] ?? 0
-        ok = Verify.report("stage 1 video noise", got: noise[0..., skipped...], want: videoInit[0..., skipped...]) && ok
-        ok = Verify.report("stage 1 audio noise", got: LTXVideoModel.stageOneNoise(shape: audioInit.shape, seed: seed + 1), want: audioInit) && ok
         let upsampleIn = try reference("upsample_in")
         let (f, h1, w1) = (upsampleIn.shape[2], upsampleIn.shape[3], upsampleIn.shape[4])
-        let positions1 = LTXVideoModel.positions(frames: f, height: h1, width: w1, fps: fps, audioTokens: audioInit.shape[1])
+        // With a reference image, the first frame's tokens are the image's: the noise is compared
+        // after them. A last image's tokens follow the clip's: the noise stops before them.
+        let clipTokens = f * h1 * w1
+        let noise = LTXVideoModel.stageOneNoise(shape: [1, clipTokens, 128], seed: seed)
+        let skipped = references["stage1_image_tokens"]?.shape[1] ?? 0
+        ok = Verify.report("stage 1 video noise", got: noise[0..., skipped...], want: videoInit[0..., skipped ..< clipTokens]) && ok
+        ok = Verify.report("stage 1 audio noise", got: LTXVideoModel.stageOneNoise(shape: audioInit.shape, seed: seed + 1), want: audioInit) && ok
+        // The last image is bound to the clip's last pixel frame.
+        let lastFrame: Int? = references["stage1_last_image_tokens"] == nil ? nil : ((json["frames"] as? NSNumber)?.intValue ?? 9) - 1
+        let positions1 = LTXVideoModel.positions(frames: f, height: h1, width: w1, fps: fps, audioTokens: audioInit.shape[1], lastFrame: lastFrame)
         ok = Verify.report("video positions", got: positions1.video, want: try reference("pass1_video_positions")) && ok
         ok = Verify.report("audio positions", got: positions1.audio, want: try reference("pass1_audio_positions")) && ok
-        let positions2 = LTXVideoModel.positions(frames: f, height: h1 * 2, width: w1 * 2, fps: fps, audioTokens: audioInit.shape[1])
+        let positions2 = LTXVideoModel.positions(frames: f, height: h1 * 2, width: w1 * 2, fps: fps, audioTokens: audioInit.shape[1],
+                                                 lastFrame: lastFrame)
         // 2.5: the keyframe marker on the first latent frame of each stage.
         let keyframes = (stage1: h1 * w1, stage2: h1 * w1 * 4)
         for (stage, count) in [(1, keyframes.stage1), (2, keyframes.stage2)] {
@@ -116,17 +121,31 @@ enum VerifyLTX {
             }
         }
 
-        // 5. The image encoder (image-to-video fixtures): in bfloat16 its convolutions carry
-        // MLX's conv3d rounding, as the decoder's do (shown); in float32 the math decides.
+        // 5. The image encoder (image-to-video fixtures, the first frame's image and the last's):
+        // in bfloat16 its convolutions carry MLX's conv3d rounding, as the decoder's do (shown); in
+        // float32 the math decides.
         let float32Tokens = try? loadArrays(url: fixture.appending(path: "image_tokens_f32.safetensors"))
-        for stage in [1, 2] where references["stage\(stage)_image_pixels"] != nil {
-            let pixels = try reference("stage\(stage)_image_pixels")
-            let tokens = try model.imageTokens(pixels: pixels)
-            ok = Verify.report("image tokens \(stage)", got: tokens, want: try reference("stage\(stage)_image_tokens"),
-                               counts: float32Tokens == nil) && ok
-            if let wanted = float32Tokens?["stage\(stage)_image_tokens_f32"] {
-                ok = Verify.report("image tokens \(stage) f32", got: try model.imageTokens(pixels: pixels, float32: true), want: wanted) && ok
+        for stage in [1, 2] {
+            for slot in ["image", "last_image"] where references["stage\(stage)_\(slot)_pixels"] != nil {
+                let label = slot == "image" ? "image tokens \(stage)" : "last image tokens \(stage)"
+                let pixels = try reference("stage\(stage)_\(slot)_pixels")
+                let tokens = try model.imageTokens(pixels: pixels)
+                ok = Verify.report(label, got: tokens, want: try reference("stage\(stage)_\(slot)_tokens"),
+                                   counts: float32Tokens == nil) && ok
+                if let wanted = float32Tokens?["stage\(stage)_\(slot)_tokens_f32"] {
+                    ok = Verify.report("\(label) f32", got: try model.imageTokens(pixels: pixels, float32: true), want: wanted) && ok
+                }
             }
+        }
+        // With a last image, the states the pipeline builds from the reference's own tokens: the
+        // noise, the first frame put in, the last image's tokens appended, preserved by the mask.
+        if let lastTokens = references["stage1_last_image_tokens"] {
+            let state = LTXVideoModel.conditionedState(
+                shape: [1, clipTokens, 128], seed: seed, firstFrame: references["stage1_image_tokens"], lastFrame: lastTokens,
+                tokensPerFrame: h1 * w1)
+            ok = Verify.report("stage 1 video state", got: state.latent, want: videoInit) && ok
+            ok = Verify.report("stage 1 video clean", got: state.clean, want: try reference("stage1_video_clean")) && ok
+            ok = Verify.report("stage 1 video mask", got: state.mask, want: try reference("stage1_video_mask")) && ok
         }
 
         // 6. Stage 1: the first pass, then the loop, from the reference's states.
@@ -160,7 +179,7 @@ enum VerifyLTX {
 
         // Every pass of both loops on the reference's own inputs: whether a loop's drift comes
         // from one step or from rounding carried from step to step.
-        let conditioned = references["stage1_image_tokens"] != nil
+        let conditioned = references["stage1_image_tokens"] != nil || lastFrame != nil
         let sigmaTable = Array(LTXConfig.distilledSigmas.dropLast()) + Array(LTXConfig.stage2Sigmas.dropLast())
         for step in 0 ..< 11 where references["step\(step)_video_in"] != nil {
             let positions = step < 8 ? positions1 : positions2
@@ -185,8 +204,18 @@ enum VerifyLTX {
         let upsampled = try model.upsampleLatent(upsampleIn)
         ok = Verify.report("upsampler", got: upsampled, want: try reference("upsample_out")) && ok
 
-        // 8. Stage 2's renoised states (text-to-video: no conditioning), its first pass and loop.
-        if references["stage2_image_tokens"] == nil {
+        // 8. Stage 2's renoised states (text-to-video: no conditioning; with a last image, built
+        // as the pipeline builds them), its first pass and loop.
+        if let lastTokens = references["stage2_last_image_tokens"] {
+            let upTokens = try reference("upsample_out").transposed(0, 2, 3, 4, 1).reshaped([1, -1, 128])
+            let state = LTXVideoModel.conditionedState(
+                shape: upTokens.shape, seed: seed, upsampled: upTokens, firstFrame: references["stage2_image_tokens"],
+                lastFrame: lastTokens, tokensPerFrame: h1 * w1 * 4)
+            ok = Verify.report("stage 2 video state", got: state.latent, want: try reference("stage2_video_init")) && ok
+            ok = Verify.report("stage 2 video clean", got: state.clean, want: try reference("stage2_video_clean")) && ok
+            ok = Verify.report("stage 2 video mask", got: state.mask, want: try reference("stage2_video_mask")) && ok
+        }
+        if references["stage2_image_tokens"] == nil, lastFrame == nil {
             let upTokens = try reference("upsample_out").transposed(0, 2, 3, 4, 1).reshaped([1, -1, 128])
             ok = Verify.report("stage 2 video noise", got: LTXVideoModel.stageTwoVideoNoise(upTokens, seed: seed),
                                want: try reference("stage2_video_init")) && ok

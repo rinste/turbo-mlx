@@ -190,10 +190,10 @@ final class HistoryStore {
         return name
     }
 
-    /// Deletes the reference images that no clip in the history and not `current` start from.
-    func pruneReferences(keeping current: String?) {
+    /// Deletes the reference images that no item in the history and not `current` start or end on.
+    func pruneReferences(keeping current: [String]) {
         guard loadError == nil else { return }
-        let used = Set(items.compactMap(\.request.referenceImage) + [current].compactMap { $0 })
+        let used = Set(items.compactMap(\.request.referenceImage) + items.compactMap(\.request.lastFrameImage) + current)
         let names = (try? FileManager.default.contentsOfDirectory(atPath: Self.referencesDirectory.path)) ?? []
         for name in names where !used.contains(name) {
             try? FileManager.default.removeItem(at: Self.referenceURL(name))

@@ -7,11 +7,15 @@ with the stages recorded on the way (hooks around its own functions), then its d
 is read in place, so the fixture holds only the recorded tensors and names the pack it came from.
 
     $PY Engine/Fixtures/make_ltx_fixture.py <pack> <out> [--gemma folder] [--image picture.png]
+        [--last-image picture.png]
 
 <pack>: a dgrauet/ltx-2.3-mlx-q4 / -q8 or ltx-2.5-mlx-q4 / -q8 snapshot folder; --gemma: for 2.3,
 mlx-community/gemma-3-12b-it-4bit (2.5 packs carry their own Gemma 4). With --image, the clip starts
-from the picture (image-to-video) and the encoder's tokens for both stages are recorded as well. On
-2.5 stage 1 runs the ancestral sampler: its noise draws are recorded too.
+from the picture (image-to-video) and the encoder's tokens for both stages are recorded as well.
+With --last-image, the clip ends on that picture, which the pipeline binds to the last frame as a
+keyframe (`VideoConditionByKeyframeIndex`: its tokens appended after the clip's, at their own
+positions); its tokens and positions are recorded too. On 2.5 stage 1 runs the ancestral sampler:
+its noise draws are recorded too.
 
 With --lora <fixture>/lora, the run stops at the first transformer pass instead, after writing two
 random LoRA files there (blocks 0, 1 and the last, and the layers around them), one keyed as
@@ -47,6 +51,8 @@ import ltx_core_mlx.model.transformer.model as transformer_model
 import ltx_pipelines_mlx.distilled as distilled
 import ltx_pipelines_mlx.utils._orchestration as orchestration
 import ltx_pipelines_mlx.utils.media_io as media_io
+from ltx_core_mlx.conditioning.types.keyframe_cond import VideoConditionByKeyframeIndex
+from ltx_pipelines_mlx.utils.args import ImageConditioningInput
 from ltx_pipelines_mlx.utils.blocks import DurationPredictor, PromptEncoder, seconds_to_clamped_num_frames
 
 refs: dict[str, mx.array] = {}
@@ -296,6 +302,7 @@ def main() -> None:
     parser.add_argument("--fps", type=float, default=24.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--image")
+    parser.add_argument("--last-image", help="the picture the clip ends on (a keyframe at the last frame)")
     parser.add_argument("--crf", type=int, default=0,
                         help="H.264 round trip of the image before encoding (upstream: 33; 0 compares the ports on the same pixels)")
     parser.add_argument("--lora", help="write LoRA references to this folder and stop after the first pass")
@@ -398,11 +405,14 @@ def main() -> None:
 
     load_image = media_io.load_image_and_preprocess
     images = {"count": 0}
+    # The pictures each stage loads, in order: the first frame's, then the last frame's.
+    slots = (["image"] if args.image else []) + (["last_image"] if args.last_image else [])
 
     def image_hook(image_path, height, width, crf=media_io.DEFAULT_IMAGE_CRF):
         tensor = load_image(image_path, height, width, crf=args.crf)
+        stage, slot = divmod(images["count"], len(slots))
         images["count"] += 1
-        record(f"stage{images['count']}_image_pixels", tensor)
+        record(f"stage{stage + 1}_{slots[slot]}_pixels", tensor)
         return tensor
 
     media_io.load_image_and_preprocess = image_hook
@@ -414,7 +424,12 @@ def main() -> None:
         items = combined(images, **kwargs)
         stage = encodes["count"] + 1
         encodes["count"] += 1
-        record(f"stage{stage}_image_tokens", items[0].clean_latent)
+        for item in items:
+            if isinstance(item, VideoConditionByKeyframeIndex):
+                record(f"stage{stage}_last_image_tokens", item.keyframe_latent)
+                record(f"stage{stage}_last_image_positions", item.keyframe_positions)
+            else:
+                record(f"stage{stage}_image_tokens", item.clean_latent)
         return items
 
     orchestration.combined_image_conditionings = conditioning_hook
@@ -442,9 +457,17 @@ def main() -> None:
 
     pipe.prompt_encoder.encode = encode_hook
 
+    # A last image goes with the first (if any) as the pipeline's multi-image input, the last at
+    # the clip's last pixel frame; without one, the single-image shorthand as before.
+    inputs = None
+    if args.last_image:
+        inputs = ([ImageConditioningInput(args.image, 0, 1.0)] if args.image else []) + [
+            ImageConditioningInput(args.last_image, args.frames - 1, 1.0)
+        ]
     try:
         video_latent, audio_latent = pipe.generate_two_stage(
-            args.prompt, args.height, args.width, args.frames, frame_rate=args.fps, seed=args.seed, image=args.image
+            args.prompt, args.height, args.width, args.frames, frame_rate=args.fps, seed=args.seed,
+            image=None if inputs else args.image, images=inputs,
         )
     except LoRADone:
         return
@@ -468,14 +491,15 @@ def main() -> None:
     pixels_f32 = decoder.decode(video_latent.astype(mx.float32))
     mx.eval(pixels_f32)
     mx.save_safetensors(str(out / "pixels_f32.safetensors"), {"pixels_f32": pixels_f32})
-    if args.image:
+    if slots:
         encoder = pipe.image_conditioner.load()
         encoder.update(tree_map(lambda p: p.astype(mx.float32), encoder.parameters()))
         tokens = {}
         for stage in (1, 2):
-            pixels = refs[f"stage{stage}_image_pixels"].astype(mx.float32)[:, :, None]
-            latent = encoder.encode(pixels)
-            tokens[f"stage{stage}_image_tokens_f32"] = latent.transpose(0, 2, 3, 4, 1).reshape(1, -1, 128)
+            for slot in slots:
+                pixels = refs[f"stage{stage}_{slot}_pixels"].astype(mx.float32)[:, :, None]
+                latent = encoder.encode(pixels)
+                tokens[f"stage{stage}_{slot}_tokens_f32"] = latent.transpose(0, 2, 3, 4, 1).reshape(1, -1, 128)
         mx.eval(tokens)
         mx.save_safetensors(str(out / "image_tokens_f32.safetensors"), tokens)
     mx.save_safetensors(str(out / "gemma_states.safetensors"), gemma_states)
@@ -517,6 +541,7 @@ def main() -> None:
         "fps": args.fps,
         "seed": args.seed,
         "image": str(Path(args.image).resolve()) if args.image else None,
+        "last_image": str(Path(args.last_image).resolve()) if args.last_image else None,
         "crf": args.crf,
         "mlx": mx.__version__,
     }, indent=2))

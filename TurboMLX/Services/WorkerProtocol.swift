@@ -129,6 +129,10 @@ nonisolated enum WorkerCommand: Sendable {
             let url = HistoryStore.referenceURL(reference)
             if FileManager.default.fileExists(atPath: url.path) { params["image"] = url.path }
         }
+        if let lastFrame = request.lastFrameImage {
+            let url = HistoryStore.referenceURL(lastFrame)
+            if FileManager.default.fileExists(atPath: url.path) { params["last_image"] = url.path }
+        }
         return params
     }
 }

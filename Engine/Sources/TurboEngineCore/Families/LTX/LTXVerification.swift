@@ -56,8 +56,27 @@ extension LTXVideoModel {
         LTXDurationHead.frames(seconds: seconds, fps: fps, minFrames: minFrames, maxFrames: maxFrames)
     }
 
-    public static func positions(frames: Int, height: Int, width: Int, fps: Double, audioTokens: Int) -> (video: MLXArray, audio: MLXArray) {
-        (videoPositions(frames: frames, height: height, width: width, fps: fps), audioPositions(audioTokens))
+    /// With `lastFrame` (a pixel frame), a keyframe image's positions follow the clip's.
+    public static func positions(
+        frames: Int, height: Int, width: Int, fps: Double, audioTokens: Int, lastFrame: Int? = nil
+    ) -> (video: MLXArray, audio: MLXArray) {
+        var video = videoPositions(frames: frames, height: height, width: width, fps: fps)
+        if let lastFrame {
+            video = concatenated([video, keyframePositions(frame: lastFrame, height: height, width: width, fps: fps)], axis: 1)
+        }
+        return (video, audioPositions(audioTokens))
+    }
+
+    /// A stage's video state as the pipeline builds it: stage 1's noise (`seed`) or stage 2's
+    /// renoised upsampled `latent`, the first frame's tokens put in, the last image's appended.
+    public static func conditionedState(
+        shape: [Int], seed: Int, upsampled latent: MLXArray? = nil, firstFrame: MLXArray?, lastFrame: MLXArray?, tokensPerFrame: Int
+    ) -> (latent: MLXArray, clean: MLXArray, mask: MLXArray) {
+        var state = latent.map { renoised($0, sigma: LTXConfig.stage2Sigmas[0], seed: seed + LTXConfig.stage2SeedOffset) }
+            ?? initialState(shape: shape, seed: seed)
+        if let firstFrame { state = conditioned(state, firstFrame: firstFrame, tokensPerFrame: tokensPerFrame) }
+        if let lastFrame { state = appendingKeyframe(state, tokens: lastFrame) }
+        return (state.latent, state.clean, state.mask)
     }
 
     /// One forward pass: the velocities. `keyframeTokens`: the first latent frame's tokens, which

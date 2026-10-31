@@ -77,7 +77,8 @@ extension Gemma3TextModel: LTXTextTower {}
 /// LTX-2.3 and LTX-2.5 distilled, the two-stage pipeline of dgrauet's `DistilledPipeline`: the
 /// prompt through Gemma and the connector, eight steps at half resolution, the latent upsampled
 /// ×2, three steps at full resolution, then the video and audio decoders. A reference image pins
-/// the first frame (`VideoConditionByLatentIndex`) in both stages. LTX-2.5 packs carry their own
+/// the first frame (`VideoConditionByLatentIndex`) in both stages, and a last image guides the end
+/// (`VideoConditionByKeyframeIndex`: its tokens follow the clip's). LTX-2.5 packs carry their own
 /// Gemma 4, run stage 1 with the ancestral sampler and mark the first latent frame as a keyframe.
 /// With `quality`, `TI2VidTwoStagesPipeline` instead: stage 1 runs the dev transformer with
 /// guidance (`guidedDenoise`), stage 2 the distilled one (the reference's own low-memory path,
@@ -371,7 +372,8 @@ public final class LTXVideoModel: VideoFamilyModel, LoRAAdaptable {
         let geometry = LTXGeometry(width: request.width, height: request.height, frames: frames, fps: request.fps ?? 24)
 
         let reference = try request.imagePath.map { try LTXReferenceImage(path: $0) }
-        var encoder: LTXVideoEncoder? = reference == nil ? nil : try videoEncoder()
+        let ending = try request.lastImagePath.map { try LTXReferenceImage(path: $0) }
+        var encoder: LTXVideoEncoder? = reference == nil && ending == nil ? nil : try videoEncoder()
 
         // Stage 1: half resolution, from noise.
         phase(.denoising)
@@ -379,13 +381,19 @@ public final class LTXVideoModel: VideoFamilyModel, LoRAAdaptable {
         let (h1, w1) = (geometry.latentHeight / 2, geometry.latentWidth / 2)
         let audioTokens = geometry.audioTokens
         var video1 = Self.initialState(shape: [1, f * h1 * w1, 128], seed: request.seed)
+        var videoPositions1 = Self.videoPositions(frames: f, height: h1, width: w1, fps: geometry.fps)
         if let reference, let encoder {
             let tokens = reference.tokens(width: w1 * 32, height: h1 * 32, encoder: encoder)
             video1 = Self.conditioned(video1, firstFrame: tokens, tokensPerFrame: h1 * w1)
         }
+        if let ending, let encoder {
+            let tokens = ending.tokens(width: w1 * 32, height: h1 * 32, encoder: encoder)
+            video1 = Self.appendingKeyframe(video1, tokens: tokens)
+            videoPositions1 = concatenated([videoPositions1, Self.keyframePositions(
+                frame: geometry.frames - 1, height: h1, width: w1, fps: geometry.fps)], axis: 1)
+        }
         let audio1 = Self.initialState(shape: [1, audioTokens, 128], seed: request.seed + 1)
         var step = 0
-        let videoPositions1 = Self.videoPositions(frames: f, height: h1, width: w1, fps: geometry.fps)
         let (videoHalf, audioLatent): (MLXArray, MLXArray)
         if request.quality, let negative = promptCache[negativePrompt] {
             // The dev transformer's guided steps, on the schedule its token count shifts.
@@ -409,28 +417,37 @@ public final class LTXVideoModel: VideoFamilyModel, LoRAAdaptable {
         }
         transformerUsed = true
 
-        // The latent upsampled ×2, in the encoder's un-normalized space.
-        let upsampled = try upsample(videoHalf, frames: f, height: h1, width: w1)
+        // The latent upsampled ×2, in the encoder's un-normalized space, the last image's tokens
+        // left behind.
+        let upsampled = try upsample(videoHalf[0..., 0 ..< f * h1 * w1, 0...], frames: f, height: h1, width: w1)
         if isCancelled() { throw GenerationError.cancelled }
 
         // Stage 2: full resolution, the upsampled latent renoised at the table's first sigma.
         let (h2, w2) = (h1 * 2, w1 * 2)
         let start = stage2Sigmas[0]
         var video2 = Self.renoised(upsampled, sigma: start, seed: request.seed + LTXConfig.stage2SeedOffset)
+        var videoPositions2 = Self.videoPositions(frames: f, height: h2, width: w2, fps: geometry.fps)
         if let reference, let encoder {
             let tokens = reference.tokens(width: w2 * 32, height: h2 * 32, encoder: encoder)
             video2 = Self.conditioned(video2, firstFrame: tokens, tokensPerFrame: h2 * w2)
         }
+        if let ending, let encoder {
+            let tokens = ending.tokens(width: w2 * 32, height: h2 * 32, encoder: encoder)
+            video2 = Self.appendingKeyframe(video2, tokens: tokens)
+            videoPositions2 = concatenated([videoPositions2, Self.keyframePositions(
+                frame: geometry.frames - 1, height: h2, width: w2, fps: geometry.fps)], axis: 1)
+        }
         encoder = nil
         let audio2 = Self.renoisedMasked(audioLatent, sigma: start, seed: request.seed + LTXConfig.stage2SeedOffset)
         // The full pipeline swaps its dev transformer for the distilled one here.
-        let (videoFull, audioFull) = try denoise(
+        let (videoTokens, audioFull) = try denoise(
             transformer: try loadedTransformer(), video: video2, audio: audio2, sigmas: stage2Sigmas,
             videoText: videoText, audioText: audioText,
-            videoPositions: Self.videoPositions(frames: f, height: h2, width: w2, fps: geometry.fps),
+            videoPositions: videoPositions2,
             audioPositions: Self.audioPositions(audioTokens), keyframeTokens: h2 * w2,
             onStep: { step += 1; progress(step, totalSteps) }, isCancelled: isCancelled
         )
+        let videoFull = videoTokens[0..., 0 ..< f * h2 * w2, 0...]
 
         // The decoders, the transformer out of the way in low-RAM mode.
         phase(.decoding)
@@ -495,6 +512,30 @@ public final class LTXVideoModel: VideoFamilyModel, LoRAAdaptable {
         let clean = concatenated([tokens.asType(state.clean.dtype), state.clean[0..., rest, 0...]], axis: 1)
         let mask = concatenated([MLXArray.zeros([1, tokensPerFrame, 1], dtype: .float32), state.mask[0..., rest, 0...]], axis: 1)
         return LTXLatentState(latent: latent, clean: clean, mask: mask, uniform: false)
+    }
+
+    /// `VideoConditionByKeyframeIndex` at strength 1: an image's tokens appended after the clip's,
+    /// in the latent and the clean latent, and preserved (mask 0, float32). They get no keyframe
+    /// marker and the attention stays unmasked; the denoised clip is the tokens before them.
+    static func appendingKeyframe(_ state: LTXLatentState, tokens: MLXArray) -> LTXLatentState {
+        let latent = concatenated([state.latent, tokens.asType(state.latent.dtype)], axis: 1)
+        let clean = concatenated([state.clean, tokens.asType(state.clean.dtype)], axis: 1)
+        let mask = concatenated([state.mask.asType(.float32), MLXArray.zeros([1, tokens.shape[1], 1], dtype: .float32)], axis: 1)
+        return LTXLatentState(latent: latent, clean: clean, mask: mask, uniform: false)
+    }
+
+    /// `_compute_keyframe_positions` for one image at pixel frame `frame`: [1, H·W, 3] float32,
+    /// as time the middle of that single pixel frame in seconds (not the eight a latent frame
+    /// covers), and the pixel centers of its cells.
+    static func keyframePositions(frame: Int, height: Int, width: Int, fps: Double) -> MLXArray {
+        let s = LTXConfig.spatialScale
+        let time = Float((0.5 + Double(frame)) / fps)
+        let rows = MLXArray(0 ..< height).asType(.float32) * Float(s) + Float(s) / 2
+        let columns = MLXArray(0 ..< width).asType(.float32) * Float(s) + Float(s) / 2
+        let timeGrid = MLXArray.ones([height, width], dtype: .float32) * time
+        let rowGrid = broadcast(rows.reshaped([height, 1]), to: [height, width])
+        let columnGrid = broadcast(columns.reshaped([1, width]), to: [height, width])
+        return stacked([timeGrid, rowGrid, columnGrid], axis: -1).reshaped([1, height * width, 3])
     }
 
     /// `compute_video_positions`: [1, F·H·W, 3] float32, the time of each latent frame's middle

@@ -20,7 +20,7 @@ enum TimeEstimate {
 
     static func plan(model: ModelDescriptor, request: GenerationRequest, history: [HistoryItem], models: [ModelDescriptor]) -> Plan {
         let work = Work(model: model, size: request.size, steps: request.steps, guidance: request.guidance, frames: request.frames,
-                        reference: request.referenceImage, quality: request.quality == true)
+                        reference: request.referenceImage, lastFrame: request.lastFrameImage != nil, quality: request.quality == true)
         let byID = Dictionary(models.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let (rates, _) = rates(for: model, work: work, lowMemory: request.lowMemory, halfPrecision: request.halfPrecision ?? false,
                                history: history, models: byID)
@@ -32,10 +32,11 @@ enum TimeEstimate {
 
     /// `count` generations with these settings, after loading the model if it is not in memory.
     static func estimate(
-        model: ModelDescriptor, size: PixelSize, steps: Int, guidance: Double, frames: Int?, reference: String?, lowMemory: Bool,
-        halfPrecision: Bool, quality: Bool = false, count: Int, isLoaded: Bool, history: [HistoryItem], models: [ModelDescriptor]
+        model: ModelDescriptor, size: PixelSize, steps: Int, guidance: Double, frames: Int?, reference: String?, lastFrame: Bool = false,
+        lowMemory: Bool, halfPrecision: Bool, quality: Bool = false, count: Int, isLoaded: Bool, history: [HistoryItem], models: [ModelDescriptor]
     ) -> Result {
-        let work = Work(model: model, size: size, steps: steps, guidance: guidance, frames: frames, reference: reference, quality: quality)
+        let work = Work(model: model, size: size, steps: steps, guidance: guidance, frames: frames, reference: reference,
+                        lastFrame: lastFrame, quality: quality)
         let byID = Dictionary(models.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let (rates, isFromHistory) = rates(for: model, work: work, lowMemory: lowMemory, halfPrecision: halfPrecision,
                                            history: history, models: byID)
@@ -54,7 +55,8 @@ enum TimeEstimate {
 
         var denoise: Double { stepUnits.reduce(0, +) }
 
-        init(model: ModelDescriptor, size: PixelSize, steps: Int, guidance: Double, frames: Int?, reference: String?, quality: Bool = false) {
+        init(model: ModelDescriptor, size: PixelSize, steps: Int, guidance: Double, frames: Int?, reference: String?,
+             lastFrame: Bool = false, quality: Bool = false) {
             let pixels = Double(size.width * size.height)
             cfg = model.supportsGuidance && guidance > 1
             if model.family.media == .video {
@@ -63,8 +65,9 @@ enum TimeEstimate {
                 // mode's first stage runs four passes a step (the prompt, the negative prompt, STG,
                 // the isolated modalities), each dearer than the token count says: on an M1 Max a
                 // 2 s 768 × 512 clip denoised in 79 s fast and 663 s in 30 Quality steps, 1.4 times
-                // what four passes of this measure would give.
-                let tokens = pixels / 1024 * Double((frames - 1) / 8 + 1)
+                // what four passes of this measure would give. A last frame's image adds a latent
+                // frame of tokens to every pass.
+                let tokens = pixels / 1024 * Double((frames - 1) / 8 + 1 + (lastFrame ? 1 : 0))
                 stepUnits = Array(repeating: (quality ? 4 * 1.4 : 1) * Self.attended(tokens / 4) / 1000, count: max(steps, 0))
                     + Array(repeating: Self.attended(tokens) / 1000, count: 3)
                 decode = pixels / 1_000_000 * Double(frames)
@@ -160,7 +163,7 @@ enum TimeEstimate {
             let request = item.request
             guard let timings = item.timings, let denoise = timings["denoise"], denoise > 0 else { return nil }
             work = Work(model: model, size: request.size, steps: request.steps, guidance: request.guidance, frames: request.frames,
-                        reference: request.referenceImage, quality: request.quality == true)
+                        reference: request.referenceImage, lastFrame: request.lastFrameImage != nil, quality: request.quality == true)
             guard work.denoise > 0, work.decode > 0 else { return nil }
             self.denoise = denoise
             // An upscale's encode is the picture's, at the result's size: it counts with the decode.

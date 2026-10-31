@@ -51,6 +51,9 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         isLTX || self == .flux2Klein || self == .flux3Klein || self == .qwenImageEdit || self == .senseNova || isUpscaler
     }
 
+    /// A second image, the frame a clip ends on (LTX), with or without the first.
+    var takesLastFrame: Bool { isLTX }
+
     /// Qwen-Image Edit only edits and SeedVR2 only upscales: they need the picture.
     var requiresReferenceImage: Bool { self == .qwenImageEdit || isUpscaler }
 
@@ -440,7 +443,7 @@ enum ModelCatalog {
         // 2 s at 768 × 512 in 97 s, peaking at 15 GB with Save memory (4-bit).
         ModelDescriptor(
             name: "LTX-2.3 · 32 GB RAM",
-            detail: "Lightricks' video model, with sound: a clip from a prompt, or from an image as its first frame. The 4-bit version.",
+            detail: "Lightricks' video model, with sound: a clip from a prompt, or from images as its first and last frames. The 4-bit version.",
             family: .ltx2,
             source: .huggingFace(repo: "dgrauet/ltx-2.3-mlx-q4"),
             revision: "56a5866d638ecfe37c54d348e88938235185c2d4",
@@ -452,7 +455,7 @@ enum ModelCatalog {
         ),
         ModelDescriptor(
             name: "LTX-2.3 · 64 GB RAM",
-            detail: "Lightricks' video model, with sound: a clip from a prompt, or from an image as its first frame. The 8-bit version, closer to the original.",
+            detail: "Lightricks' video model, with sound: a clip from a prompt, or from images as its first and last frames. The 8-bit version, closer to the original.",
             family: .ltx2,
             source: .huggingFace(repo: "dgrauet/ltx-2.3-mlx-q8"),
             revision: "6671a7572a530862d1d60ce393b5d93491e3f76b",
@@ -467,7 +470,7 @@ enum ModelCatalog {
         // new conv VAE and upscaler. The repo is gated: its licence is accepted on Hugging Face.
         ModelDescriptor(
             name: "LTX-2.5 · 32 GB RAM",
-            detail: "Lightricks' newer video model, with sound: a clip from a prompt, or from an image as its first frame; follows prompts with several shots. The 4-bit version.",
+            detail: "Lightricks' newer video model, with sound: a clip from a prompt, or from images as its first and last frames; follows prompts with several shots. The 4-bit version.",
             family: .ltx25,
             source: .huggingFace(repo: "dgrauet/ltx-2.5-mlx-q4"),
             revision: "e9a20add8c5937fcab635fb8e7a52926487a5776",

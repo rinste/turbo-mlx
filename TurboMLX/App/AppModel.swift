@@ -213,7 +213,7 @@ final class AppModel {
         guard !started else { return }
         started = true
         history.load()
-        history.pruneReferences(keeping: settings.referenceImage)
+        history.pruneReferences(keeping: [settings.referenceImage, settings.lastFrameImage].compactMap { $0 })
         loraLibrary.refresh()
         // The models folder and local model folders before the engine, which inherits the access
         // they open.
@@ -555,6 +555,9 @@ final class AppModel {
         let reference = settings.referenceImage.flatMap { name in
             FileManager.default.fileExists(atPath: HistoryStore.referenceURL(name).path) ? name : nil
         }
+        let lastFrame = settings.lastFrameImage.flatMap { name in
+            FileManager.default.fileExists(atPath: HistoryStore.referenceURL(name).path) ? name : nil
+        }
         for seed in settings.nextSeeds() {
             // An upscale has no prompt: the picture and the factor say it all.
             let request = GenerationRequest(
@@ -571,6 +574,7 @@ final class AppModel {
                 fps: isVideo ? settings.videoFrameRate : nil,
                 autoDuration: isVideo && settings.autoDuration(for: model.family) ? true : nil,
                 referenceImage: model.family.takesReferenceImage ? reference : nil,
+                lastFrameImage: model.family.takesLastFrame ? lastFrame : nil,
                 upscale: upscales ? settings.upscale : nil,
                 softness: upscales ? settings.softness : nil,
                 halfPrecision: model.family.supportsHalfPrecision && settings.halfPrecision ? true : nil,
@@ -909,6 +913,11 @@ final class AppModel {
                 FileManager.default.fileExists(atPath: HistoryStore.referenceURL(name).path) ? name : nil
             }
         }
+        if model?.family.takesLastFrame == true {
+            updated.lastFrameImage = request.lastFrameImage.flatMap { name in
+                FileManager.default.fileExists(atPath: HistoryStore.referenceURL(name).path) ? name : nil
+            }
+        }
         updated.steps = request.steps
         updated.guidance = request.guidance
         updated.seed = request.seed
@@ -1003,12 +1012,14 @@ final class AppModel {
         }
     }
 
-    /// Makes a generated image (a clip's first frame) the reference image of the next clip.
-    func useAsReference(_ item: HistoryItem) {
+    /// Makes a generated image (a clip's first frame) the reference image of the next clip, or
+    /// with `lastFrame` the image it ends on.
+    func useAsReference(_ item: HistoryItem, lastFrame: Bool = false) {
         let url = url(for: item)
         Task {
             do {
-                settings.referenceImage = try await HistoryStore.importReference(from: url)
+                let name = try await HistoryStore.importReference(from: url)
+                if lastFrame { settings.lastFrameImage = name } else { settings.referenceImage = name }
             } catch {
                 alert = AppAlert(title: "Couldn’t use the image", message: error.localizedDescription)
             }

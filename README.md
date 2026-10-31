@@ -48,7 +48,9 @@ models want more, see the table) and room on the disk for the models you pick.
   for the models that use it, *Guidance*: how closely the picture follows the prompt.
 - **A starting picture.** Models that can use one show a *Reference Image* box above the prompt:
   drop a picture there from Finder or from the history. Image models change it as the prompt
-  says; video models use it as the first frame of the clip. Qwen-Image Edit always needs one.
+  says; video models use it as the first frame of the clip, and LTX also takes a last frame: give
+  it both and the prompt says how the clip gets from one to the other. Qwen-Image Edit always
+  needs one.
 - **Videos.** Choose the duration and the frame rate, or let LTX-2.5 pick the length the prompt
   describes. *Fast* runs the distilled model (8 steps, a few minutes for 5 seconds); *Quality*
   runs the full model with guidance and a *Negative Prompt* (30 steps of four passes each, about
@@ -120,9 +122,9 @@ the disk.
 | [Qwen-Image 2512](https://huggingface.co/mflux-community/qwen-image-2512-mflux-q4) | 32 GB | 27.6 GB | rich scenes and long text · 20B, 4-bit · 20 steps · Apache 2.0 |
 | [Qwen-Image Edit 2511](https://huggingface.co/mflux-community/qwen-image-edit-2511-mflux-q4) | 32 GB | 29 GB | changes a picture as the prompt says and keeps the rest · 20B, 4-bit · 20 steps · Apache 2.0 |
 | [SenseNova-U1.5](https://huggingface.co/mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit) | 16 GB | 11.8 GB | photos, posters and infographics with legible text; also edits a picture as the prompt says · 8B + 8B, 4-bit · 8 steps · Apache 2.0 |
-| [LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q4) | 32 GB | 28.5 GB | video with sound, from a prompt or from a picture as the first frame · 22B, 4-bit · LTX-2 Community |
+| [LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q4) | 32 GB | 28.5 GB | video with sound, from a prompt or from pictures as the first and last frames · 22B, 4-bit · LTX-2 Community |
 | [LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q8) | 64 GB | 37.8 GB | the 8-bit version, closer to the original |
-| [LTX-2.5](https://huggingface.co/dgrauet/ltx-2.5-mlx-q4) | 32 GB | 28.8 GB | Lightricks' newer model: video with sound, several shots in one prompt, from a prompt or a picture · 22B, 4-bit · LTX-2 Community, gated: accept its terms on Hugging Face |
+| [LTX-2.5](https://huggingface.co/dgrauet/ltx-2.5-mlx-q4) | 32 GB | 28.8 GB | Lightricks' newer model: video with sound, several shots in one prompt, from a prompt or pictures as the first and last frames · 22B, 4-bit · LTX-2 Community, gated: accept its terms on Hugging Face |
 | [SeedVR2 Upscaler 3B](https://huggingface.co/numz/SeedVR2_comfyUI) | 16 GB | 7.3 GB | enlarges a picture 2–4× with sharper, faithful detail, up to 4096 × 4096, no prompt · Apache 2.0 |
 
 **Which one?** For a first try, Z-Image Turbo (4-bit) or SenseNova-U1.5, which both run on 16 GB
