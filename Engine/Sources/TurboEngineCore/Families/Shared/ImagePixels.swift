@@ -12,6 +12,16 @@ enum ImagePixels {
         return CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
     }
 
+    /// The EXIF orientation of the first image at `path` (`kCGImagePropertyOrientation`, 1 to 8),
+    /// 1 (upright) when it has none: `load` gives the pixels as stored, not turned.
+    static func orientation(_ path: String) -> Int {
+        guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let orientation = properties[kCGImagePropertyOrientation] as? NSNumber
+        else { return 1 }
+        return orientation.intValue
+    }
+
     /// The image as RGBA bytes on an sRGB canvas, transparency over white.
     static func rgbaBytes(_ image: CGImage) -> [UInt8] {
         let (width, height) = (image.width, image.height)

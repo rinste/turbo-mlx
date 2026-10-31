@@ -5,9 +5,9 @@ import TurboEngineCore
 /// The LTX-2.3 / LTX-2.5 port against dgrauet's ltx-2-mlx on a real pack
 /// (Engine/Fixtures/make_ltx_fixture.py): each stage fed the reference's own inputs, so an error
 /// shows where it starts. The tokenizer, Gemma's states, the connector, the noise and positions,
-/// the first transformer pass of each stage, both loops (2.5's stage 1 ancestral, with its noise),
-/// the upsampler, the image encoder (image-to-video, and an image the clip ends on, with the states
-/// it is put in), the video decoder, the audio decoder and the vocoder.
+/// the first transformer pass of each stage, both loops (2.5's ancestral, with their noise), the
+/// upsampler, the image's pixels and its encoder (image-to-video, and an image the clip ends on,
+/// with the states it is put in), the video decoder, the audio decoder and the vocoder.
 enum VerifyLTX {
     static func run(fixture: URL, json: [String: Any], references: [String: MLXArray]) throws -> Bool {
         func reference(_ name: String) throws -> MLXArray {
@@ -111,24 +111,43 @@ enum VerifyLTX {
             let got = concatenated([MLXArray.ones([1, count, 1]), MLXArray.zeros([1, tokens - count, 1])], axis: 1)
             ok = Verify.report("keyframes mask \(stage)", got: got, want: wanted.asType(.float32)) && ok
         }
-        // 2.5: the ancestral noise, video then audio at each of stage 1's steps but the last.
-        var draws: [MLXArray] = []
-        while let draw = references["ancestral_noise_\(draws.count)"] { draws.append(draw) }
-        if !draws.isEmpty {
-            let got = LTXVideoModel.ancestralNoise(shapes: draws.map(\.shape), seed: seed + LTXConfig.ancestralSeedOffset)
+        // 2.5: the ancestral noise, video then audio at each step but the last, of stage 1 and
+        // (since ltx-2-mlx 0.16.1) of stage 2, each from its own seed.
+        for (prefix, offset) in [("", LTXConfig.ancestralSeedOffset), ("stage2_", LTXConfig.stage2AncestralSeedOffset)] {
+            var draws: [MLXArray] = []
+            while let draw = references["\(prefix)ancestral_noise_\(draws.count)"] { draws.append(draw) }
+            guard !draws.isEmpty else { continue }
+            let got = LTXVideoModel.ancestralNoise(shapes: draws.map(\.shape), seed: seed + offset)
             for (index, draw) in draws.enumerated() where index < 2 || index == draws.count - 1 {
-                ok = Verify.report("ancestral noise \(index)", got: got[index], want: draw) && ok
+                ok = Verify.report("\(prefix.isEmpty ? "" : "stage 2 ")ancestral noise \(index)", got: got[index], want: draw) && ok
             }
         }
+        // The seeds the reference's ancestral loops were given, against the pipeline's.
+        if ancestral {
+            let wanted = [references["stage1_noise_seed"], references["stage2_noise_seed"]].map { $0?.item(Int.self) }
+            let got = [seed + LTXConfig.ancestralSeedOffset, seed + LTXConfig.stage2AncestralSeedOffset]
+            let same = wanted == got.map { Optional($0) }
+            print("  \(same ? "✓" : "✗") ancestral seeds    \(got.map(String.init).joined(separator: ", "))"
+                  + (same ? "" : ", the reference's \(wanted.map { $0.map(String.init) ?? "none" }.joined(separator: ", "))"))
+            ok = same && ok
+        }
 
-        // 5. The image encoder (image-to-video fixtures, the first frame's image and the last's):
-        // in bfloat16 its convolutions carry MLX's conv3d rounding, as the decoder's do (shown); in
-        // float32 the math decides.
+        // 5. The image's pixels at each stage's size, from the fixture's own picture, and the
+        // image encoder on the reference's pixels (image-to-video fixtures, the first frame's
+        // image and the last's): in bfloat16 its convolutions carry MLX's conv3d rounding, as the
+        // decoder's do (shown); in float32 the math decides.
         let float32Tokens = try? loadArrays(url: fixture.appending(path: "image_tokens_f32.safetensors"))
         for stage in [1, 2] {
             for slot in ["image", "last_image"] where references["stage\(stage)_\(slot)_pixels"] != nil {
                 let label = slot == "image" ? "image tokens \(stage)" : "last image tokens \(stage)"
                 let pixels = try reference("stage\(stage)_\(slot)_pixels")
+                let pixelsLabel = slot == "image" ? "image pixels \(stage)" : "last image pixels \(stage)"
+                if let path = json[slot] as? String, FileManager.default.fileExists(atPath: path) {
+                    let got = try LTXVideoModel.imagePixels(path: path, width: pixels.shape[3], height: pixels.shape[2])
+                    ok = Verify.report(pixelsLabel, got: got, want: pixels) && ok
+                } else {
+                    print("  · \(pixelsLabel): the fixture's picture is no longer at \(json[slot] as? String ?? "?")")
+                }
                 let tokens = try model.imageTokens(pixels: pixels)
                 ok = Verify.report(label, got: tokens, want: try reference("stage\(stage)_\(slot)_tokens"),
                                    counts: float32Tokens == nil) && ok
@@ -200,6 +219,31 @@ enum VerifyLTX {
             ok = Verify.report("  step \(step) audio", got: pass.audio, want: try reference("step\(step)_audio_velocity")) && ok
         }
 
+        // Every step's update on the reference's own pass (its input, velocity and noise draws)
+        // against the reference's next state: the step's math alone, without the passes' rounding.
+        for (stage, steps) in [(1, 0 ..< 8), (2, 8 ..< 11)] where references["step\(steps.lowerBound)_video_in"] != nil {
+            var got: [MLXArray] = []
+            var want: [MLXArray] = []
+            let prefix = stage == 1 ? "" : "stage2_"
+            for step in steps {
+                let last = step == steps.upperBound - 1
+                let draw = 2 * (step - steps.lowerBound)
+                let noise: (video: MLXArray, audio: MLXArray)? = ancestral && !last
+                    ? (try reference("\(prefix)ancestral_noise_\(draw)"), try reference("\(prefix)ancestral_noise_\(draw + 1)")) : nil
+                let next = LTXVideoModel.loopStep(
+                    video: (try reference("step\(step)_video_in"), try reference("stage\(stage)_video_clean"),
+                            try reference("stage\(stage)_video_mask"), try reference("step\(step)_video_velocity")),
+                    audio: (try reference("step\(step)_audio_in"), try reference("stage\(stage)_audio_clean"),
+                            try reference("stage\(stage)_audio_mask"), try reference("step\(step)_audio_velocity")),
+                    sigma: sigmaTable[step], next: last ? 0 : sigmaTable[step + 1], ancestral: ancestral, noise: noise
+                )
+                got += [next.video.flattened(), next.audio.flattened()]
+                want += [try reference(last ? "stage\(stage)_video_out" : "step\(step + 1)_video_in").flattened(),
+                         try reference(last ? "stage\(stage)_audio_out" : "step\(step + 1)_audio_in").flattened()]
+            }
+            ok = Verify.report("stage \(stage) updates", got: concatenated(got), want: concatenated(want)) && ok
+        }
+
         // 7. The upsampler.
         let upsampled = try model.upsampleLatent(upsampleIn)
         ok = Verify.report("upsampler", got: upsampled, want: try reference("upsample_out")) && ok
@@ -233,10 +277,16 @@ enum VerifyLTX {
             video: (try reference("stage2_video_init"), try reference("stage2_video_clean"), try reference("stage2_video_mask")),
             audio: (try reference("stage2_audio_init"), try reference("stage2_audio_clean"), try reference("stage2_audio_mask")),
             sigmas: LTXConfig.stage2Sigmas, videoText: wantedVideoText, audioText: wantedAudioText,
-            videoPositions: positions2.video, audioPositions: positions2.audio, keyframeTokens: keyframes.stage2
+            videoPositions: positions2.video, audioPositions: positions2.audio, keyframeTokens: keyframes.stage2,
+            ancestralSeed: ancestral ? seed + LTXConfig.stage2AncestralSeedOffset : nil
         )
-        ok = Verify.report("stage 2 video", got: stage2.video, want: try reference("stage2_video_out")) && ok
-        ok = Verify.report("stage 2 audio", got: stage2.audio, want: try reference("stage2_audio_out")) && ok
+        // LTX-2.5's stage 2, ancestral since ltx-2-mlx 0.16.1, carries the passes' rounding much
+        // further than the Euler loop: its three large steps are each renoised (a nudge of one unit
+        // in the last place of its input moves its output by up to 28%, the Euler loop's by 9.5%).
+        // Its whole loop is shown, as stage 1's; the updates, bit for bit on the reference's
+        // passes, and the passes themselves decide.
+        ok = Verify.report("stage 2 video", got: stage2.video, want: try reference("stage2_video_out"), counts: !ancestral) && ok
+        ok = Verify.report("stage 2 audio", got: stage2.audio, want: try reference("stage2_audio_out"), counts: !ancestral) && ok
 
         // 9. The decoders.
         // In bfloat16 the decoder's twenty-odd convolutions carry the rounding of MLX's conv3d,

@@ -9,38 +9,107 @@ import MLX
 
 /// A reference image: read once, then resized and cropped to each stage's size and encoded
 /// (`load_image_and_preprocess` + `VideoEncoder.encode`, as `combined_image_conditionings`
-/// builds the first frame's tokens).
+/// builds the first frame's tokens). Read as ltx-2-mlx 0.16.1's `decode_image` reads it: turned
+/// by its EXIF orientation (the three rotations it applies, 3, 6 and 8), in sRGB, then cropped to
+/// even sizes as its H.264 round trip begins (the round trip itself is skipped:
+/// docs/native-engine.md).
 struct LTXReferenceImage {
-    let image: CGImage
+    /// RGB bytes, `height` rows of `width`.
+    let rgb: [UInt8]
+    let width: Int
+    let height: Int
 
     init(path: String) throws {
         guard let image = ImagePixels.load(path) else { throw LTXError.unreadableImage(path) }
-        self.image = image
+        var (width, height) = (image.width, image.height)
+        var rgb = ImagePixels.crop(ImagePixels.rgbaBytes(image), rgbaWidth: width, left: 0, top: 0, width: width, height: height)
+        (rgb, width, height) = Self.upright(rgb, width: width, height: height, orientation: ImagePixels.orientation(path))
+        // libx264's 4:2:0 wants even sizes: the last row and column of odd ones go (a picture one
+        // pixel thin is left whole, as `preprocess` leaves it).
+        let (evenWidth, evenHeight) = (width / 2 * 2, height / 2 * 2)
+        if min(width, height) >= 2, (evenWidth, evenHeight) != (width, height) {
+            rgb = (0 ..< evenHeight).flatMap { y in rgb[(y * width * 3) ..< (y * width + evenWidth) * 3] }
+            (width, height) = (evenWidth, evenHeight)
+        }
+        (self.rgb, self.width, self.height) = (rgb, width, height)
+    }
+
+    /// `_ORIENTATION_TO_ROTATION`: 3 turns the picture half round, 6 a quarter clockwise, 8 a
+    /// quarter counterclockwise (PIL's `rotate(180 / 270 / 90, expand=True)`); the mirrored
+    /// orientations are left as they are, as the reference leaves them.
+    static func upright(_ rgb: [UInt8], width: Int, height: Int, orientation: Int) -> ([UInt8], Int, Int) {
+        guard [3, 6, 8].contains(orientation) else { return (rgb, width, height) }
+        let (outWidth, outHeight) = orientation == 3 ? (width, height) : (height, width)
+        var out = [UInt8](repeating: 0, count: rgb.count)
+        for y in 0 ..< outHeight {
+            for x in 0 ..< outWidth {
+                let (sourceX, sourceY) = switch orientation {
+                case 3: (width - 1 - x, height - 1 - y)
+                case 6: (y, height - 1 - x)
+                default: (width - 1 - y, x)
+                }
+                let (target, source) = ((y * outWidth + x) * 3, (sourceY * width + sourceX) * 3)
+                out[target] = rgb[source]
+                out[target + 1] = rgb[source + 1]
+                out[target + 2] = rgb[source + 2]
+            }
+        }
+        return (out, outWidth, outHeight)
     }
 
     /// The first frame's latent tokens [1, h·w, 128] at `width` × `height` pixels.
     func tokens(width: Int, height: Int, encoder: LTXVideoEncoder) -> MLXArray {
-        let rgb = Self.coverAndCrop(image, width: width, height: height)
-        let pixels = (rgb.asType(.float32) / Float(255)) * Float(2) - Float(1)
-        let tensor = pixels.transposed(2, 0, 1).reshaped([1, 3, 1, height, width]).asType(.bfloat16)
-        let latent = encoder.encode(tensor)
+        let latent = encoder.encode(pixels(width: width, height: height).expandedDimensions(axis: 2))
         eval(latent)
         return latent.transposed(0, 2, 3, 4, 1).reshaped([1, -1, 128])
     }
 
-    /// `resize_and_center_crop`: scaled to cover `width` × `height` (a Lanczos-class filter), the
-    /// middle cut out. [H, W, 3] uint8.
-    static func coverAndCrop(_ image: CGImage, width: Int, height: Int) -> MLXArray {
-        let scale = max(Double(height) / Double(image.height), Double(width) / Double(image.width))
-        let scaledWidth = Int((Double(image.width) * scale).rounded(.up))
-        let scaledHeight = Int((Double(image.height) * scale).rounded(.up))
-        let rgba = ImagePixels.rgbaBytes(image)
-        let resized = scaledWidth == image.width && scaledHeight == image.height
-            ? rgba
-            : ImagePixels.resize(rgba, width: image.width, height: image.height, toWidth: scaledWidth, toHeight: scaledHeight)
-        let rgb = ImagePixels.crop(resized, rgbaWidth: scaledWidth, left: (scaledWidth - width) / 2, top: (scaledHeight - height) / 2,
-                                   width: width, height: height)
-        return MLXArray(rgb, [height, width, 3])
+    /// `resize_and_center_crop` then `normalize_images`: scaled to cover `width` × `height` on
+    /// float values with PyTorch's bilinear interpolation (`align_corners=False`, no
+    /// antialiasing), rows first, the middle cut out, `x / 127.5 − 1`; float32 operations in the
+    /// reference's order. [1, 3, height, width] bfloat16.
+    func pixels(width: Int, height: Int) -> MLXArray {
+        let scale = max(Double(height) / Double(self.height), Double(width) / Double(self.width))
+        let scaledWidth = Int((Double(self.width) * scale).rounded(.up))
+        let scaledHeight = Int((Double(self.height) * scale).rounded(.up))
+        // Only the rows and columns the crop keeps: each depends on its own coordinate alone.
+        let top = (scaledHeight - height) / 2
+        let left = (scaledWidth - width) / 2
+        let rows = Self.bilinearTaps(from: self.height, to: scaledHeight, keeping: top ..< top + height)
+        let columns = Self.bilinearTaps(from: self.width, to: scaledWidth, keeping: left ..< left + width)
+        let rowLength = self.width * 3
+        var tall = [Float](repeating: 0, count: height * rowLength)
+        for (y, tap) in rows.enumerated() {
+            let (first, second, output) = (tap.first * rowLength, tap.second * rowLength, y * rowLength)
+            let firstWeight = 1 - tap.weight
+            for value in 0 ..< rowLength {
+                tall[output + value] = Float(rgb[first + value]) * firstWeight + Float(rgb[second + value]) * tap.weight
+            }
+        }
+        var normalized = [Float](repeating: 0, count: height * width * 3)
+        for y in 0 ..< height {
+            for (x, tap) in columns.enumerated() {
+                let firstWeight = 1 - tap.weight
+                let (first, second, output) = (y * rowLength + tap.first * 3, y * rowLength + tap.second * 3, (y * width + x) * 3)
+                for channel in 0 ..< 3 {
+                    let value = tall[first + channel] * firstWeight + tall[second + channel] * tap.weight
+                    normalized[output + channel] = value / 127.5 - 1
+                }
+            }
+        }
+        return MLXArray(normalized, [height, width, 3]).transposed(2, 0, 1).expandedDimensions(axis: 0).asType(.bfloat16)
+    }
+
+    /// `_bilinear_resize_axis` along one axis of `source` samples resized to `size`, for the
+    /// output indices in `range`: the two neighbors at half-pixel centers (clamped at 0 and at
+    /// the edge) and the second one's weight, in float32 as the reference computes them.
+    static func bilinearTaps(from source: Int, to size: Int, keeping range: Range<Int>) -> [(first: Int, second: Int, weight: Float)] {
+        let scale = Float(Double(source) / Double(size))
+        return range.map { index in
+            let position = max((Float(index) + 0.5) * scale - 0.5, 0)
+            let first = min(Int(position.rounded(.down)), source - 1)
+            return (first, min(first + 1, source - 1), position - Float(first))
+        }
     }
 }
 

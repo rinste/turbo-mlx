@@ -14,8 +14,9 @@ mlx-community/gemma-3-12b-it-4bit (2.5 packs carry their own Gemma 4). With --im
 from the picture (image-to-video) and the encoder's tokens for both stages are recorded as well.
 With --last-image, the clip ends on that picture, which the pipeline binds to the last frame as a
 keyframe (`VideoConditionByKeyframeIndex`: its tokens appended after the clip's, at their own
-positions); its tokens and positions are recorded too. On 2.5 stage 1 runs the ancestral sampler:
-its noise draws are recorded too.
+positions); its tokens and positions are recorded too. --crf 0 (the default) skips the image's
+H.264 round trip, as the port does, but keeps the crop to even sizes it begins with. On 2.5 both
+stages run the ancestral sampler, each on its own seed: their noise draws are recorded too.
 
 With --lora <fixture>/lora, the run stops at the first transformer pass instead, after writing two
 random LoRA files there (blocks 0, 1 and the last, and the layers around them), one keyed as
@@ -37,6 +38,7 @@ guiders made of them, both stages' outputs and the latents the decoders get.
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 from pathlib import Path
 
@@ -304,7 +306,8 @@ def main() -> None:
     parser.add_argument("--image")
     parser.add_argument("--last-image", help="the picture the clip ends on (a keyframe at the last frame)")
     parser.add_argument("--crf", type=int, default=0,
-                        help="H.264 round trip of the image before encoding (upstream: 33; 0 compares the ports on the same pixels)")
+                        help="H.264 round trip of the image before encoding (upstream: 33 before LTX-2.4, 18 from 2.4; "
+                             "0 compares the ports on the same pixels)")
     parser.add_argument("--lora", help="write LoRA references to this folder and stop after the first pass")
     parser.add_argument("--quality", help="write the full pipeline's references to this folder instead")
     parser.add_argument("--quality-steps", type=int, default=4, help="the full pipeline's guided steps (default 4)")
@@ -391,17 +394,31 @@ def main() -> None:
     distilled.denoise_loop = loop_hook(distilled.denoise_loop)
     distilled.euler_ancestral_denoising_loop = loop_hook(distilled.euler_ancestral_denoising_loop)
 
-    # The ancestral noise, drawn video then audio at every step but the last.
+    # The ancestral noise, drawn video then audio at every step but the last: stage 1's as
+    # ancestral_noise_<n>, stage 2's (2.5, since 0.16.1) as stage2_ancestral_noise_<n>.
     ancestral_step = diffusion_steps.EulerAncestralDiffusionStep.step
-    draws = {"count": 0}
+    draws: dict[str, int] = {}
 
     def ancestral_hook(self, sample, denoised_sample, sigmas, step_index, noise=None):
         if noise is not None:
-            record(f"ancestral_noise_{draws['count']}", noise)
-            draws["count"] += 1
+            prefix = "" if loops["count"] <= 1 else f"stage{loops['count']}_"
+            index = draws.get(prefix, 0)
+            record(f"{prefix}ancestral_noise_{index}", noise)
+            draws[prefix] = index + 1
         return ancestral_step(self, sample, denoised_sample, sigmas, step_index, noise=noise)
 
     diffusion_steps.EulerAncestralDiffusionStep.step = ancestral_hook
+
+    # Without the H.264 round trip (--crf 0, as the port), the crop to even sizes it makes first
+    # (libx264's 4:2:0) is kept: the port crops the same way.
+    preprocess = media_io.preprocess
+
+    def preprocess_hook(image, crf):
+        if crf == 0:
+            return image[: image.shape[0] // 2 * 2, : image.shape[1] // 2 * 2]
+        return preprocess(image, crf)
+
+    media_io.preprocess = preprocess_hook
 
     load_image = media_io.load_image_and_preprocess
     images = {"count": 0}
@@ -544,6 +561,7 @@ def main() -> None:
         "last_image": str(Path(args.last_image).resolve()) if args.last_image else None,
         "crf": args.crf,
         "mlx": mx.__version__,
+        "ltx_2_mlx": importlib.metadata.version("ltx-pipelines-mlx"),
     }, indent=2))
     print(f"saved {len(refs)} references to {out}")
     for name, value in sorted(refs.items()):

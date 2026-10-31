@@ -96,10 +96,14 @@ every transformer pass matches within 1e-4 given the reference's inputs, the con
 bit-identical, the encoder and decoder match in float32; at 768 × 512 × 49 frames the whole clip
 through the app's protocol is the same as the reference's (PSNR 32.6 dB on average through H.264),
 in the same 97 s, peaking at 15 GB with *Save memory* (a 5-second clip: 231 s, 17 GB). Two
-known differences: the reference first
-compresses a reference image with H.264 (CRF 33) to match its training clips, which the port does
-not (VideoToolbox's round trip shifts the colors); and mlx-swift's conv3d, older than the
-reference's, rounds the VAE's bfloat16 convolutions differently (about 40 dB between the two).
+known differences: the reference first compresses a reference image with H.264 (CRF 33; 18 from
+LTX-2.4 on) to match its training clips, which the port does not (VideoToolbox's round trip
+shifts the colors; the port keeps only the crop to even sizes it begins with); and mlx-swift's
+conv3d, older than the reference's, rounds the VAE's bfloat16 convolutions differently (about
+40 dB between the two). On 31 October the port moved to ltx-2-mlx 0.16.1: LTX-2.5's distilled
+stage 2 samples with the ancestral sampler like stage 1, and a conditioning picture is prepared
+as Lightricks' code prepares it (EXIF orientation, sRGB, bilinear resize on floats), the same
+pixels as the reference's within ColorSync's rounding (Engine/README.md).
 
 On 29 September the engine moved to mlx-swift 0.32.2, whose MLX core is the one mflux and
 ltx-2-mlx run, and that second difference went away: LTX's decoders match the reference exactly in

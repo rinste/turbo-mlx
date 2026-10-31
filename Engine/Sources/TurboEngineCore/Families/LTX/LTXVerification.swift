@@ -110,12 +110,40 @@ extension LTXVideoModel {
         )
     }
 
+    /// One loop step from its pass's velocities (the reference's own, so that only the update is
+    /// checked): x0, the preserved tokens put back, the Euler step or (`ancestral`) the ancestral
+    /// one with the given draws (none on the last step). The next video and audio states.
+    public static func loopStep(
+        video: (latent: MLXArray, clean: MLXArray, mask: MLXArray, velocity: MLXArray),
+        audio: (latent: MLXArray, clean: MLXArray, mask: MLXArray, velocity: MLXArray),
+        sigma: Double, next: Double, ancestral: Bool, noise: (video: MLXArray, audio: MLXArray)?
+    ) -> (video: MLXArray, audio: MLXArray) {
+        func state(_ part: (latent: MLXArray, clean: MLXArray, mask: MLXArray, velocity: MLXArray)) -> LTXLatentState {
+            LTXLatentState(latent: part.latent, clean: part.clean, mask: part.mask,
+                           uniform: part.mask.asType(.float32).min().item(Float.self) == 1)
+        }
+        let (videoState, audioState) = (state(video), state(audio))
+        let pass = passSigmas(sigma, video: videoState)
+        let nextVideo = update(video.latent, velocity: video.velocity, sigma: pass.video, state: videoState, from: sigma, to: next,
+                               ancestral: ancestral, noise: noise?.video)
+        let nextAudio = update(audio.latent, velocity: audio.velocity, sigma: pass.audio, state: audioState, from: sigma, to: next,
+                               ancestral: ancestral, noise: noise?.audio)
+        eval(nextVideo, nextAudio)
+        return (nextVideo, nextAudio)
+    }
+
     /// [1, 128, F, H, W] stage-1 latent → normalized [1, 128, F, 2H, 2W].
     public func upsampleLatent(_ latent: MLXArray) throws -> MLXArray {
         let (f, h, w) = (latent.shape[2], latent.shape[3], latent.shape[4])
         let tokens = latent.transposed(0, 2, 3, 4, 1).reshaped([1, -1, 128])
         return try upsampleForVerification(tokens, frames: f, height: h, width: w)
             .reshaped([1, f, h * 2, w * 2, 128]).transposed(0, 4, 1, 2, 3)
+    }
+
+    /// A conditioning picture's pixels at `width` × `height`, as the pipeline prepares them for
+    /// the encoder: [1, 3, H, W] bfloat16 in [-1, 1].
+    public static func imagePixels(path: String, width: Int, height: Int) throws -> MLXArray {
+        try LTXReferenceImage(path: path).pixels(width: width, height: height)
     }
 
     /// The first frame's tokens for given pixels [1, 3, H, W] in [-1, 1]; `float32` upcasts the

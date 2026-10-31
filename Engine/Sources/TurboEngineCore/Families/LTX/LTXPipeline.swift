@@ -79,10 +79,11 @@ extension Gemma3TextModel: LTXTextTower {}
 /// ×2, three steps at full resolution, then the video and audio decoders. A reference image pins
 /// the first frame (`VideoConditionByLatentIndex`) in both stages, and a last image guides the end
 /// (`VideoConditionByKeyframeIndex`: its tokens follow the clip's). LTX-2.5 packs carry their own
-/// Gemma 4, run stage 1 with the ancestral sampler and mark the first latent frame as a keyframe.
-/// With `quality`, `TI2VidTwoStagesPipeline` instead: stage 1 runs the dev transformer with
-/// guidance (`guidedDenoise`), stage 2 the distilled one (the reference's own low-memory path,
-/// equivalent to its dev transformer with the distilled LoRA), and the sound is stage 1's.
+/// Gemma 4, run both stages with the ancestral sampler (each on its own noise seed) and mark the
+/// first latent frame as a keyframe. With `quality`, `TI2VidTwoStagesPipeline` instead: stage 1
+/// runs the dev transformer with guidance (`guidedDenoise`), stage 2 the distilled one (the
+/// reference's own low-memory path, equivalent to its dev transformer with the distilled LoRA) on
+/// the deterministic loop, and the sound is stage 1's.
 public final class LTXVideoModel: VideoFamilyModel, LoRAAdaptable {
     public let config: LTXConfig
     public let pack: URL
@@ -439,12 +440,14 @@ public final class LTXVideoModel: VideoFamilyModel, LoRAAdaptable {
         }
         encoder = nil
         let audio2 = Self.renoisedMasked(audioLatent, sigma: start, seed: request.seed + LTXConfig.stage2SeedOffset)
-        // The full pipeline swaps its dev transformer for the distilled one here.
+        // The full pipeline swaps its dev transformer for the distilled one here. LTX-2.5's
+        // distilled stage 2 is ancestral too, on noise of its own; the full pipeline's is not.
         let (videoTokens, audioFull) = try denoise(
             transformer: try loadedTransformer(), video: video2, audio: audio2, sigmas: stage2Sigmas,
             videoText: videoText, audioText: audioText,
             videoPositions: videoPositions2,
             audioPositions: Self.audioPositions(audioTokens), keyframeTokens: h2 * w2,
+            ancestralSeed: config.isLTX25 && !request.quality ? request.seed + LTXConfig.stage2AncestralSeedOffset : nil,
             onStep: { step += 1; progress(step, totalSteps) }, isCancelled: isCancelled
         )
         let videoFull = videoTokens[0..., 0 ..< f * h2 * w2, 0...]
@@ -566,7 +569,7 @@ public final class LTXVideoModel: VideoFamilyModel, LoRAAdaptable {
     // MARK: Denoising
 
     /// `denoise_loop`: x0 from the velocity, the preserved tokens put back, an Euler step. With an
-    /// `ancestralSeed`, `euler_ancestral_denoising_loop` instead (LTX-2.5's stage 1): each step goes
+    /// `ancestralSeed`, `euler_ancestral_denoising_loop` instead (LTX-2.5's stages): each step goes
     /// down past the next sigma and is renoised back up with noise drawn from that seed, video then
     /// audio; the last step is x0 itself. `keyframeTokens` get the transformer's keyframe marker.
     private func denoise(
@@ -579,42 +582,50 @@ public final class LTXVideoModel: VideoFamilyModel, LoRAAdaptable {
         var noise = ancestralSeed.map { LTXNoiseSequence(seed: $0) }
         for index in 0 ..< sigmas.count - 1 {
             let (sigma, next) = (sigmas[index], sigmas[index + 1])
-            let sigmaArray = MLXArray([Float(sigma)]).asType(.bfloat16)
-            let videoTimesteps: MLXArray? = video.uniform ? nil : (video.mask * Float(sigma)).squeezed(axis: -1)
+            let pass = Self.passSigmas(sigma, video: video)
             let (videoVelocity, audioVelocity) = transformer(
-                video: videoX, audio: audioX, sigma: sigmaArray, videoTimesteps: videoTimesteps,
+                video: videoX, audio: audioX, sigma: pass.sigma, videoTimesteps: pass.videoTimesteps,
                 videoText: videoText, audioText: audioText, videoPositions: videoPositions, audioPositions: audioPositions,
                 keyframeTokens: keyframeTokens
             )
-            let videoSigma = (videoTimesteps?.expandedDimensions(axis: -1) ?? sigmaArray.reshaped([1, 1, 1])).asType(.float32)
-            let audioSigma = sigmaArray.reshaped([1, 1, 1]).asType(.float32)
-            var videoX0 = (videoX.asType(.float32) - videoSigma * videoVelocity.asType(.float32)).asType(videoX.dtype)
-            var audioX0 = (audioX.asType(.float32) - audioSigma * audioVelocity.asType(.float32)).asType(audioX.dtype)
-            videoX0 = videoX0 * video.mask + video.clean * (1 - video.mask)
-            audioX0 = audioX0 * audio.mask + audio.clean * (1 - audio.mask)
-            if noise != nil {
-                if next == 0 {
-                    videoX = videoX0
-                    audioX = audioX0
-                } else {
-                    let videoNoise = noise!.normal(videoX.shape)
-                    let audioNoise = noise!.normal(audioX.shape)
-                    var videoNext = Self.ancestralStep(videoX, x0: videoX0, sigma: sigma, next: next, noise: videoNoise)
-                    var audioNext = Self.ancestralStep(audioX, x0: audioX0, sigma: sigma, next: next, noise: audioNoise)
-                    videoNext = videoNext * video.mask + video.clean * (1 - video.mask)
-                    audioNext = audioNext * audio.mask + audio.clean * (1 - audio.mask)
-                    videoX = videoNext.asType(videoX.dtype)
-                    audioX = audioNext.asType(audioX.dtype)
-                }
-            } else {
-                videoX = Self.eulerStep(videoX, x0: videoX0, sigma: sigma, next: next)
-                audioX = Self.eulerStep(audioX, x0: audioX0, sigma: sigma, next: next)
-            }
+            let ancestral = noise != nil
+            let videoNoise = ancestral && next != 0 ? noise!.normal(videoX.shape) : nil
+            let audioNoise = ancestral && next != 0 ? noise!.normal(audioX.shape) : nil
+            videoX = Self.update(videoX, velocity: videoVelocity, sigma: pass.video, state: video, from: sigma, to: next,
+                                 ancestral: ancestral, noise: videoNoise)
+            audioX = Self.update(audioX, velocity: audioVelocity, sigma: pass.audio, state: audio, from: sigma, to: next,
+                                 ancestral: ancestral, noise: audioNoise)
             eval(videoX, audioX)
             onStep()
             if isCancelled() { throw GenerationError.cancelled }
         }
         return (videoX, audioX)
+    }
+
+    /// A pass's sigma (bfloat16, as the reference sends it) and, where some video tokens are
+    /// preserved, the per-token timesteps `mask · σ`; then the sigmas `X0Model` takes x0 with,
+    /// in float32: the video's per token when it has timesteps.
+    static func passSigmas(_ sigma: Double, video: LTXLatentState)
+        -> (sigma: MLXArray, videoTimesteps: MLXArray?, video: MLXArray, audio: MLXArray) {
+        let sigmaArray = MLXArray([Float(sigma)]).asType(.bfloat16)
+        let videoTimesteps: MLXArray? = video.uniform ? nil : (video.mask * Float(sigma)).squeezed(axis: -1)
+        let videoSigma = (videoTimesteps?.expandedDimensions(axis: -1) ?? sigmaArray.reshaped([1, 1, 1])).asType(.float32)
+        return (sigmaArray, videoTimesteps, videoSigma, sigmaArray.reshaped([1, 1, 1]).asType(.float32))
+    }
+
+    /// What a step of `denoise` makes of its pass's velocity: x0 (`X0Model`), the preserved tokens
+    /// put back, then the Euler step; or, `ancestral`, the ancestral step with the step's `noise`
+    /// and the preserved tokens put back again, or x0 itself on the last step (no noise).
+    static func update(
+        _ x: MLXArray, velocity: MLXArray, sigma: MLXArray, state: LTXLatentState, from current: Double, to next: Double,
+        ancestral: Bool, noise: MLXArray?
+    ) -> MLXArray {
+        var x0 = (x.asType(.float32) - sigma * velocity.asType(.float32)).asType(x.dtype)
+        x0 = x0 * state.mask + state.clean * (1 - state.mask)
+        guard ancestral else { return eulerStep(x, x0: x0, sigma: current, next: next) }
+        guard let noise else { return x0 }
+        let stepped = ancestralStep(x, x0: x0, sigma: current, next: next, noise: noise)
+        return (stepped * state.mask + state.clean * (1 - state.mask)).asType(x.dtype)
     }
 
     /// `guided_denoise_loop`: at each step the transformer's x0 with the prompt, with the negative

@@ -201,13 +201,14 @@ of the same MLX round a kernel differently), well within the tolerance. Both pac
 4-bit one from a prompt and from an image.
 
 LTX-2.5 (30 September 2026, the 4-bit pack, from a prompt and from an image) adds its Gemma 4
-tower, the ancestral sampler of stage 1 (each noise draw is recorded and matches exactly), and the
-keyframe marker on the first latent frame of both stages; every transformer pass is again within
-3e-4. Its connector is more sensitive to bfloat16 than 2.3's: the reference itself moves by about
-1 in 20 between bfloat16 and float32, so the connector is shown in bfloat16 and decided in float32
-(`connector_f32.safetensors`, within 5e-5). Its DurationHead, which picks a clip's length from the
-prompt's contexts (`auto_duration` in a request, `frames` then the longest), gives the reference's
-seconds exactly on its contexts, and the seconds-to-frames rule matches on a table of 26 cases.
+tower, the ancestral sampler (stage 1's at first, both stages' since 31 October; each noise draw
+is recorded and matches exactly), and the keyframe marker on the first latent frame of both
+stages; every transformer pass is again within 3e-4. Its connector is more sensitive to bfloat16
+than 2.3's: the reference itself moves by about 1 in 20 between bfloat16 and float32, so the
+connector is shown in bfloat16 and decided in float32 (`connector_f32.safetensors`, within 5e-5).
+Its DurationHead, which picks a clip's length from the prompt's contexts (`auto_duration` in a
+request, `frames` then the longest), gives the reference's seconds exactly on its contexts, and
+the seconds-to-frames rule matches on a table of 26 cases.
 
 LoRAs (9 October 2026): `--lora` writes two random LoRA files over blocks 0, 1 and 47 and the
 layers outside the blocks (130 layers), keyed as Lightricks' (`diffusion_model.….to_out.0`,
@@ -260,6 +261,33 @@ peaking at 33 GB without Save memory; its last frame is 25.5 dB from the end ima
 clip (the first frame, pinned, 28.5 dB from its own through the same measure), about the gap
 ltx-2-mlx reports between its first and last frames: past the first, an image is a strong hint,
 not a pin.
+
+ltx-2-mlx 0.16.1 (31 October 2026, the revision now pinned) brings two of the reference's fixes,
+both following Lightricks' LTX-2. LTX-2.5's distilled stage 2 runs the ancestral sampler too (as
+upstream since v1.4.0), on noise of its own (seed + 20000; stage 1's is seed + 10000, the
+renoising before stage 2 still seed + 2); the Quality pipeline's stage 2 stays on the Euler loop,
+as the reference's. And a conditioning picture is prepared as `load_image_and_preprocess`
+prepares it: turned by its EXIF orientation (3, 6 and 8, the ones the reference applies), in
+sRGB, cropped to even sizes as the H.264 round trip begins (the round trip itself, at CRF 18 for
+2.5 and 33 for 2.3, is still skipped), scaled to cover the stage's size with PyTorch's bilinear
+interpolation on floats (half-pixel centers, no antialiasing) instead of a Lanczos filter on
+bytes, and normalized unquantized (x / 127.5 − 1). `verify` now compares each stage's pixels made
+from the fixture's own picture: the hedgehog pair's bit for bit, and those of a Display P3
+picture of odd size stored sideways (EXIF 6, `ltx25-i2v`) within one level of 255, which is how
+far ColorSync's and LittleCMS's P3-to-sRGB conversions fall apart (RMS 0.003). It also checks
+every step's update on the reference's own pass (its input, velocity and noise draws) against the
+reference's next state: bit for bit, both stages. The ancestral stage 2 carries the passes'
+rounding much further than the Euler loop did (a nudge of one unit in the last place of its input
+moves its output by up to 28%, the Euler loop's by 9.5%): the whole stage-2 loop, 0.5% from the
+reference before, ends 4.6% from it on `ltx25`, so it is shown and does not decide, as stage 1's.
+The four 2.5 fixtures pass. Through the protocol, 768 × 512 × 49 frames, seed 7, the 4-bit pack
+without Save memory: from the prompt, 29.0 dB per frame on average through H.264 against the
+reference's clip, the same loudness, in 84 s; from a picture (P3, EXIF 6), the first frame is
+40.3 dB from the reference's before either is encoded, and the clip 26.8 dB on average through
+H.264 (34.9 on the first frame, 23.3 on the last eight, where the two ancestral paths part), the
+same loudness, in 98 s, peaking at 31.4 GB. With a picture of odd size, ltx-2-mlx's `--image
+picture 0 1.0 0` (CRF 0) also skips the crop to even, which scales its picture from one more row
+and column: the same comparison then falls to 20.9 dB.
 
 The whole pipeline, same prompt and seed through the app's protocol, 768 × 512 × 49 frames with
 the 4-bit pack: the same clip as the reference (PSNR 29–35 dB per frame, 32.6 on average, through

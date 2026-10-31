@@ -65,13 +65,16 @@ public struct LTXConfig {
     /// Audio latents per second: 16 kHz, hop 160, downsampled 4 times.
     public static let audioLatentsPerSecond = 25.0
     public static let latentChannels = 128
-    /// The noise of stage 2 and of the ancestral sampler (LTX-2.5's stage 1) are drawn from these
-    /// seed offsets.
+    /// The noise stage 2 starts from and the ancestral sampler's (LTX-2.5's distilled stages, each
+    /// on its own: `ANCESTRAL_NOISE_SEED_OFFSET`, `ANCESTRAL_STAGE_2_NOISE_SEED_OFFSET`) are drawn
+    /// from these seed offsets.
     public static let stage2SeedOffset = 2
     public static let ancestralSeedOffset = 10000
+    public static let stage2AncestralSeedOffset = 20000
 
     /// LTX-2.5 (`is_ltx25_pack`: the video feed-forward has no bias): its own Gemma 4 text encoder,
-    /// the ancestral sampler in stage 1, the keyframe marker, renamed VAE and upsampler files.
+    /// the ancestral sampler in both distilled stages, the keyframe marker, renamed VAE and
+    /// upsampler files.
     public var isLTX25: Bool { !transformer.ffBias }
 
     public init() {}
