@@ -16,29 +16,32 @@ enum TimeEstimate {
     struct Plan {
         var steps: [Double]
         var decode: Double
+        /// A song's composing, before its steps.
+        var compose: Double = 0
     }
 
     static func plan(model: ModelDescriptor, request: GenerationRequest, history: [HistoryItem], models: [ModelDescriptor]) -> Plan {
         let work = Work(model: model, size: request.size, steps: request.steps, guidance: request.guidance, frames: request.frames,
                         reference: request.referenceImage, lastFrame: request.lastFrameImage != nil, quality: request.quality == true,
-                        gaussians: request.numGaussians)
+                        gaussians: request.numGaussians, songSeconds: request.duration)
         let byID = Dictionary(models.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let (rates, _) = rates(for: model, work: work, lowMemory: request.lowMemory, halfPrecision: request.halfPrecision ?? false,
                                history: history, models: byID)
         // An upscale's decode rate also covers the picture's encode, done before its step: the
         // decode itself is 72% of the two.
         let decodeShare = model.family.isUpscaler ? 0.72 : 1
-        return Plan(steps: work.stepUnits.map { $0 * rates.denoise }, decode: rates.decode * work.decode * decodeShare)
+        return Plan(steps: work.stepUnits.map { $0 * rates.denoise }, decode: rates.decode * work.decode * decodeShare,
+                    compose: rates.compose * work.compose)
     }
 
     /// `count` generations with these settings, after loading the model if it is not in memory.
     static func estimate(
         model: ModelDescriptor, size: PixelSize, steps: Int, guidance: Double, frames: Int?, reference: String?, lastFrame: Bool = false,
-        lowMemory: Bool, halfPrecision: Bool, quality: Bool = false, gaussians: Int? = nil, count: Int, isLoaded: Bool,
-        history: [HistoryItem], models: [ModelDescriptor]
+        lowMemory: Bool, halfPrecision: Bool, quality: Bool = false, gaussians: Int? = nil, songSeconds: Double? = nil, count: Int,
+        isLoaded: Bool, history: [HistoryItem], models: [ModelDescriptor]
     ) -> Result {
         let work = Work(model: model, size: size, steps: steps, guidance: guidance, frames: frames, reference: reference,
-                        lastFrame: lastFrame, quality: quality, gaussians: gaussians)
+                        lastFrame: lastFrame, quality: quality, gaussians: gaussians, songSeconds: songSeconds)
         let byID = Dictionary(models.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let (rates, isFromHistory) = rates(for: model, work: work, lowMemory: lowMemory, halfPrecision: halfPrecision,
                                            history: history, models: byID)
@@ -54,14 +57,24 @@ enum TimeEstimate {
         /// Megapixels, × frames for a clip.
         var decode: Double
         var cfg: Bool
+        /// A song's thousands of frames, which its language models write one by one.
+        var compose = 0.0
 
         var denoise: Double { stepUnits.reduce(0, +) }
 
         init(model: ModelDescriptor, size: PixelSize, steps: Int, guidance: Double, frames: Int?, reference: String?,
-             lastFrame: Bool = false, quality: Bool = false, gaussians: Int? = nil) {
+             lastFrame: Bool = false, quality: Bool = false, gaussians: Int? = nil, songSeconds: Double? = nil) {
             let pixels = Double(size.width * size.height)
             cfg = model.supportsGuidance && guidance > 1
-            if model.family.media == .model3D {
+            if model.family.media == .audio {
+                // A song: its frames (the ones it came out at, else the longest asked, 25 a second), then the flow's steps
+                // on each window of 200 frames, one every 100 (the last ones shorter, counted whole), each decoded.
+                let count = frames ?? Int((songSeconds ?? 60) * 25)
+                let windows = count <= 200 ? 1 : (count - 100 + 99) / 100
+                compose = Double(count) / 1000
+                stepUnits = Array(repeating: 1, count: max(steps, 0) * windows)
+                decode = Double(windows)
+            } else if model.family.media == .model3D {
                 // A 3D object has no size: every step runs the same tokens (twice with guidance), and the
                 // decode grows with the Gaussians, 262,144 a unit.
                 stepUnits = Array(repeating: 1, count: max(steps, 0))
@@ -112,9 +125,11 @@ enum TimeEstimate {
         var fixed: Double
         /// Loading the model, when it is not in memory yet.
         var load: Double
+        /// Seconds per thousand frames of a song.
+        var compose = 0.0
 
         func seconds(for work: Work) -> Double {
-            fixed + denoise * work.denoise + decode * work.decode
+            fixed + denoise * work.denoise + decode * work.decode + compose * work.compose
         }
     }
 
@@ -156,6 +171,9 @@ enum TimeEstimate {
         // 50 guided steps in 294 s (5.9 s each), the octree and Gaussian decoders 2.6 s for 262,144 Gaussians; the
         // picture's cutout 1 s and its encoders 2.4 s, the GLB 0.2 s (1 November 2026).
         case .idol: Rates(denoise: 5.9, decode: 2.6, fixed: 3.6, load: 4)
+        // A minute of song (1 November 2026): 1,500 frames composed in 171 s (114 ms each), 420 steps on 14 windows in
+        // 651 s (1.55 s each), the vocoder 13 s (0.95 s a window); 836 s in all against 816 estimated.
+        case .minimaxMusic3: Rates(denoise: 1.5, decode: 1, fixed: 0.5, load: 3, compose: 113)
         }
     }
 
@@ -166,6 +184,7 @@ enum TimeEstimate {
         var decode: Double
         var fixed: Double
         var load: Double
+        var compose: Double
         var lowMemory: Bool
         var halfPrecision: Bool
 
@@ -174,13 +193,14 @@ enum TimeEstimate {
             guard let timings = item.timings, let denoise = timings["denoise"], denoise > 0 else { return nil }
             work = Work(model: model, size: request.size, steps: request.steps, guidance: request.guidance, frames: request.frames,
                         reference: request.referenceImage, lastFrame: request.lastFrameImage != nil, quality: request.quality == true,
-                        gaussians: request.numGaussians)
+                        gaussians: request.numGaussians, songSeconds: request.duration)
             guard work.denoise > 0, work.decode > 0 else { return nil }
             self.denoise = denoise
             // An upscale's encode is the picture's, at the result's size: it counts with the decode.
             decode = (timings["decode"] ?? 0) + (model.family.isUpscaler ? timings["encode"] ?? 0 : 0)
             load = timings["load"] ?? 0
-            fixed = max(0, item.seconds - denoise - decode - load)
+            compose = timings["compose"] ?? 0
+            fixed = max(0, item.seconds - denoise - decode - load - compose)
             lowMemory = request.lowMemory
             halfPrecision = request.halfPrecision ?? false
         }
@@ -202,13 +222,14 @@ enum TimeEstimate {
                 denoise: median(samples.map { $0.denoise / $0.work.denoise }) ?? reference.denoise,
                 decode: median(samples.map { $0.decode / $0.work.decode }) ?? reference.decode,
                 fixed: median(samples.map(\.fixed)) ?? reference.fixed,
-                load: median(samples.compactMap { $0.load > 0 ? $0.load : nil }) ?? reference.load
+                load: median(samples.compactMap { $0.load > 0 ? $0.load : nil }) ?? reference.load,
+                compose: median(samples.compactMap { $0.work.compose > 0 ? $0.compose / $0.work.compose : nil }) ?? reference.compose
             )
             return (rates, true)
         }
         let factor = machineFactor(history: history, models: models)
         return (Rates(denoise: reference.denoise * factor, decode: reference.decode * factor,
-                      fixed: reference.fixed * factor, load: reference.load), false)
+                      fixed: reference.fixed * factor, load: reference.load, compose: reference.compose * factor), false)
     }
 
     /// This Mac's denoising time against the M1 Max's, on the models it used; before it used any,

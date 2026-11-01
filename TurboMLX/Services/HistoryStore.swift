@@ -110,6 +110,9 @@ final class HistoryStore {
     /// A 3D object's GLB; the app draws its still next to it, with the same name as a PNG.
     func newObjectURL(seed: Int) -> URL { newURL(seed: seed, extension: "glb") }
 
+    /// A song's WAV; the app draws its waveform next to it, with the same name as a PNG.
+    func newSongURL(seed: Int) -> URL { newURL(seed: seed, extension: "wav") }
+
     private func newURL(seed: Int, extension ext: String) -> URL {
         let stamp = Self.fileStamp.string(from: Date())
         var name = "\(stamp)-\(seed).\(ext)"

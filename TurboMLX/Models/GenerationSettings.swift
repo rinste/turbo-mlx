@@ -107,6 +107,8 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     static let maxBatch = 8
     /// How many times an upscaler enlarges the picture's sides.
     static let upscaleFactors: [Double] = [2, 3, 4]
+    /// A song's longest length, in seconds: MiniMax-Music3 makes up to six minutes, and may end sooner.
+    static let songDurations = 10.0...360.0
 
     var blocks = PromptBlock.defaults()
     /// What the image should not have, for the models that take it (`supportsNegativePrompt`).
@@ -148,6 +150,10 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     /// Idol: how many Gaussians the object is made of (its detail), and what kind of picture it comes from.
     var gaussians = ObjectDetail.defaultGaussians
     var objectMode = ObjectMode.render
+    /// A song's lyrics, section tags such as "[verse]" on lines of their own ("[instrumental]" for none), and the longest
+    /// it may last (the prompt describes the music).
+    var lyrics = ""
+    var songSeconds = 60.0
     /// The LoRA chosen for each family that takes them (`ModelFamily.takesLoRAs`), by its raw
     /// value: a LoRA fits one family, so each keeps its own.
     var loras: [String: LoRAChoice] = [:]
@@ -166,7 +172,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     }
 
     func size(for family: ModelFamily) -> PixelSize {
-        if family.media == .model3D { return PixelSize(width: 0, height: 0) }
+        if family.media == .model3D || family.media == .audio { return PixelSize(width: 0, height: 0) }
         if family.isUpscaler {
             return upscaledSize ?? PixelSize(width: Int(1024 * upscale), height: Int(1024 * upscale))
         }
@@ -210,6 +216,8 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     /// The prompt sent to the model: the blocks joined in order, already trimmed.
     var prompt: String { PromptBlock.joined(blocks) }
     var trimmedPrompt: String { prompt }
+    /// The lyrics as the song gets them: without the blank lines around them.
+    var trimmedLyrics: String { lyrics.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     /// The negative prompt `model` would get: nil where it has none, or guidance is off and there
     /// is no unconditional pass to use it.
@@ -227,7 +235,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         case blocks, negativePrompt, aspect, resolution, usesCustomSize, customWidth, customHeight, steps, guidance,
              randomSeed, seed, batchCount, transparentBackground, lowMemory,
              videoResolution, videoSeconds, videoFrameRate, videoAutoDuration, referenceImage, lastFrameImage, upscale, softness,
-             halfPrecision, livePreview, loras, videoQuality, gaussians, objectMode
+             halfPrecision, livePreview, loras, videoQuality, gaussians, objectMode, lyrics, songSeconds
     }
 
     /// Settings saved before the prompt had blocks kept a single string.
@@ -270,6 +278,8 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         videoQuality = try values.decodeIfPresent(Bool.self, forKey: .videoQuality) ?? videoQuality
         gaussians = try values.decodeIfPresent(Int.self, forKey: .gaussians) ?? gaussians
         objectMode = try values.decodeIfPresent(ObjectMode.self, forKey: .objectMode) ?? objectMode
+        lyrics = try values.decodeIfPresent(String.self, forKey: .lyrics) ?? lyrics
+        songSeconds = try values.decodeIfPresent(Double.self, forKey: .songSeconds) ?? songSeconds
     }
 
     /// Seeds for the next batch: consecutive from the fixed seed, or fresh random ones.
@@ -364,10 +374,15 @@ nonisolated struct GenerationRequest: Codable, Hashable, Sendable {
     /// request is saved without a size: an object has none.
     var numGaussians: Int?
     var objectMode: String?
+    /// A song (MiniMax-Music3): its lyrics and its length in seconds, the longest asked until it is made, then the
+    /// length it came out at; nil for the others. Such a request is saved without a size.
+    var lyrics: String?
+    var duration: Double?
 
     /// What to show for it: the prompt, for an upscale what it did ("Upscaled 2×"), for an object its detail.
     var caption: String {
         if let numGaussians { return "3D object, \(ObjectDetail.label(numGaussians)) Gaussians" }
+        if lyrics != nil { return prompt }
         guard let upscale else { return prompt }
         let factor = upscale.rounded() == upscale ? "\(Int(upscale))" : upscale.formatted(.number.precision(.fractionLength(1)))
         let softened = (softness ?? 0) > 0 ? ", softened \(Int(((softness ?? 0) * 100).rounded()))%" : ""
@@ -379,7 +394,7 @@ nonisolated extension GenerationRequest {
     private enum CodingKeys: String, CodingKey {
         case prompt, blocks, negativePrompt, seed, size, steps, guidance, transparentBackground, lowMemory, frames, fps,
              autoDuration, referenceImage, lastFrameImage, upscale, softness, halfPrecision, loras, quality, numGaussians,
-             objectMode
+             objectMode, lyrics, duration
     }
 
     init(from decoder: any Decoder) throws {
@@ -388,7 +403,7 @@ nonisolated extension GenerationRequest {
         blocks = try values.decodeIfPresent([PromptBlock].self, forKey: .blocks)
         negativePrompt = try values.decodeIfPresent(String.self, forKey: .negativePrompt)
         seed = try values.decode(Int.self, forKey: .seed)
-        // A 3D object has no size.
+        // A 3D object and a song have no size.
         size = try values.decodeIfPresent(PixelSize.self, forKey: .size) ?? PixelSize(width: 0, height: 0)
         steps = try values.decode(Int.self, forKey: .steps)
         guidance = try values.decode(Double.self, forKey: .guidance)
@@ -406,6 +421,8 @@ nonisolated extension GenerationRequest {
         quality = try values.decodeIfPresent(Bool.self, forKey: .quality)
         numGaussians = try values.decodeIfPresent(Int.self, forKey: .numGaussians)
         objectMode = try values.decodeIfPresent(String.self, forKey: .objectMode)
+        lyrics = try values.decodeIfPresent(String.self, forKey: .lyrics)
+        duration = try values.decodeIfPresent(Double.self, forKey: .duration)
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -414,7 +431,7 @@ nonisolated extension GenerationRequest {
         try values.encodeIfPresent(blocks, forKey: .blocks)
         try values.encodeIfPresent(negativePrompt, forKey: .negativePrompt)
         try values.encode(seed, forKey: .seed)
-        if numGaussians == nil { try values.encode(size, forKey: .size) }
+        if numGaussians == nil, lyrics == nil { try values.encode(size, forKey: .size) }
         try values.encode(steps, forKey: .steps)
         try values.encode(guidance, forKey: .guidance)
         try values.encode(transparentBackground, forKey: .transparentBackground)
@@ -431,6 +448,8 @@ nonisolated extension GenerationRequest {
         try values.encodeIfPresent(quality, forKey: .quality)
         try values.encodeIfPresent(numGaussians, forKey: .numGaussians)
         try values.encodeIfPresent(objectMode, forKey: .objectMode)
+        try values.encodeIfPresent(lyrics, forKey: .lyrics)
+        try values.encodeIfPresent(duration, forKey: .duration)
     }
 }
 

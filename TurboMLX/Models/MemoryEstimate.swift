@@ -27,6 +27,7 @@ nonisolated enum MemoryEstimate {
         if model.family.isLTX, model.isBuiltIn {
             return clipPeak(model: model, size: size, frames: frames ?? 121, lowMemory: lowMemory, memory: memory)
         }
+        if model.family == .minimaxMusic3, model.isBuiltIn { return songPeak(frames: frames ?? 1500, lowMemory: lowMemory) }
         return peaks(model.id, lowMemory: lowMemory)?.gigabytes(size.megapixels)
     }
 
@@ -82,6 +83,13 @@ nonisolated enum MemoryEstimate {
         }
     }
 
+    // MiniMax-Music3, mlx-audio's 8-bit pack (1 November 2026): 18.8 GB for 6 s and 17.8 for 60 s, the flow's window and
+    // the vocoder on top of every weight; 14.4 GB with Save memory, which lets the language models go before the flow, so the composing
+    // sets it. Each frame (25 a second) adds its key-value cache (147 KB) and its hidden states (64 KB).
+    private static func songPeak(frames: Int, lowMemory: Bool) -> Double {
+        (lowMemory ? 14.4 : 18.9) + 0.00021 * Double(frames)
+    }
+
     // LTX-2.3 (29 September 2026): the 4-bit pack with Save memory peaks at 17.9 / 18.2 / 19.2 GB
     // for 3 / 5 / 10 s at 768 × 512 and at 21.5 GB for 5 s at 1024 × 576; without it at 26.7 / 30.3
     // GB for 1 / 5 s at 768 × 512; the 8-bit pack at 26.8 GB with and 37.4 GB without for 5 s at
@@ -114,6 +122,7 @@ nonisolated enum MemoryEstimate {
         case .video: peak(model: model, size: PixelSize(width: 512, height: 512), frames: 25, lowMemory: true, memory: memory)
         case .image: peak(model: model, size: PixelSize(width: 512, height: 512), frames: nil, lowMemory: true, memory: memory)
         case .model3D: peak(model: model, size: PixelSize(width: 0, height: 0), frames: nil, lowMemory: true, memory: memory)
+        case .audio: peak(model: model, size: PixelSize(width: 0, height: 0), frames: 250, lowMemory: true, memory: memory)
         }
     }
 }

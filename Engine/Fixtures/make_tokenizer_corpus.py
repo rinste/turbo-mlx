@@ -12,7 +12,8 @@ MOSS-Image with Qwen3.5's (thinking on), Qwen-Image and
 Qwen-Image Edit with their templates around the prompt, Ming-Image with its template and no
 special tokens, LTX-2's Gemma 3 with `<bos>` and the prompt stripped, SenseNova-U1.5 with its
 "neo1_0" generation query (and the unconditional one, the same for every prompt), and its edit
-query with 16 picture tokens (and the picture-only one). SenseNova's
+query with 16 picture tokens (and the picture-only one), MiniMax Music 3 with each prompt as the description and as
+the lyrics, assembled by the official functions (Engine/Reference/music3_reference.py). SenseNova's
 reference is the tokenizer SenseTime's code builds from `vocab.json` and `merges.txt` (the original
 checkpoint has no `tokenizer.json`): the MLX pack's `tokenizer.json`, which the engine reads, was
 made from them by the pack's author, so it is left out here and checked against them.
@@ -25,6 +26,9 @@ import sys
 from pathlib import Path
 
 from transformers import AutoTokenizer
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Reference"))
+from music3_reference import assemble as music3_assemble  # noqa: E402
 
 HUB = Path.home() / ".cache/huggingface/hub"
 
@@ -106,6 +110,7 @@ PIPELINES = [
     ("sensenova-unconditional", "mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit", "ff6d0c2dfe21b19891ae4551e11fcc99f6aa82ae", ""),
     ("sensenova-edit", "mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit", "ff6d0c2dfe21b19891ae4551e11fcc99f6aa82ae", ""),
     ("sensenova-edit-unconditional", "mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit", "ff6d0c2dfe21b19891ae4551e11fcc99f6aa82ae", ""),
+    ("minimax-music3", "mlx-community/MiniMax-Music3-8bit", "10aa4ca578d04c6f5256c1bc22fc8405a09602b5", "tokenizer"),
 ]
 
 PROMPTS = [
@@ -209,6 +214,8 @@ def pipeline_ids(name: str, tokenizer, prompt: str) -> list[int]:
         return tokenizer(sensenova_picture(sensenova_query(sensenova_edit_prompt(prompt)), 16))["input_ids"]
     if name == "sensenova-edit-unconditional":
         return tokenizer(sensenova_picture(SENSENOVA_EDIT_UNCONDITIONAL, 16))["input_ids"]
+    if name == "minimax-music3":
+        return tokenizer(music3_assemble(prompt, prompt))["input_ids"]
     raise ValueError(name)
 
 

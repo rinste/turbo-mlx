@@ -21,6 +21,10 @@ struct ControlPanel: View {
                 } else if model.family.media == .model3D {
                     // No prompt and no format: the picture, the object's detail, the picture's kind.
                     ObjectSection(settings: $app.settings)
+                } else if model.family.media == .audio {
+                    // No format: the music described, then the words and the length.
+                    PromptSection(settings: $app.settings, focus: $focusedBlock, title: "Music")
+                    SongSection(settings: $app.settings)
                 } else {
                     let quality = app.settings.fullPipeline(for: model)
                     PromptSection(settings: $app.settings, focus: $focusedBlock)
@@ -87,6 +91,7 @@ private struct ModelSelection: View {
                         section("Image") { $0.family.media == .image && !$0.family.isUpscaler },
                         section("Video") { $0.family.media == .video },
                         section("3D") { $0.family.media == .model3D },
+                        section("Music") { $0.family.media == .audio },
                     ].filter { !$0.entries.isEmpty },
                     selection: $app.selectedModelID,
                     help: "A picture: the model also takes a reference image. Lines: it works from the prompt alone. A small arrow: not downloaded yet."
@@ -708,6 +713,7 @@ private struct TriggerWords: View {
 private struct PromptSection: View {
     @Binding var settings: GenerationSettings
     var focus: FocusState<PromptBlock.ID?>.Binding
+    var title = "Prompt"
 
     /// The block being dragged; back to nil when it's let go, or when the drag is cancelled.
     @GestureState(resetTransaction: Transaction(animation: .snappy)) private var drag: BlockDrag? = nil
@@ -749,7 +755,7 @@ private struct PromptSection: View {
             }
             .coordinateSpace(Self.space)
         } header: {
-            Text("Prompt")
+            Text(title)
         } footer: {
             VStack(alignment: .leading, spacing: 8) {
                 Button("Add Prompt Block", systemImage: "plus") { addBlock() }
@@ -918,6 +924,13 @@ private struct PromptBlockEditor<Reorder: Gesture>: View {
 
     private var placeholder: String {
         let video = app.selectedModel?.family.media == .video
+        if app.selectedModel?.family.media == .audio {
+            switch block.name {
+            case PromptBlock.subjectName: return "The music: genre, mood, tempo and key, the voice that sings and how."
+            case PromptBlock.styleName: return "The arrangement and the sound: the instruments, how the song builds, the production."
+            default: return "A piece of the description: an instrument, a section, the mix. It follows the block above."
+            }
+        }
         switch block.name {
         case PromptBlock.subjectName:
             return video
@@ -1299,7 +1312,8 @@ private struct HistoryImagePicker: View {
     let pick: (HistoryItem) -> Void
 
     var body: some View {
-        let items = app.history.items
+        // A song's waveform is no picture to start from.
+        let items = app.history.items.filter { $0.kind != .audio }
         let rows = (items.count + 3) / 4
         ScrollView {
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(88), spacing: 8), count: 4), spacing: 8) {
@@ -1561,6 +1575,54 @@ private struct ObjectSection: View {
     }
 }
 
+// MARK: - Song
+
+/// A song's lyrics and its longest length, with what the licence asks of the songs made: no imitation of real artists,
+/// no lyrics the user has no right to (MiniMax-Music3 Community License, section 4 and its acceptable-use policy).
+private struct SongSection: View {
+    @Binding var settings: GenerationSettings
+
+    var body: some View {
+        Section {
+            TextEditor(text: $settings.lyrics)
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: 160, maxHeight: 320)
+                .overlay(alignment: .topLeading) {
+                    if settings.lyrics.isEmpty {
+                        Text(verbatim: "[verse]\nThe words of the first verse\n[chorus]\nThe words of the chorus")
+                            .foregroundStyle(.tertiary)
+                            .padding(.leading, 5)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .font(.system(size: 15))
+                .accessibilityLabel("Lyrics")
+            LabeledContent {
+                HStack(spacing: 6) {
+                    Slider(value: $settings.songSeconds, in: GenerationSettings.songDurations, step: 5)
+                    Text(verbatim: Format.songDuration(settings.songSeconds))
+                        .monospacedDigit()
+                        .frame(width: 40, alignment: .trailing)
+                }
+            } label: {
+                Text("Longest")
+                    .help("The song ends when the model ends it, at most this long. A minute of song takes about 14 minutes on an M1 Max.")
+            }
+        } header: {
+            Text("Lyrics")
+        } footer: {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Put section tags such as [verse], [chorus] or [bridge] on lines of their own: words after a tag on its line are dropped. Write [instrumental] for a song without words.")
+                Label("Describe the music in your own words, without naming an artist to imitate, and sing only lyrics you may use. MiniMax-Music3’s licence forbids songs that infringe others’ rights; each song is marked as made by AI.",
+                      systemImage: "exclamationmark.shield")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
 // MARK: - Upscale
 
 /// An upscaler's settings: how many times larger, how much the picture is softened first, and the
@@ -1672,8 +1734,8 @@ private struct AdvancedSection: View {
                 // An upscale has one step, and its size is its picture's, times the scale.
                 if !family.isUpscaler {
                     StepsRow(settings: $settings, model: model)
-                    // A 3D object has no size.
-                    if family.media != .model3D { SizeRows(settings: $settings, family: family) }
+                    // A 3D object and a song have no size.
+                    if family.media != .model3D, family.media != .audio { SizeRows(settings: $settings, family: family) }
                 }
                 OutputRows(settings: $settings, family: family)
                 MemoryRows(settings: $settings, family: family)
@@ -1684,7 +1746,7 @@ private struct AdvancedSection: View {
     /// What the closed section holds: the steps, the size, a fixed seed.
     private var summary: String {
         let size = settings.size(for: family)
-        var parts = family.media == .model3D ? [] : ["\(size.width) × \(size.height) px"]
+        var parts = family.media == .model3D || family.media == .audio ? [] : ["\(size.width) × \(size.height) px"]
         if !family.isUpscaler {
             let range = model.stepRange(quality: settings.fullPipeline(for: model))
             parts.insert("\(min(max(settings.steps, range.lowerBound), range.upperBound)) steps", at: 0)
@@ -1837,6 +1899,8 @@ private struct MemoryRows: View {
             "SeedVR2 always reads and writes the picture in tiles."
         case .idol:
             "Frees the cutout's network and DINOv3 (about 2.5 GB) once the picture is read: about 7 GB instead of 9 GB. The next object loads them again, a second or two."
+        case .minimaxMusic3:
+            "Frees the language models (about 11 GB) once the song is composed, before its sound is made: about 15 GB instead of 19 GB. The next song loads them again."
         }
         return base + " On by default below 64 GB of memory."
     }
@@ -1964,7 +2028,7 @@ private struct GenerateBar: View {
             let percent = model.flatMap { app.downloads.qualityProgress($0)?.fraction }.map { " · \(Int($0 * 100))%" } ?? ""
             wideButton("Downloading\(percent)", systemImage: "arrow.down.circle") {}
                 .disabled(true)
-        case .noModel, .missingReference, .emptyPrompt, .upscaleTooLarge, .notEnoughMemory, .loraMissing, .loraMismatch:
+        case .noModel, .missingReference, .emptyPrompt, .emptyLyrics, .upscaleTooLarge, .notEnoughMemory, .loraMissing, .loraMismatch:
             wideButton(generateTitle, systemImage: generateSymbol, note: note) {}
                 .disabled(true)
         case nil:
@@ -2004,6 +2068,7 @@ private struct GenerateBar: View {
             halfPrecision: model.family.supportsHalfPrecision && settings.halfPrecision,
             quality: settings.fullPipeline(for: model),
             gaussians: model.family.media == .model3D ? settings.gaussians : nil,
+            songSeconds: model.family.media == .audio ? settings.songSeconds : nil,
             count: settings.batchCount,
             // A model the queue is using will be in memory by then.
             isLoaded: app.isLoaded(model) || (app.queue.last ?? app.activeJob)?.model.id == model.id,
@@ -2017,7 +2082,11 @@ private struct GenerateBar: View {
         let count = app.settings.batchCount
         if app.isBusy { return count > 1 ? "Add \(count) to Queue" : "Add to Queue" }
         if app.selectedModel?.family.isUpscaler == true { return count > 1 ? "Upscale \(count) Times" : "Upscale" }
-        let things = app.selectedModel?.family.media == .video ? "Clips" : "Images"
+        let things = switch app.selectedModel?.family.media {
+        case .video: "Clips"
+        case .audio: "Songs"
+        default: "Images"
+        }
         return count > 1 ? "Generate \(count) \(things)" : "Generate"
     }
 

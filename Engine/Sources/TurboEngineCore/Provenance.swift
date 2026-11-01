@@ -4,8 +4,8 @@ import ImageIO
 /// Marks every image and clip the engine makes as made by generative AI, in a form machines read:
 /// IPTC's Digital Source Type in XMP, the field Google, Adobe, Meta and exiftool read, which the EU
 /// AI Act (Article 50(2)) asks generative systems to provide in some machine-readable form. A PNG
-/// carries it in its XMP (ImageIO's iTXt chunk), an MP4 in a top-level XMP `uuid` box, where
-/// Adobe's specification and exiftool put it.
+/// carries it in its XMP (ImageIO's iTXt chunk), an MP4 in a top-level XMP `uuid` box and a WAV in
+/// a `_PMX` chunk, where Adobe's specification and exiftool put them.
 public enum Provenance {
     /// IPTC's Digital Source Type of a result (cv.iptc.org/newscodes/digitalsourcetype).
     public enum SourceType: String, CaseIterable, Sendable {
@@ -43,10 +43,9 @@ public enum Provenance {
         return metadata
     }
 
-    /// Appends the XMP box to a finished MP4. A top-level box of its own after the others moves no
-    /// offset in the file, and players skip a box they do not know.
-    public static func markVideo(at url: URL, as type: SourceType) throws {
-        let packet = """
+    /// The XMP packet of a result: its Digital Source Type and the tool that made it.
+    static func xmpPacket(_ type: SourceType) -> String {
+        """
             <?xpacket begin="\u{FEFF}" id="W5M0MpCehiHzreSzNTczkc9d"?>
             <x:xmpmeta xmlns:x="adobe:ns:meta/">
              <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
@@ -59,6 +58,12 @@ public enum Provenance {
             </x:xmpmeta>
             <?xpacket end="w"?>
             """
+    }
+
+    /// Appends the XMP box to a finished MP4. A top-level box of its own after the others moves no
+    /// offset in the file, and players skip a box they do not know.
+    public static func markVideo(at url: URL, as type: SourceType) throws {
+        let packet = xmpPacket(type)
         let payload = Data(packet.utf8)
         var box = Data()
         var size = UInt32(8 + xmpBoxUUID.count + payload.count).bigEndian
@@ -91,6 +96,13 @@ public enum Provenance {
             offset += size
         }
         return nil
+    }
+
+    /// The Digital Source Type a WAV declares in its `_PMX` chunk, if it has one.
+    public static func sourceType(ofAudio url: URL) -> SourceType? {
+        guard let xmp = AudioOutput.chunks(ofWAV: url)?["_PMX"] else { return nil }
+        let text = String(decoding: xmp, as: UTF8.self)
+        return SourceType.allCases.first { text.contains("\"\($0.uri)\"") }
     }
 
     private static let sourceTypePath = "\(kCGImageMetadataPrefixIPTCExtension):DigitalSourceType" as CFString

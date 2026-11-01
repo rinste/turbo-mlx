@@ -91,6 +91,8 @@ public final class Engine {
             if isCancelled(id) { throw GenerationError.cancelled }
             // A 3D object's settings are refused before anything loads.
             if spec.family == "idol" { try IdolError.validate(Self.meshRequest(params)) }
+            // So are a song's.
+            if spec.family == "minimax-music3" { try Music3Error.validate(Self.audioRequest(params)) }
             let model = try ensureModel(spec, jobID: id)
             try applyLoRAs(params.loras ?? [], to: model, spec: spec)
             let lowRam = spec.lowRam == true
@@ -101,6 +103,10 @@ public final class Engine {
             if isCancelled(id) { throw GenerationError.cancelled }
             if let mesh = model as? MeshFamilyModel {
                 try generateMesh(mesh, id: id, spec: spec, params: params, started: started)
+                return
+            }
+            if let audio = model as? AudioFamilyModel {
+                try generateAudio(audio, id: id, spec: spec, params: params, started: started)
                 return
             }
 
@@ -369,6 +375,82 @@ public final class Engine {
         )
         request.gaussians = params.numGaussians
         request.mode = params.mode
+        return request
+    }
+
+    /// A song (MiniMax Music 3), written as a WAV. Phases encoding, composing (`total`: the most frames the song may
+    /// take, `frame_rate` a second), denoising (with its total), decoding, saving; `progress` counts the frames while
+    /// composing (the model may end the song before `total`), then the steps. `done` gives the WAV's path, the song's
+    /// length in seconds (`duration`), its sample rate and frames, and the time of each phase.
+    private func generateAudio(_ model: AudioFamilyModel, id: String, spec: ModelSpec, params: GenerationParams, started: Date) throws {
+        let request = Self.audioRequest(params)
+        var spans: [String: Double] = [:]
+        if let load = marks["load"] { spans["load"] = load }
+        var current: (name: String, since: Date)?
+        func enter(_ name: String?) {
+            if let current { spans[current.name, default: 0] += Date().timeIntervalSince(current.since) }
+            current = name.map { ($0, Date()) }
+        }
+        let song = try model.generateAudio(
+            request,
+            phase: { [self] phase in
+                switch phase {
+                case .encoding:
+                    enter("encode")
+                    emitter.emit("phase", ["id": id, "phase": "encoding"])
+                case .composing(let frames):
+                    enter("compose")
+                    emitter.emit("phase", ["id": id, "phase": "composing", "total": frames])
+                case .denoising(let total):
+                    enter("denoise")
+                    emitter.emit("phase", ["id": id, "phase": "denoising", "total": total])
+                case .decoding:
+                    enter("decode")
+                    emitter.emit("phase", ["id": id, "phase": "decoding"])
+                }
+            },
+            progress: { [self] step, total in emitter.emit("progress", ["id": id, "step": step, "total": total]) },
+            isCancelled: { [self] in isCancelled(id) }
+        )
+        enter("save")
+        emitter.emit("phase", ["id": id, "phase": "saving"])
+        var metadata: [String: Any] = [
+            "engine": "turbo-engine \(Self.version)",
+            "model": spec.name ?? spec.path,
+            "prompt": params.prompt,
+            "seed": params.seed,
+            "steps": params.steps,
+            "duration": (song.seconds * 100).rounded() / 100,
+        ]
+        if let lyrics = params.lyrics { metadata["lyrics"] = lyrics }
+        try AudioOutput.writeWAV(song.samples, sampleRate: song.sampleRate, to: URL(fileURLWithPath: params.output),
+                                 source: .trainedAlgorithmicMedia, metadata: metadata)
+        enter(nil)
+        let timings = spans.mapValues { ($0 * 100).rounded() / 100 }
+        emitter.log("[turbo] " + timings.map { "\($0.key) \(String(format: "%.1f", $0.value))s" }.sorted().joined(separator: " · ")
+                    + " · \(song.frames) frames, \(String(format: "%.1f", song.seconds)) s of sound")
+        emitter.emit("done", [
+            "id": id,
+            "path": params.output,
+            "seed": params.seed,
+            "duration": (song.seconds * 1000).rounded() / 1000,
+            "sample_rate": song.sampleRate,
+            "frames": song.frames,
+            "seconds": (Date().timeIntervalSince(started) * 100).rounded() / 100,
+            "peak_memory": Memory.peakMemory,
+            "timings": timings,
+        ])
+    }
+
+    /// A song's request: the description, the lyrics, the longest duration, the steps and the seed (the size, guidance
+    /// and alpha flag are not read: the reference's guidance is fixed).
+    static func audioRequest(_ params: GenerationParams) -> FamilyRequest {
+        var request = FamilyRequest(
+            prompt: params.prompt, seed: params.seed, width: params.width, height: params.height, steps: params.steps,
+            guidance: params.guidance, flattenAlpha: false
+        )
+        request.lyrics = params.lyrics
+        request.duration = params.duration
         return request
     }
 

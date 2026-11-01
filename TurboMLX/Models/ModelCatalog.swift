@@ -14,6 +14,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     case ltx25 = "ltx-2.5"
     case seedVR2 = "seedvr2"
     case idol
+    case minimaxMusic3 = "minimax-music3"
 
     var displayName: String {
         switch self {
@@ -29,13 +30,15 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .ltx25: "LTX-2.5"
         case .seedVR2: "SeedVR2"
         case .idol: "Idol"
+        // The licence asks for this name, as written, wherever a product shows the model.
+        case .minimaxMusic3: "MiniMax-Music3"
         }
     }
 
     /// Whether the model outputs RGBA, so a transparent background can be kept.
     var producesAlpha: Bool { self == .ming }
 
-    var media: MediaKind { isLTX ? .video : self == .idol ? .model3D : .image }
+    var media: MediaKind { isLTX ? .video : self == .idol ? .model3D : self == .minimaxMusic3 ? .audio : .image }
 
     /// Lightricks' video models: LTX-2.3 with Gemma 3 beside it, LTX-2.5 with its own Gemma 4.
     var isLTX: Bool { self == .ltx2 || self == .ltx25 }
@@ -74,7 +77,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     var takesLoRAs: Bool {
         switch self {
         case .zImageTurbo, .flux2Klein, .flux3Klein, .qwenImage, .qwenImageEdit, .ltx2, .ltx25: true
-        case .ming, .mossImage, .senseNova, .seedVR2, .idol: false
+        case .ming, .mossImage, .senseNova, .seedVR2, .idol, .minimaxMusic3: false
         }
     }
 
@@ -91,7 +94,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         switch self {
         case .ming: ["mllm", "connector", "mlp", "transformer", "vae"]
         case .zImageTurbo, .flux2Klein, .flux3Klein, .mossImage, .qwenImage, .qwenImageEdit: ["transformer", "text_encoder", "vae"]
-        case .senseNova: ["."]
+        case .senseNova, .minimaxMusic3: ["."]
         case .ltx2, .ltx25, .seedVR2, .idol: []
         }
     }
@@ -111,6 +114,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .seedVR2: Self.seedVR2Files
         case .senseNova: ["config.json", "model.safetensors.index.json"]
         case .idol: Self.idolFiles
+        case .minimaxMusic3: ["config.json", "model.safetensors.index.json"]
         default: []
         }
     }
@@ -126,6 +130,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .ltx25: "tokenizer.json"
         case .seedVR2: nil // no prompt: the engine has the fixed text embedding
         case .idol: nil // no prompt
+        case .minimaxMusic3: "tokenizer/tokenizer.json"
         }
     }
 
@@ -170,6 +175,11 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .senseNova: return ["README.md", "config.json", "model.safetensors.index.json", "model-*.safetensors", "tokenizer.json"]
         // With the licences: Idol's (Apache 2.0), its NOTICE, DINOv3's own.
         case .idol: return Self.idolFiles + ["LICENSE", "NOTICE", "README.md", "dinov3/LICENSE.md"]
+        // mlx-audio's pack: the weights, their index, the configuration and the tokenizer, with MiniMax's licence; not the
+        // scheduler's settings or the chat template, which the engine does not read.
+        case .minimaxMusic3:
+            return ["LICENSE", "README.md", "config.json", "model.safetensors.index.json", "model-*.safetensors",
+                    "tokenizer/tokenizer.json", "tokenizer/tokenizer_config.json"]
         }
     }
 
@@ -269,7 +279,8 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         switch family {
         case .ming, .mossImage, .qwenImage, .qwenImageEdit, .idol: true
         // The catalog's SenseNova packs are the 8-step distillation, which runs without guidance.
-        case .zImageTurbo, .senseNova, .ltx2, .ltx25, .seedVR2: false
+        // MiniMax-Music3's guidance (1.5 for its language models, 1.7 for the flow) is the reference's own, fixed.
+        case .zImageTurbo, .senseNova, .ltx2, .ltx25, .seedVR2, .minimaxMusic3: false
         case .flux2Klein, .flux3Klein: isKleinBase
         }
     }
@@ -294,6 +305,8 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .ltx2, .ltx25: 8
         case .seedVR2: 1
         case .idol: 50
+        // The flow's Euler steps on each window of the song.
+        case .minimaxMusic3: 30
         }
     }
 
@@ -327,6 +340,8 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .ltx2, .ltx25: 4...8
         case .seedVR2: 1...1
         case .idol: 10...100
+        // The reference's own limit is 30.
+        case .minimaxMusic3: 8...30
         }
     }
 }
@@ -548,6 +563,21 @@ enum ModelCatalog {
             sizeBytes: 2_979_218_839,
             license: "Apache 2.0 · DINOv3 License",
             recommendedMemoryGB: 16,
+            isBuiltIn: true
+        ),
+        // MiniMax Music 3 (MiniMax-Music3 Community License): a description and lyrics to a song of up to six minutes,
+        // 44.1 kHz stereo. mlx-audio's MLX pack, its language models' and flow transformer's linears in 8 bits, run as
+        // mlx-audio runs it. The licence asks commercial products to show the name "MiniMax-Music3" and every product
+        // that lets others generate to keep safeguards against infringing uses (`MusicSection`).
+        ModelDescriptor(
+            name: "MiniMax-Music3 · 24 GB RAM",
+            detail: "MiniMax's music model: a description of the music and its lyrics become a complete song with vocals, up to six minutes long.",
+            family: .minimaxMusic3,
+            source: .huggingFace(repo: "mlx-community/MiniMax-Music3-8bit"),
+            revision: "10aa4ca578d04c6f5256c1bc22fc8405a09602b5",
+            sizeBytes: 14_179_317_410,
+            license: "MiniMax-Music3 Community License",
+            recommendedMemoryGB: 24,
             isBuiltIn: true
         ),
     ]

@@ -105,6 +105,10 @@ enum VerifyTokenizers {
         case "sensenova-edit-unconditional":
             let prompter = try SenseNovaPrompter(folder: folder)
             return { _ in prompter.editUnconditionalIds(pictureTokens: 16) }
+        // MiniMax Music 3: each prompt as the description and as the lyrics, assembled as the official integration does.
+        case "minimax-music3":
+            let tokenizer = try BPETokenizer(folder: folder)
+            return { tokenizer.encode(Music3Prompt.assemble(caption: $0, lyrics: $0), addSpecialTokens: true) }
         default:
             throw BPETokenizer.TokenizerError.unsupported("the pipeline \(name)")
         }

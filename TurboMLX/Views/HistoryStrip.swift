@@ -191,8 +191,8 @@ private struct HistoryThumbnail: View {
                 if item.request.transparentBackground { Checkerboard(squareSize: 6) }
             }
             .overlay(alignment: .bottomLeading) {
-                if item.kind == .video {
-                    Image(systemName: "play.fill")
+                if item.kind == .video || item.kind == .audio {
+                    Image(systemName: item.kind == .audio ? "music.note" : "play.fill")
                         .font(.caption2)
                         .padding(4)
                         .background(.black.opacity(0.5), in: Circle())

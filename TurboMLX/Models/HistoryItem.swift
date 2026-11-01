@@ -7,22 +7,26 @@ nonisolated enum MediaKind: String, Codable, Hashable, Sendable {
     case video
     /// A 3D object (Idol): a GLB, with a PNG still the app draws of it.
     case model3D = "model3d"
+    /// A song (MiniMax-Music3): a WAV, with a PNG of its waveform the app draws.
+    case audio
 
-    /// What menus and tooltips call it: "image", "video", "3D object".
+    /// What menus and tooltips call it: "image", "video", "3D object", "song".
     var noun: String {
         switch self {
         case .image: "image"
         case .video: "video"
         case .model3D: "3D object"
+        case .audio: "song"
         }
     }
 
-    /// "Image", "Video", "3D Object".
+    /// "Image", "Video", "3D Object", "Song".
     var title: String {
         switch self {
         case .image: "Image"
         case .video: "Video"
         case .model3D: "3D Object"
+        case .audio: "Song"
         }
     }
 }
@@ -31,11 +35,11 @@ nonisolated enum MediaKind: String, Codable, Hashable, Sendable {
 nonisolated struct HistoryItem: Identifiable, Hashable, Codable, Sendable {
     var id: UUID
     var createdAt: Date
-    /// File name inside the history folder: a PNG, a movie for `.video`, a GLB for `.model3D`.
+    /// File name inside the history folder: a PNG, a movie for `.video`, a GLB for `.model3D`, a WAV for `.audio`.
     var fileName: String
     /// Absent in items saved before there were videos: an image.
     var media: MediaKind?
-    /// A PNG frame of a video, or a still of a 3D object, for thumbnails and Quick Look.
+    /// A PNG frame of a video, a still of a 3D object or a song's waveform, for thumbnails and Quick Look.
     var posterFileName: String?
     var modelID: String
     var modelName: String

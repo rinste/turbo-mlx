@@ -10,6 +10,8 @@ final class GenerationJob: Identifiable {
         case starting
         case loadingModel
         case encodingPrompt
+        /// A song's language models writing it frame by frame (`step` of `composeTotal`).
+        case composing
         case denoising
         case decoding
         case encodingVideo
@@ -21,6 +23,7 @@ final class GenerationJob: Identifiable {
             case .starting: "Starting…"
             case .loadingModel: "Loading the model…"
             case .encodingPrompt: "Reading the prompt…"
+            case .composing: "Composing…"
             case .denoising: "Generating"
             case .decoding: video ? "Decoding the video and sound…" : "Decoding the image…"
             case .encodingVideo: "Encoding the video…"
@@ -41,6 +44,9 @@ final class GenerationJob: Identifiable {
         didSet { if phase == .decoding, oldValue != .decoding { decodeStartedAt = Date() } }
     }
     var step = 0
+    /// A song: the most frames its language models may write (they may end it sooner), 25 a second.
+    private(set) var composeTotal = 0
+    private(set) var composeStartedAt: Date?
     /// The steps the engine says it will count (LTX-2 adds its refining steps to the ones asked).
     var reportedTotal: Int?
     var startedAt: Date?
@@ -79,6 +85,16 @@ final class GenerationJob: Identifiable {
             default: break
             }
         }
+        // A song: written, then its sound made window by window, then decoded.
+        if model.family.media == .audio {
+            switch phase {
+            case .encodingPrompt: return "Reading the lyrics…"
+            case .composing: return "Composing: \(Format.songDuration(Double(step) / 25)) of up to \(Format.songDuration(Double(composeTotal) / 25))"
+            case .denoising: return "Making the sound: step \(step) of \(totalSteps)"
+            case .decoding: return "Decoding the sound…"
+            default: break
+            }
+        }
         if phase == .denoising { return "Step \(step) of \(totalSteps)" }
         return phase.label(video: model.family.media == .video)
     }
@@ -92,6 +108,7 @@ final class GenerationJob: Identifiable {
                 return plan.steps.prefix(step).reduce(0, +) / total
             }
             return Double(step) / Double(max(totalSteps, 1))
+        case .composing: return composeTotal > 0 ? Double(step) / Double(composeTotal) : nil
         case .decoding, .encodingVideo, .saving: return 1
         default: return nil
         }
@@ -122,6 +139,11 @@ final class GenerationJob: Identifiable {
         case .decoding:
             guard let plan, let decodeStartedAt else { return nil }
             return max(plan.decode * pace - now.timeIntervalSince(decodeStartedAt), 0)
+        // A song's frames at the pace they have come so far, then the flow and the decode as planned.
+        case .composing:
+            guard let plan, composeTotal > 0, step >= 25, let composeStartedAt else { return nil }
+            let perFrame = now.timeIntervalSince(composeStartedAt) / Double(step)
+            return Double(composeTotal - step) * perFrame + plan.steps.reduce(0, +) + plan.decode
         default:
             return nil
         }
@@ -144,6 +166,17 @@ final class GenerationJob: Identifiable {
 
     /// A clip whose length the model has yet to pick: its frames are only the longest it may be.
     var framesAreLongest: Bool { request.autoDuration == true && !framesSettled }
+
+    func beginComposing(frames: Int) {
+        phase = .composing
+        step = 0
+        composeTotal = frames
+        composeStartedAt = Date()
+    }
+
+    func advanceComposing(to frames: Int) {
+        step = frames
+    }
 
     func beginDenoising() {
         phase = .denoising

@@ -7,8 +7,9 @@ struct OutputPanel: View {
     @Environment(AppModel.self) private var app
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.undoManager) private var undoManager
-    /// The clip on the stage, here so that space reaches it.
+    /// The clip on the stage, here so that space reaches it; the song likewise.
     @State private var clip = ClipPlayer()
+    @State private var song = SongPlayer()
     @FocusState private var isFocused: Bool
 
     var body: some View {
@@ -38,10 +39,11 @@ struct OutputPanel: View {
             default: break
             }
         }
-        // Space plays or pauses a clip, and does nothing else: no Quick Look on an image, and no
-        // beep for a key nobody took.
+        // Space plays or pauses a clip or a song, and does nothing else: no Quick Look on an image,
+        // and no beep for a key nobody took.
         .onKeyPress(.space) {
             if app.displayedItem?.kind == .video { clip.togglePlayback() }
+            if app.displayedItem?.kind == .audio { song.toggle() }
             return .handled
         }
     }
@@ -64,6 +66,10 @@ struct OutputPanel: View {
             // Turned with the mouse or the trackpad, a new stage for each object.
             ObjectStage(url: app.url(for: item))
                 .id(item.id)
+        } else if let item = app.displayedItem, item.kind == .audio {
+            // Its waveform and a play button, a new stage for each song.
+            SongStage(player: song, url: app.url(for: item)) { isFocused = true }
+                .id(item.id)
         } else if let item = app.displayedItem {
             // A new stage for each image, so it starts fitted.
             ImageStage(item: item) { isFocused = true }
@@ -73,11 +79,13 @@ struct OutputPanel: View {
         } else {
             let media = app.selectedModel?.family.media ?? .image
             ContentUnavailableView {
-                Label(media == .video ? "No Clips Yet" : media == .model3D ? "No Objects Yet" : "No Images Yet",
-                      systemImage: media == .video ? "film.stack" : media == .model3D ? "cube" : "photo.on.rectangle.angled")
+                Label(media == .video ? "No Clips Yet" : media == .model3D ? "No Objects Yet" : media == .audio ? "No Songs Yet" : "No Images Yet",
+                      systemImage: media == .video ? "film.stack" : media == .model3D ? "cube" : media == .audio ? "music.note.list" : "photo.on.rectangle.angled")
             } description: {
                 Text(media == .model3D
                      ? "Choose a picture of one object on the left and click Generate.\nThe objects you create stay here, in the history."
+                     : media == .audio
+                     ? "Describe the music and write its lyrics on the left, then click Generate.\nThe songs you create stay here, in the history."
                      : "Write a prompt on the left and click Generate.\nThe \(media == .video ? "clips" : "images") you create stay here, in the history.")
             }
         }
@@ -375,6 +383,10 @@ private struct ItemInfoBar: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(item.caption)
+                        if let lyrics = item.request.lyrics {
+                            Text(lyrics)
+                                .foregroundStyle(.secondary)
+                        }
                         if let negativePrompt = item.request.negativePrompt {
                             Text("Negative: \(negativePrompt)")
                                 .foregroundStyle(.secondary)
@@ -403,6 +415,11 @@ private struct ItemInfoBar: View {
                     if let gaussians = item.request.numGaussians {
                         MetadataChip(systemImage: "cube", text: "\(ObjectDetail.label(gaussians)) Gaussians",
                                      help: "\(gaussians) Gaussians, from a \(item.request.objectMode == ObjectMode.photo.rawValue ? "photo" : "render")")
+                    } else if item.kind == .audio {
+                        // The length it came out at, 25 frames a second, and the longest asked.
+                        let length = item.request.frames.map { Double($0) / 25 } ?? item.request.duration ?? 0
+                        MetadataChip(systemImage: "waveform", text: Format.songDuration(length),
+                                     help: item.request.duration.map { "Asked for up to \(Format.songDuration($0))" } ?? "")
                     } else {
                         MetadataChip(systemImage: "aspectratio", text: "\(item.size.width)×\(item.size.height)")
                     }
@@ -423,7 +440,7 @@ private struct ItemInfoBar: View {
                                          help: "The full model with guidance (CFG \(Format.guidance(item.request.guidance))) and a negative prompt")
                         }
                         MetadataChip(systemImage: "stairs", text: "\(item.request.steps) steps")
-                        if item.kind != .video {
+                        if item.kind != .video, item.kind != .audio {
                             MetadataChip(systemImage: "dial.medium", text: "CFG \(Format.guidance(item.request.guidance))")
                         }
                     }
@@ -447,8 +464,8 @@ private struct ItemInfoBar: View {
     /// "Generation time" plus, when the engine reported them, the seconds of each phase.
     private var timingHelp: String {
         let phases: [(key: String, label: String)] = [
-            ("load", "Model load"), ("encode", item.request.upscale == nil ? "Prompt" : "Picture"), ("denoise", "Steps"),
-            ("decode", "Decode"), ("save", "Save"),
+            ("load", "Model load"), ("encode", item.request.upscale == nil ? "Prompt" : "Picture"), ("compose", "Composing"),
+            ("denoise", "Steps"), ("decode", "Decode"), ("save", "Save"),
         ]
         guard let timings = item.timings else { return "Generation time" }
         let lines = phases.compactMap { phase in timings[phase.key].map { "\(phase.label): \(Format.seconds($0))" } }
@@ -487,7 +504,8 @@ struct HistoryItemMenu: View {
     let item: HistoryItem
 
     var body: some View {
-        if let selected = app.selectedModel, selected.family.takesReferenceImage, !selected.family.isUpscaler, item.kind != .model3D {
+        if let selected = app.selectedModel, selected.family.takesReferenceImage, !selected.family.isUpscaler, item.kind != .model3D,
+           item.kind != .audio {
             Button(selected.family.takesLastFrame ? "Use as First Frame" : "Use as Reference Image") { app.useAsReference(item) }
             if selected.family.takesLastFrame {
                 Button("Use as Last Frame") { app.useAsReference(item, lastFrame: true) }
@@ -532,10 +550,14 @@ private struct GenerationFrame: View {
     /// The model picks the clip's length, `frames` being the longest.
     var isLongest = false
     var isPulsing = false
+    /// A song: the longest it may last.
+    var songSeconds: Double?
 
-    /// "768 × 512", and the duration for a clip ("up to 5 s" while the model has to pick it); for a 3D object, what it is.
+    /// "768 × 512", and the duration for a clip ("up to 5 s" while the model has to pick it); for a 3D object or a song,
+    /// what it is.
     private var sizeLabel: String {
         if model.family.media == .model3D { return "3D object" }
+        if model.family.media == .audio { return "Song, up to \(Format.songDuration(songSeconds ?? 60))" }
         let dimensions = "\(size.width) × \(size.height)"
         guard let frames, let fps, fps > 0 else { return dimensions }
         let duration = Format.clipDuration(frames: frames, fps: fps)
@@ -602,10 +624,12 @@ private struct DraftView: View {
                     size: app.settings.size(for: model.family),
                     frames: video ? app.settings.videoFrames : nil,
                     fps: video ? app.settings.videoFrameRate : nil,
-                    isLongest: video && app.settings.autoDuration(for: model.family)
+                    isLongest: video && app.settings.autoDuration(for: model.family),
+                    songSeconds: model.family.media == .audio ? app.settings.songSeconds : nil
                 )
                 VStack(spacing: 6) {
-                    Text(video ? "New Clip" : model.family.media == .model3D ? "New 3D Object" : "New Image").font(.headline)
+                    Text(video ? "New Clip" : model.family.media == .model3D ? "New 3D Object" : model.family.media == .audio ? "New Song" : "New Image")
+                        .font(.headline)
                     Text("Set it up on the left, then Generate (⌘↩). What you change here stays for the next time you come back to +.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -631,7 +655,7 @@ private struct JobView: View {
                 PreviewFrame(image: preview, size: job.request.size)
             } else {
                 GenerationFrame(model: job.model, size: job.request.size, frames: job.request.frames, fps: job.request.fps,
-                                isLongest: job.framesAreLongest, isPulsing: !isQueued && !job.isCancelling)
+                                isLongest: job.framesAreLongest, isPulsing: !isQueued && !job.isCancelling, songSeconds: job.request.duration)
             }
 
             VStack(spacing: 10) {

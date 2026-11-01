@@ -190,10 +190,16 @@ enum Format {
             ? "\(Int(rounded)) s"
             : "\(rounded.formatted(.number.precision(.fractionLength(1)))) s"
     }
+
+    /// A song's length: "45 s" under a minute, "2:05" from one.
+    static func songDuration(_ seconds: Double) -> String {
+        let whole = Int(seconds.rounded())
+        return whole < 60 ? "\(whole) s" : "\(whole / 60):\(String(format: "%02d", whole % 60))"
+    }
 }
 
 extension NSPasteboard {
-    /// An image as `copyImage` copies it; a clip or a 3D object as its file.
+    /// An image as `copyImage` copies it; a clip, a 3D object or a song as its file.
     func copyItem(_ item: HistoryItem, at url: URL) {
         guard item.kind != .image else { return copyImage(at: url) }
         clearContents()

@@ -1,7 +1,7 @@
 # turbo-engine
 
 The engine of Turbo MLX: the catalog's families (the image models, LTX-2 for video, the SeedVR2
-upscaler and Idol, which makes a 3D object of a picture) on
+upscaler, Idol, which makes a 3D object of a picture, and MiniMax-Music3, which makes songs) on
 [MLX Swift](https://github.com/ml-explore/mlx-swift), behind a JSON-lines protocol (below) that
 the app speaks to it; the Python engine the app used to ship, `Reference/turbo_worker.py`, speaks
 it too for the image families (see `docs/native-engine.md` for the why and the plan).
@@ -40,6 +40,10 @@ Sources/TurboEngineCore/      protocol, mflux checkpoint loading, PNG output, th
                               transformer, the video VAE (tiled decode, image encoder), the ×2
                               latent upsampler, the audio VAE and the 48 kHz vocoder, the
                               distilled two-stage pipeline
+  Families/MiniMaxMusic3/     MiniMax-Music3: the official prompt rules in Python's string
+                              semantics, Qwen3-8B with a key-value cache and the RVQ depth decoder
+                              drawing the frames with guidance (mlx-audio's keys), the condition
+                              encoder, the 1D flow transformer on overlapping windows, the vocoder
   Families/Idol/              Idol: the picture's cutout (BiRefNet: Swin-L, deformable ASPP, its
                               columns in a Metal kernel) and crop in Pillow's arithmetic, DINOv3
                               ViT-H+/16, FLUX.2's VAE encoder and its posterior's sample, the
@@ -64,12 +68,15 @@ Fixtures/requirements-moss.txt  OpenMOSS's pipeline file and the Python the MOSS
 Reference/turbo_worker.py     mflux behind the same protocol, to compare real images
 Reference/sensenova_reference.py  SenseTime's code on an MLX pack's weights, for SenseNova's
 Reference/idol_reference.py   idol-sdk's code on the MLX pack's weights, for Idol's checks
+Reference/music3_reference.py  mlx-audio on the MLX pack, stage by stage, and the official prompt
+                              functions on a corpus, for MiniMax-Music3's checks
 Reference/moss_image_reference.py  OpenMOSS's pipeline on a checkpoint, for MOSS-Image's
 Licenses/                     the licenses of the projects the ports follow (mflux, ltx-2-mlx,
                               SenseNova-U1, OpenMOSS's MOSS-Image pipeline, mlx-lm with
                               mlx-swift-lm for the mixture-of-experts layers and the gated delta
-                              rule's kernel, Pillow for its resizes, tokenizers for the tokenizer), which
-                              the app's acknowledgements reproduce
+                              rule's kernel, Pillow for its resizes, tokenizers for the tokenizer,
+                              mlx-audio, minimax-music3-mlx and diffusers for MiniMax-Music3, and
+                              MiniMax-Music3's own licence), which the app's acknowledgements reproduce
 ```
 
 SeedVR2's text embedding ships with the engine, in its resource bundle
@@ -98,6 +105,7 @@ names its tensors instead, and only the VAE's convolutions are transposed on loa
 | SenseNova-U1.5 8B-MoT (8-step) | the understanding stack (Qwen3, 42 layers of 4096, each head's first half rotated by text position, the rest by row and column, separate norms) reads the "neo1_0" query with SenseTime's system message into a key–value cache; guidance above 1 adds an unconditional query; an edit's picture (resized with Pillow's Lanczos to about the image's area, within 512² and 2048²) goes in through the stack's own patch embedding, its tokens between `<img>` and `</img>` at one text position, seeing each other; guidance's unconditional query is then the picture alone | the generation stack (the same layers' `_mot_gen` weights) over the image's tokens (32 × 32 pixels: a 16-pixel patch embedding with a 2D rotation, merged 2 × 2) plus time and noise-scale embeddings, attending to the cache without a mask; activations bf16 as the reference | none: a convolutional pixel head (pixel shuffles, two 3 × 3 convolutions) predicts the clean image, the velocity is derived from it; Euler steps from t = 0 on a schedule shifted by 3, noise scaled with the image's size | off (the distilled packs); true CFG otherwise |
 | LTX-2.3 distilled | Gemma 3 12B (4-bit, all 49 hidden states, prompt left-padded to 1024), per-token RMS, two projections and two 8-block connectors with learnable registers | 48 audio–video blocks (4096 + 2048 wide, cross-modal attention both ways), block linears 4 or 8 bits, float32 activations | causal-3D conv VAE (non-causal decoder, 32 × 32 × 8, 128 channels), tiled over frames and pixels; audio VAE + BigVGAN vocoder with bandwidth extension to 48 kHz | none (distilled); two stages: 8 steps at half size, ×2 latent upsampler, 3 steps |
 | Idol (3D object) | none: the picture, cut out by BiRefNet (unless it has an alpha), cropped around the object (1.2 × its box for a render, 1.7 for a photo) to 1024 on black; its DINOv3 ViT-H+/16 tokens (bf16, the affine final norm then a plain LayerNorm) and a sample of the FLUX.2 VAE's posterior, patchified and normalized, 4,101 tokens each | a rectified-flow transformer over the object's 8,192 × 16 latent and a camera token: the latent refined by two time-modulated blocks, the picture by two plain ones (once per guidance branch), then 24 joint blocks; each block's rotation learned per token (RePo); 8-bit linears, float16 stream, float32 norms and heads; 50 Euler steps on a grid shifted by 3 | an octree descent (eight levels, systematic resampling) places an anchor per 32 Gaussians, a cross-attending decoder turns each into 32; written as a GLB of discs, turned so the picture's view faces +Z | CFG 3 against zeroed picture tokens, the unconditional pass with them collapsed to two weighted keys |
+| MiniMax-Music3 (song) | the description cleaned and the lyrics normalized as the official integration does (code point for code point), between the checkpoint's special tokens, at most 5,000; the unconditional prompt the same with every token but the first and last two replaced by the guidance token | a hierarchical autoregressive stage: Qwen3-8B (36 layers of 4096, 8-bit, its own 200k vocabulary and head) draws each frame's semantic code (25 a second) and a 4-layer depth decoder its seven residual codes, both with guidance 1.5 and top-50 sampling from mlx-audio's keys; each frame's hidden states (the global model's and the depth decoder's seven) mixed by learned weights into the condition; then a 36-layer 1D flow transformer (2048 wide, partial rotary, 8-bit) on windows of 200 frames every 100, 30 Euler steps each, the overlap pulled toward the previous window's | DAC-style vocoder (snake activations, ×512) to 44.1 kHz stereo, the middle of each window kept; a WAV | CFG 1.5 (language models), 1.7 (flow, against a zero condition) |
 | SeedVR2 3B (upscaler) | none: a fixed 58 × 5120 embedding | 32 blocks of 2560 (10 with separate video and text weights, then shared), the video's 2 × 2 patches attending in windows (shifted every other block) with the whole text, rotary frequencies read from the checkpoint, float16 weights and float32 activations; input: noise, the picture's latent and a mask of ones; one Euler step from t = 1000 | causal 3D VAE, 16 channels, encode and decode in 512-pixel tiles; then the picture's low frequencies under the result's detail (five-level wavelet) and its Lab a/b (and 20% of L) histograms | none |
 
 Every family keeps a prompt cache and encodes the queued prompts while its text encoder is
@@ -519,6 +527,36 @@ generator, not PyTorch's), so a seed gives another object of the same picture. T
 object takes 300 s at 50 steps (5.9 s a guided step) and 153 s at 25, peaking at 8.3 GB (6.8 with Save memory),
 against 530–607 s for the reference; picture, encoders and decoders take 6 s of it.
 
+## Checking MiniMax-Music3 against mlx-audio
+
+MiniMax-Music3's reference is mlx-audio's MLX port (`mlx_audio/music/models/minimax_music3`, the release on PyPI as
+0.6.3, the same files as its main branch on 1 November 2026), which follows MiniMax's own integration in diffusers
+(`modular_pipelines/minimax_music3`); the prompt's cleaning, where mlx-audio differs from it in edge cases, follows
+diffusers', whose functions `Reference/music3_reference.py` copies. It runs on the pack the app downloads
+(`mlx-community/MiniMax-Music3-8bit`). `--record <dir>` writes the prompt and its ids, the first frames of the
+autoregressive stage step by step (keys, guided logits, codes, depth hidden states, feedback), every frame from the
+seed, and the flow on them (condition, noise, both velocities at one time, a window's 30 steps, the vocoder, two
+windows with their overlap); `--truth <dir>` the same stages in float32 from the recording's inputs; `--prompts <dir>`
+captions and lyrics as the official functions make them.
+
+```bash
+build/music3-venv/bin/python -I Engine/Reference/music3_reference.py <snapshot> --record build/fixtures/minimax-music3 --prompts build/fixtures/minimax-music3
+build/music3-venv/bin/python -I Engine/Reference/music3_reference.py <snapshot> --truth build/fixtures/minimax-music3
+build/bin/turbo-engine verify build/fixtures/minimax-music3
+```
+
+On 1 November 2026 (an M1 Max): the prompt text and ids identical, 35 tricky captions and lyrics as the official
+functions make them, the tokenizer identical to `transformers` on the corpus; the guided semantic logits, the
+feedback, the condition encoder and the noise from seed + 7 exactly the reference's; everything else as close to
+float32 as mlx-audio's own run, or closer (the prompt's last hidden states 1.07% from float32 against 1.09%, the depth
+decoder 0.5–0.7% against 0.4–0.6%, the flow's velocities 4.3–5.0% both, a window's latents after 30 steps 2.7%
+against 3.3%, the vocoder 1.3% both, two windows of four steps 10.3% against 9.8%). The two builds of MLX (PyPI's
+0.32.4 and mlx-swift's) round bf16 apart by an ulp here and there, and a near tie then draws another code: a seed
+gives another song than mlx-audio's from the same prompt, the frames identical only while the draws agree. Through
+the protocol 6 s took 53 s on both (composing 16.9 s here against 17.6 s, the flow 35 s), 10 s 116 s, 60 s 836 s
+(composing 171 s, 114 ms a frame; 420 flow steps on 14 windows 651 s, 1.55 s each; the vocoder 13 s), peaking at
+17.8–18.8 GB, 14.4 GB with Save memory, which lets the language models go once the song is composed.
+
 ## Checking the tokenizers
 
 The engine tokenizes on its own (`Tokenizer/`), with no library: each family's prompt pipeline
@@ -577,14 +615,21 @@ Checking LTX-2 against ltx-2-mlx. Idol (`family: "idol"`) reads the picture (`im
 (32,768 to 1,048,576, a multiple of 32), `mode` ("synthetic" or "real"), `steps` (1 to 100), `guidance` and `seed`, and
 refuses anything else by name before loading; it reports the phases `segmenting`, `encoding`, `denoising` (with its
 `total`), `decoding` and `saving`, writes the GLB at `output` (whole or not at all), and its `done` gives the discs
-written as `gaussians` and the timings `segment`, `encode`, `denoise`, `decode` and `save`, with no size or poster. Events on stdout: `ready`, `phase`, `progress`, `preview` (id,
+written as `gaussians` and the timings `segment`, `encode`, `denoise`, `decode` and `save`, with no size or poster.
+MiniMax-Music3 (`family: "minimax-music3"`) reads the description as `prompt`, `lyrics` (section tags on lines of
+their own, `[instrumental]` for none), `duration` (the longest the song may last, up to 360 s; the model may end it
+sooner), `steps` (1 to 30, the flow's on each window) and `seed`, and refuses anything else by name before loading; it
+reports `encoding`, `composing` (`total`: the most frames, 25 a second, `progress` counting them), `denoising` (with
+its `total`), `decoding` and `saving`, writes a 16-bit WAV at `output`, and its `done` gives `duration` (seconds),
+`sample_rate`, `frames` and the timings `encode`, `compose`, `denoise`, `decode` and `save`, with no size. Events on stdout: `ready`, `phase`, `progress`, `preview` (id,
 step, path: a small PNG of the image as it forms, written again at each), `done` (path, seed, size,
 seconds, peak_memory, timings per phase), `failed`, `cancelled`, `model_loaded`, `load_failed` (a
 `load` that did not), `unloaded`. Everything else goes to stderr, which the app shows as the
 engine log.
 
-Every PNG and MP4 the engine writes carries IPTC's Digital Source Type in XMP (`Provenance.swift`):
+Every PNG, MP4 and WAV the engine writes carries IPTC's Digital Source Type in XMP (`Provenance.swift`):
 `trainedAlgorithmicMedia` for a result from a prompt, `compositeWithTrainedAlgorithmicMedia` for
 one made from `params.image`, unless that picture declares `trainedAlgorithmicMedia` itself. A PNG
 has it in ImageIO's XMP chunk, beside the parameters (`dc:description`); an MP4 in a top-level
-`uuid` box with Adobe's XMP UUID, appended once the writer has finished, where exiftool reads it.
+`uuid` box with Adobe's XMP UUID, appended once the writer has finished, where exiftool reads it; a WAV in a `_PMX`
+chunk, with the parameters as JSON in its INFO comment (`AudioOutput.swift`).
