@@ -304,7 +304,7 @@ final class AppModel {
     /// Downloads the selected model, then generates with the current prompt.
     func downloadAndGenerate() {
         guard let model = selectedModel else { return }
-        let isEmpty = model.family.isUpscaler ? !hasReferenceImage : settings.trimmedPrompt.isEmpty
+        let isEmpty = model.family.takesPrompt ? settings.trimmedPrompt.isEmpty : !hasReferenceImage
         generateAfterDownload = isEmpty ? nil : model.id
         download(model)
         if !downloads.isDownloading(model) { generateAfterDownload = nil }
@@ -466,7 +466,7 @@ final class AppModel {
             return downloads.qualityProgress(model) != nil ? .qualityDownloading : .qualityNotDownloaded
         }
         if model.family.requiresReferenceImage, !hasReferenceImage { return .missingReference }
-        if !model.family.isUpscaler, settings.trimmedPrompt.isEmpty { return .emptyPrompt }
+        if model.family.takesPrompt, settings.trimmedPrompt.isEmpty { return .emptyPrompt }
         if model.family.isUpscaler, let size = settings.upscaledSize, size.megapixels > Upscale.maxMegapixels { return .upscaleTooLarge }
         switch loraState(for: model) {
         case .missing(let choice): return .loraMissing(choice.name)
@@ -549,6 +549,7 @@ final class AppModel {
         guard blocker == nil, let model = selectedModel else { return }
         preloadDeclined = false
         let isVideo = model.family.media == .video
+        let isObject = model.family.media == .model3D
         let upscales = model.family.isUpscaler
         let quality = settings.fullPipeline(for: model)
         // A reference image whose file is gone (a history folder emptied by hand) is dropped.
@@ -559,10 +560,11 @@ final class AppModel {
             FileManager.default.fileExists(atPath: HistoryStore.referenceURL(name).path) ? name : nil
         }
         for seed in settings.nextSeeds() {
-            // An upscale has no prompt: the picture and the factor say it all.
-            let request = GenerationRequest(
-                prompt: upscales ? "" : settings.trimmedPrompt,
-                blocks: upscales ? nil : settings.blocks.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
+            // An upscale and a 3D object have no prompt: the picture (and the factor, the detail) say it all.
+            let takesPrompt = model.family.takesPrompt
+            var request = GenerationRequest(
+                prompt: takesPrompt ? settings.trimmedPrompt : "",
+                blocks: takesPrompt ? settings.blocks.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } : nil,
                 negativePrompt: settings.negativePrompt(for: model),
                 seed: seed,
                 size: settings.size(for: model.family),
@@ -581,7 +583,11 @@ final class AppModel {
                 loras: settings.lora(for: model.family).map { [$0] },
                 quality: quality ? true : nil
             )
-            let output = isVideo ? history.newVideoURL(seed: seed) : history.newImageURL(seed: seed)
+            if isObject {
+                request.numGaussians = settings.gaussians
+                request.objectMode = settings.objectMode.rawValue
+            }
+            let output = isVideo ? history.newVideoURL(seed: seed) : isObject ? history.newObjectURL(seed: seed) : history.newImageURL(seed: seed)
             let job = GenerationJob(model: model, request: request, outputURL: output)
             job.plan = TimeEstimate.plan(model: model, request: request, history: history.items, models: models)
             queue.append(job)
@@ -697,7 +703,8 @@ final class AppModel {
         case "phase":
             switch event.phase {
             case "loading": job.phase = .loadingModel
-            case "encoding": job.phase = .encodingPrompt
+            // A 3D object's picture is cut out, then read: both "Reading the picture…".
+            case "encoding", "segmenting": job.phase = .encodingPrompt
             case "denoising":
                 // A length the model picked: the clip it will make, planned again.
                 if job.request.autoDuration == true, let frames = event.frames {
@@ -743,13 +750,19 @@ final class AppModel {
         if job.model.family.media == .video, let frames = event.frames {
             request.frames = frames
         }
+        // A 3D object comes without a still: the app draws one of it, next to it.
+        var poster = event.poster.map { URL(fileURLWithPath: $0).lastPathComponent }
+        if job.model.family.media == .model3D {
+            let still = job.outputURL.deletingPathExtension().appendingPathExtension("png")
+            if (try? ObjectStill.write(of: job.outputURL, to: still)) != nil { poster = still.lastPathComponent }
+        }
         // The job's ID, so that a job being looked at stays in view as its image or clip.
         history.add(HistoryItem(
             id: job.id,
             createdAt: Date(),
             fileName: job.outputURL.lastPathComponent,
             media: job.model.family.media,
-            posterFileName: event.poster.map { URL(fileURLWithPath: $0).lastPathComponent },
+            posterFileName: poster,
             modelID: job.model.id,
             modelName: job.model.name,
             request: request,
@@ -882,6 +895,10 @@ final class AppModel {
             // An upscale has neither prompt nor format: those stay as they are for the next image.
             updated.upscale = request.upscale ?? updated.upscale
             updated.softness = request.softness ?? updated.softness
+        } else if media == .model3D {
+            // A 3D object: its detail and its picture's kind; the prompt and the format stay as they are.
+            updated.gaussians = request.numGaussians ?? updated.gaussians
+            updated.objectMode = request.objectMode.flatMap(ObjectMode.init(rawValue:)) ?? updated.objectMode
         } else {
             if let blocks = request.blocks, !blocks.isEmpty {
                 updated.blocks = blocks

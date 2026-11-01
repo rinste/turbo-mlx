@@ -19,6 +19,8 @@ nonisolated struct WorkerEvent: Decodable, Sendable {
     var peakMemory: Int64?
     /// A clip's frames: in "done", and in the "denoising" phase once the model picked the length.
     var frames: Int?
+    /// "done" for a 3D object: the discs written to its GLB.
+    var gaussians: Int?
     /// Seconds per phase of a finished image: load, encode, denoise, decode, save.
     var timings: [String: Double]?
     var message: String?
@@ -122,6 +124,9 @@ nonisolated enum WorkerCommand: Sendable {
         if request.halfPrecision == true { params["precision"] = "bf16" }
         if preview { params["preview"] = true }
         if request.quality == true { params["quality"] = true }
+        // A 3D object (Idol): its detail and its picture's kind; the picture goes as "image" below.
+        if let gaussians = request.numGaussians { params["num_gaussians"] = gaussians }
+        if let mode = request.objectMode { params["mode"] = mode }
         if let loras = request.loras, !loras.isEmpty {
             params["loras"] = loras.map { ["path": LoRALibrary.url($0.file).path, "scale": $0.scale] as [String: Any] }
         }

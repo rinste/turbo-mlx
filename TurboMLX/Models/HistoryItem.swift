@@ -5,17 +5,37 @@ import UniformTypeIdentifiers
 nonisolated enum MediaKind: String, Codable, Hashable, Sendable {
     case image
     case video
+    /// A 3D object (Idol): a GLB, with a PNG still the app draws of it.
+    case model3D = "model3d"
+
+    /// What menus and tooltips call it: "image", "video", "3D object".
+    var noun: String {
+        switch self {
+        case .image: "image"
+        case .video: "video"
+        case .model3D: "3D object"
+        }
+    }
+
+    /// "Image", "Video", "3D Object".
+    var title: String {
+        switch self {
+        case .image: "Image"
+        case .video: "Video"
+        case .model3D: "3D Object"
+        }
+    }
 }
 
 /// A finished image (or clip) and the settings that produced it.
 nonisolated struct HistoryItem: Identifiable, Hashable, Codable, Sendable {
     var id: UUID
     var createdAt: Date
-    /// File name inside the history folder: a PNG, or a movie for `.video`.
+    /// File name inside the history folder: a PNG, a movie for `.video`, a GLB for `.model3D`.
     var fileName: String
     /// Absent in items saved before there were videos: an image.
     var media: MediaKind?
-    /// A PNG frame of a video, for thumbnails and Quick Look.
+    /// A PNG frame of a video, or a still of a 3D object, for thumbnails and Quick Look.
     var posterFileName: String?
     var modelID: String
     var modelName: String

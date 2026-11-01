@@ -70,6 +70,15 @@ final class GenerationJob: Identifiable {
         // An upscale has one step and no prompt: its picture is what is read first.
         if model.family.isUpscaler, phase == .encodingPrompt { return "Reading the picture…" }
         if model.family.isUpscaler, phase == .denoising { return "Upscaling…" }
+        // A 3D object: the picture cut out and read, then the object's steps, then its Gaussians and the GLB.
+        if model.family.media == .model3D {
+            switch phase {
+            case .encodingPrompt: return "Reading the picture…"
+            case .decoding: return "Making the Gaussians…"
+            case .saving: return "Writing the object…"
+            default: break
+            }
+        }
         if phase == .denoising { return "Step \(step) of \(totalSteps)" }
         return phase.label(video: model.family.media == .video)
     }

@@ -59,14 +59,19 @@ nonisolated struct ModelLocator: Sendable {
     }
 
     /// Each name present (a `*` matches any run of characters), as a file and not a dangling link.
+    /// A name may sit in a sub-folder (Idol's `dinov3/model.safetensors`); its last part may hold a `*`.
     static func hasFiles(_ names: [String], in folder: URL) -> Bool {
         let fileManager = FileManager.default
-        let files = (try? fileManager.contentsOfDirectory(atPath: folder.path)) ?? []
+        var listings: [String: [String]] = [:]
         return names.allSatisfy { name in
-            let regex = HubDownloader.regex(fnmatch: name)
+            let parts = name.split(separator: "/").map(String.init)
+            let directory = parts.dropLast().reduce(folder) { $0.appending(path: $1, directoryHint: .isDirectory) }
+            let files = listings[directory.path] ?? ((try? fileManager.contentsOfDirectory(atPath: directory.path)) ?? [])
+            listings[directory.path] = files
+            let regex = HubDownloader.regex(fnmatch: parts.last ?? name)
             return files.contains { file in
                 regex.firstMatch(in: file, range: NSRange(file.startIndex..., in: file)) != nil
-                    && fileManager.fileExists(atPath: folder.appending(path: file).path)
+                    && fileManager.fileExists(atPath: directory.appending(path: file).path)
             }
         }
     }

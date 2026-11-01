@@ -28,6 +28,8 @@ nonisolated enum ModelCompatibility {
         "qwen/qwen-image": (.qwenImage, nil),
         "qwen/qwen-image-2512": (.qwenImage, nil),
         "qwen/qwen-image-edit-2511": (.qwenImageEdit, nil),
+        // mlx-serve's packs of the release, which carry DINOv3 and the VAE's encoder (the release alone does not).
+        "speridlabs/idol": (.idol, nil),
     ]
 
     /// The families that share mflux's `transformer`, `text_encoder`, `vae` and `tokenizer` layout,
@@ -74,7 +76,9 @@ nonisolated enum ModelCompatibility {
         let topLevel = files.filter { !$0.contains("/") }
         for name in family.requiredFiles {
             let regex = HubDownloader.regex(fnmatch: name)
-            guard topLevel.contains(where: { regex.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil }) else {
+            // A name in a sub-folder (Idol's `dinov3/model.safetensors`) is looked for among the repository's paths.
+            let candidates = name.contains("/") ? files : topLevel
+            guard candidates.contains(where: { regex.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil }) else {
                 return "It has no \(name)."
             }
         }

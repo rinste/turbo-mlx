@@ -107,6 +107,9 @@ final class HistoryStore {
     /// A clip's file; the engine writes its poster next to it, with the same name as a PNG.
     func newVideoURL(seed: Int) -> URL { newURL(seed: seed, extension: "mp4") }
 
+    /// A 3D object's GLB; the app draws its still next to it, with the same name as a PNG.
+    func newObjectURL(seed: Int) -> URL { newURL(seed: seed, extension: "glb") }
+
     private func newURL(seed: Int, extension ext: String) -> URL {
         let stamp = Self.fileStamp.string(from: Date())
         var name = "\(stamp)-\(seed).\(ext)"

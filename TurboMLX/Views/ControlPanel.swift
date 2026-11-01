@@ -18,6 +18,9 @@ struct ControlPanel: View {
                 if model.family.isUpscaler {
                     // No prompt and no format: the picture, and how much larger.
                     UpscaleSection(settings: $app.settings)
+                } else if model.family.media == .model3D {
+                    // No prompt and no format: the picture, the object's detail, the picture's kind.
+                    ObjectSection(settings: $app.settings)
                 } else {
                     let quality = app.settings.fullPipeline(for: model)
                     PromptSection(settings: $app.settings, focus: $focusedBlock)
@@ -83,6 +86,7 @@ private struct ModelSelection: View {
                         section("Upscale") { $0.family.isUpscaler },
                         section("Image") { $0.family.media == .image && !$0.family.isUpscaler },
                         section("Video") { $0.family.media == .video },
+                        section("3D") { $0.family.media == .model3D },
                     ].filter { !$0.entries.isEmpty },
                     selection: $app.selectedModelID,
                     help: "A picture: the model also takes a reference image. Lines: it works from the prompt alone. A small arrow: not downloaded yet."
@@ -1525,6 +1529,38 @@ private struct ParametersSection: View {
     }
 }
 
+// MARK: - 3D object
+
+/// Idol's settings: how many Gaussians the object is made of, and what kind of picture it comes from (renders and
+/// generated pictures are cropped tight, photos looser).
+private struct ObjectSection: View {
+    @Binding var settings: GenerationSettings
+
+    var body: some View {
+        Section("3D Object") {
+            Picker("Detail", selection: $settings.gaussians) {
+                ForEach(ObjectDetail.choices, id: \.gaussians) { choice in
+                    Text(verbatim: choice.label).tag(choice.gaussians)
+                }
+            }
+            .pickerStyle(.segmented)
+            .help("How many Gaussians the object is made of: more, finer detail and a larger file. 256K is the model’s own; the time hardly changes.")
+
+            Picker("Picture", selection: $settings.objectMode) {
+                ForEach(ObjectMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .help("Render: a 3D render or a generated picture, cropped tight around the object. Photo: a photograph, cropped looser.")
+
+            Label("One object on a plain background works best; Idol cuts it out and invents its sides and back.", systemImage: "cube")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
 // MARK: - Upscale
 
 /// An upscaler's settings: how many times larger, how much the picture is softened first, and the
@@ -1636,7 +1672,8 @@ private struct AdvancedSection: View {
                 // An upscale has one step, and its size is its picture's, times the scale.
                 if !family.isUpscaler {
                     StepsRow(settings: $settings, model: model)
-                    SizeRows(settings: $settings, family: family)
+                    // A 3D object has no size.
+                    if family.media != .model3D { SizeRows(settings: $settings, family: family) }
                 }
                 OutputRows(settings: $settings, family: family)
                 MemoryRows(settings: $settings, family: family)
@@ -1647,7 +1684,7 @@ private struct AdvancedSection: View {
     /// What the closed section holds: the steps, the size, a fixed seed.
     private var summary: String {
         let size = settings.size(for: family)
-        var parts = ["\(size.width) × \(size.height) px"]
+        var parts = family.media == .model3D ? [] : ["\(size.width) × \(size.height) px"]
         if !family.isUpscaler {
             let range = model.stepRange(quality: settings.fullPipeline(for: model))
             parts.insert("\(min(max(settings.steps, range.lowerBound), range.upperBound)) steps", at: 0)
@@ -1798,6 +1835,8 @@ private struct MemoryRows: View {
             "Frees Gemma 4 and the text connector (about 15 GB) once the prompt is read, and the transformer before the clip is decoded. A prompt that was not in the queue yet loads them again."
         case .seedVR2:
             "SeedVR2 always reads and writes the picture in tiles."
+        case .idol:
+            "Frees the cutout's network and DINOv3 (about 2.5 GB) once the picture is read: about 7 GB instead of 9 GB. The next object loads them again, a second or two."
         }
         return base + " On by default below 64 GB of memory."
     }
@@ -1964,6 +2003,7 @@ private struct GenerateBar: View {
             lowMemory: settings.lowMemory,
             halfPrecision: model.family.supportsHalfPrecision && settings.halfPrecision,
             quality: settings.fullPipeline(for: model),
+            gaussians: model.family.media == .model3D ? settings.gaussians : nil,
             count: settings.batchCount,
             // A model the queue is using will be in memory by then.
             isLoaded: app.isLoaded(model) || (app.queue.last ?? app.activeJob)?.model.id == model.id,

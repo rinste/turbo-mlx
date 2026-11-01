@@ -89,6 +89,8 @@ public final class Engine {
         do {
             Memory.peakMemory = 0
             if isCancelled(id) { throw GenerationError.cancelled }
+            // A 3D object's settings are refused before anything loads.
+            if spec.family == "idol" { try IdolError.validate(Self.meshRequest(params)) }
             let model = try ensureModel(spec, jobID: id)
             try applyLoRAs(params.loras ?? [], to: model, spec: spec)
             let lowRam = spec.lowRam == true
@@ -97,6 +99,10 @@ public final class Engine {
             // (and, inside the families, tiled decoding and a released text encoder).
             Memory.cacheLimit = lowRam ? 1 << 30 : defaultCacheLimit
             if isCancelled(id) { throw GenerationError.cancelled }
+            if let mesh = model as? MeshFamilyModel {
+                try generateMesh(mesh, id: id, spec: spec, params: params, started: started)
+                return
+            }
 
             emitter.emit("phase", ["id": id, "phase": "encoding"])
             mark("encode_start")
@@ -300,6 +306,70 @@ public final class Engine {
             "peak_memory": Memory.peakMemory,
             "timings": timings,
         ])
+    }
+
+    /// A 3D object (Idol): the family writes the GLB itself. Phases segmenting, encoding, denoising (with its total),
+    /// decoding, saving; `done` gives the GLB's path, the discs written as `gaussians`, the time of each phase, and no
+    /// poster or size (the app draws its own still).
+    private func generateMesh(_ model: MeshFamilyModel, id: String, spec: ModelSpec, params: GenerationParams, started: Date) throws {
+        let request = Self.meshRequest(params)
+        try IdolError.validate(request)
+        var spans: [String: Double] = [:]
+        if let load = marks["load"] { spans["load"] = load }
+        var current: (name: String, since: Date)?
+        func enter(_ name: String?) {
+            if let current { spans[current.name, default: 0] += Date().timeIntervalSince(current.since) }
+            current = name.map { ($0, Date()) }
+        }
+        let mesh = try model.generateMesh(
+            request, output: URL(fileURLWithPath: params.output),
+            phase: { [self] phase in
+                switch phase {
+                case .segmenting:
+                    enter("segment")
+                    emitter.emit("phase", ["id": id, "phase": "segmenting"])
+                case .encoding:
+                    enter("encode")
+                    emitter.emit("phase", ["id": id, "phase": "encoding"])
+                case .denoising(let total):
+                    enter("denoise")
+                    emitter.emit("phase", ["id": id, "phase": "denoising", "total": total])
+                case .decoding:
+                    enter("decode")
+                    emitter.emit("phase", ["id": id, "phase": "decoding"])
+                case .saving:
+                    enter("save")
+                    emitter.emit("phase", ["id": id, "phase": "saving"])
+                }
+            },
+            progress: { [self] step, total in emitter.emit("progress", ["id": id, "step": step, "total": total]) },
+            isCancelled: { [self] in isCancelled(id) }
+        )
+        enter(nil)
+        let timings = spans.mapValues { ($0 * 100).rounded() / 100 }
+        emitter.log("[turbo] " + timings.map { "\($0.key) \(String(format: "%.1f", $0.value))s" }.sorted().joined(separator: " · ")
+                    + " · \(mesh.discs) discs of \(mesh.gaussians) Gaussians")
+        emitter.emit("done", [
+            "id": id,
+            "path": params.output,
+            "seed": params.seed,
+            "gaussians": mesh.discs,
+            "seconds": (Date().timeIntervalSince(started) * 100).rounded() / 100,
+            "peak_memory": Memory.peakMemory,
+            "timings": timings,
+        ])
+    }
+
+    /// A 3D object's request: the picture, the steps, guidance and seed, the Gaussians and the mode (the prompt, the size
+    /// and the alpha flag are not read).
+    static func meshRequest(_ params: GenerationParams) -> FamilyRequest {
+        var request = FamilyRequest(
+            prompt: "", seed: params.seed, width: params.width, height: params.height, steps: params.steps, guidance: params.guidance,
+            flattenAlpha: false, imagePaths: params.imagePaths
+        )
+        request.gaussians = params.numGaussians
+        request.mode = params.mode
+        return request
     }
 
     // MARK: LoRAs

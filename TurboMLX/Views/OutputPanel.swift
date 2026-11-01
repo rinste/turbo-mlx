@@ -60,6 +60,10 @@ struct OutputPanel: View {
             DraftView()
         } else if let item = app.displayedItem, item.kind == .video {
             VideoStage(player: clip, url: app.url(for: item), size: item.size) { isFocused = true }
+        } else if let item = app.displayedItem, item.kind == .model3D {
+            // Turned with the mouse or the trackpad, a new stage for each object.
+            ObjectStage(url: app.url(for: item))
+                .id(item.id)
         } else if let item = app.displayedItem {
             // A new stage for each image, so it starts fitted.
             ImageStage(item: item) { isFocused = true }
@@ -67,11 +71,14 @@ struct OutputPanel: View {
         } else if let model = app.selectedModel, !app.isInstalled(model) {
             ModelDownloadCard(model: model)
         } else {
-            let video = app.selectedModel?.family.media == .video
+            let media = app.selectedModel?.family.media ?? .image
             ContentUnavailableView {
-                Label(video ? "No Clips Yet" : "No Images Yet", systemImage: video ? "film.stack" : "photo.on.rectangle.angled")
+                Label(media == .video ? "No Clips Yet" : media == .model3D ? "No Objects Yet" : "No Images Yet",
+                      systemImage: media == .video ? "film.stack" : media == .model3D ? "cube" : "photo.on.rectangle.angled")
             } description: {
-                Text("Write a prompt on the left and click Generate.\nThe \(video ? "clips" : "images") you create stay here, in the history.")
+                Text(media == .model3D
+                     ? "Choose a picture of one object on the left and click Generate.\nThe objects you create stay here, in the history."
+                     : "Write a prompt on the left and click Generate.\nThe \(media == .video ? "clips" : "images") you create stay here, in the history.")
             }
         }
     }
@@ -88,14 +95,14 @@ struct OutputPanel: View {
             } label: {
                 Label("Copy", systemImage: "doc.on.doc")
             }
-            .help(item?.kind == .video ? "Copy the video (⇧⌘C)" : "Copy the image (⇧⌘C)")
+            .help("Copy the \((item?.kind ?? .image).noun) (⇧⌘C)")
             .disabled(item == nil)
 
             if let item {
                 ShareLink(item: app.url(for: item)) {
                     Label("Share", systemImage: "square.and.arrow.up")
                 }
-                .help(item.kind == .video ? "Share or save the video" : "Share or save the image")
+                .help("Share or save the \(item.kind.noun)")
             }
 
             Button {
@@ -111,7 +118,7 @@ struct OutputPanel: View {
             } label: {
                 Label("Move to Trash", systemImage: "trash")
             }
-            .help(item?.kind == .video ? "Move the video to the Trash" : "Move the image to the Trash")
+            .help("Move the \((item?.kind ?? .image).noun) to the Trash")
             .disabled(item == nil)
         }
     }
@@ -393,7 +400,12 @@ private struct ItemInfoBar: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     MetadataChip(systemImage: "cpu", text: shortModelName, help: "\(item.modelName)\n\(item.modelID)")
-                    MetadataChip(systemImage: "aspectratio", text: "\(item.size.width)×\(item.size.height)")
+                    if let gaussians = item.request.numGaussians {
+                        MetadataChip(systemImage: "cube", text: "\(ObjectDetail.label(gaussians)) Gaussians",
+                                     help: "\(gaussians) Gaussians, from a \(item.request.objectMode == ObjectMode.photo.rawValue ? "photo" : "render")")
+                    } else {
+                        MetadataChip(systemImage: "aspectratio", text: "\(item.size.width)×\(item.size.height)")
+                    }
                     if item.kind == .video, let frames = item.request.frames, let fps = item.request.fps, fps > 0 {
                         MetadataChip(systemImage: "film", text: "\(Format.clipDuration(frames: frames, fps: fps)) · \(fps) fps",
                                      help: "\(frames) frames at \(fps) fps")
@@ -411,7 +423,7 @@ private struct ItemInfoBar: View {
                                          help: "The full model with guidance (CFG \(Format.guidance(item.request.guidance))) and a negative prompt")
                         }
                         MetadataChip(systemImage: "stairs", text: "\(item.request.steps) steps")
-                        if item.kind == .image {
+                        if item.kind != .video {
                             MetadataChip(systemImage: "dial.medium", text: "CFG \(Format.guidance(item.request.guidance))")
                         }
                     }
@@ -475,7 +487,7 @@ struct HistoryItemMenu: View {
     let item: HistoryItem
 
     var body: some View {
-        if let selected = app.selectedModel, selected.family.takesReferenceImage, !selected.family.isUpscaler {
+        if let selected = app.selectedModel, selected.family.takesReferenceImage, !selected.family.isUpscaler, item.kind != .model3D {
             Button(selected.family.takesLastFrame ? "Use as First Frame" : "Use as Reference Image") { app.useAsReference(item) }
             if selected.family.takesLastFrame {
                 Button("Use as Last Frame") { app.useAsReference(item, lastFrame: true) }
@@ -490,7 +502,7 @@ struct HistoryItemMenu: View {
                 NSPasteboard.general.setString(item.prompt, forType: .string)
             }
         }
-        Button(item.kind == .video ? "Copy Video" : "Copy Image") { NSPasteboard.general.copyItem(item, at: app.url(for: item)) }
+        Button("Copy \(item.kind.title)") { NSPasteboard.general.copyItem(item, at: app.url(for: item)) }
         Divider()
         let url = app.url(for: item)
         Button(Self.openTitle(for: url)) { NSWorkspace.shared.open(url) }
@@ -521,8 +533,9 @@ private struct GenerationFrame: View {
     var isLongest = false
     var isPulsing = false
 
-    /// "768 × 512", and the duration for a clip ("up to 5 s" while the model has to pick it).
+    /// "768 × 512", and the duration for a clip ("up to 5 s" while the model has to pick it); for a 3D object, what it is.
     private var sizeLabel: String {
+        if model.family.media == .model3D { return "3D object" }
         let dimensions = "\(size.width) × \(size.height)"
         guard let frames, let fps, fps > 0 else { return dimensions }
         let duration = Format.clipDuration(frames: frames, fps: fps)
@@ -552,7 +565,8 @@ private struct GenerationFrame: View {
                 .foregroundStyle(.secondary)
                 .padding(8)
             }
-            .aspectRatio(CGSize(width: size.width, height: size.height), contentMode: .fit)
+            .aspectRatio(size.width > 0 && size.height > 0 ? CGSize(width: size.width, height: size.height) : CGSize(width: 1, height: 1),
+                         contentMode: .fit)
             .frame(maxWidth: min(CGFloat(size.width), 520), maxHeight: min(CGFloat(size.height), 520))
     }
 }
@@ -591,7 +605,7 @@ private struct DraftView: View {
                     isLongest: video && app.settings.autoDuration(for: model.family)
                 )
                 VStack(spacing: 6) {
-                    Text(video ? "New Clip" : "New Image").font(.headline)
+                    Text(video ? "New Clip" : model.family.media == .model3D ? "New 3D Object" : "New Image").font(.headline)
                     Text("Set it up on the left, then Generate (⌘↩). What you change here stays for the next time you come back to +.")
                         .font(.callout)
                         .foregroundStyle(.secondary)

@@ -15,6 +15,9 @@ import TurboEngineCore
 //                                  prompts (Engine/Fixtures/tokenizers.json by default)
 //   turbo-engine bench [options]   times the catalog's models found in the Hugging Face cache on
 //                                  fixed requests, with the peak memory of each (see Bench.swift)
+//   turbo-engine bench-idol <fixture> [--steps N]
+//                                  times the Idol denoiser over a whole guided run on a recording's
+//                                  picture tokens (see BenchIdol.swift)
 
 setvbuf(stdout, nil, _IOLBF, 0)
 signal(SIGPIPE, SIG_IGN)
@@ -52,7 +55,9 @@ case "verify-tokenizers":
     exit(VerifyTokenizers.run(corpus: URL(fileURLWithPath: corpus)) ? 0 : 1)
 case "bench":
     exit(Bench.run(arguments: Array(arguments.dropFirst())) ? 0 : 1)
+case "bench-idol":
+    exit(BenchIdol.run(arguments: Array(arguments.dropFirst())) ? 0 : 1)
 default:
-    Emitter.shared.log("usage: turbo-engine [serve | verify <fixture-folder> | verify --all [folder] | verify-tokenizers [corpus.json] | compare <a> <b> | bench [options]]")
+    Emitter.shared.log("usage: turbo-engine [serve | verify <fixture-folder> | verify --all [folder] | verify-tokenizers [corpus.json] | compare <a> <b> | bench [options] | bench-idol <fixture> [--steps N]]")
     exit(2)
 }

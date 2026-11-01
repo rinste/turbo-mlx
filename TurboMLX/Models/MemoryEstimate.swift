@@ -74,6 +74,10 @@ nonisolated enum MemoryEstimate {
         case ("numz/SeedVR2_comfyUI", _): Peak(floor: 10.7, base: 7.0, perMegapixel: 0.66)
         case ("mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit", false): Peak(floor: 10.9, base: 10.7, perMegapixel: 0.3)
         case ("mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit", true): Peak(floor: 7.7, base: 7.5, perMegapixel: 0.2)
+        // Idol (1 November 2026): 8.3–8.9 GB whatever the picture and the detail, the cutout's network setting it;
+        // 6.8 GB with Save memory, BiRefNet and DINOv3 let go once used.
+        case ("ddalcu/Idol-MLX-Serve-8bit", false): Peak(floor: 9, base: 9, perMegapixel: 0)
+        case ("ddalcu/Idol-MLX-Serve-8bit", true): Peak(floor: 7, base: 7, perMegapixel: 0)
         default: nil
         }
     }
@@ -109,6 +113,7 @@ nonisolated enum MemoryEstimate {
         switch model.family.media {
         case .video: peak(model: model, size: PixelSize(width: 512, height: 512), frames: 25, lowMemory: true, memory: memory)
         case .image: peak(model: model, size: PixelSize(width: 512, height: 512), frames: nil, lowMemory: true, memory: memory)
+        case .model3D: peak(model: model, size: PixelSize(width: 0, height: 0), frames: nil, lowMemory: true, memory: memory)
         }
     }
 }

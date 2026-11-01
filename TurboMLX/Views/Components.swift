@@ -193,9 +193,9 @@ enum Format {
 }
 
 extension NSPasteboard {
-    /// An image as `copyImage` copies it; a clip as its file.
+    /// An image as `copyImage` copies it; a clip or a 3D object as its file.
     func copyItem(_ item: HistoryItem, at url: URL) {
-        guard item.kind == .video else { return copyImage(at: url) }
+        guard item.kind != .image else { return copyImage(at: url) }
         clearContents()
         writeObjects([url as NSURL])
     }

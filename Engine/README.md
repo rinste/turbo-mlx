@@ -1,7 +1,7 @@
 # turbo-engine
 
-The engine of Turbo MLX: the catalog's nine families (seven image models, LTX-2 for video and the
-SeedVR2 upscaler) on
+The engine of Turbo MLX: the catalog's families (the image models, LTX-2 for video, the SeedVR2
+upscaler and Idol, which makes a 3D object of a picture) on
 [MLX Swift](https://github.com/ml-explore/mlx-swift), behind a JSON-lines protocol (below) that
 the app speaks to it; the Python engine the app used to ship, `Reference/turbo_worker.py`, speaks
 it too for the image families (see `docs/native-engine.md` for the why and the plan).
@@ -40,6 +40,11 @@ Sources/TurboEngineCore/      protocol, mflux checkpoint loading, PNG output, th
                               transformer, the video VAE (tiled decode, image encoder), the ×2
                               latent upsampler, the audio VAE and the 48 kHz vocoder, the
                               distilled two-stage pipeline
+  Families/Idol/              Idol: the picture's cutout (BiRefNet: Swin-L, deformable ASPP, its
+                              columns in a Metal kernel) and crop in Pillow's arithmetic, DINOv3
+                              ViT-H+/16, FLUX.2's VAE encoder and its posterior's sample, the
+                              denoiser (learned per-token rotation), the octree and Gaussian
+                              decoders, the GLB of discs
   Families/SeedVR2/           SeedVR2 3B: the causal 3D VAE (tiled encode and decode), the
                               windowed transformer, one flow step, the wavelet and Lab color
                               correction; the picture's preparation with Pillow's bicubic
@@ -58,6 +63,7 @@ Fixtures/requirements-sensenova.txt  SenseTime's code and the Python the SenseNo
 Fixtures/requirements-moss.txt  OpenMOSS's pipeline file and the Python the MOSS-Image checks run with
 Reference/turbo_worker.py     mflux behind the same protocol, to compare real images
 Reference/sensenova_reference.py  SenseTime's code on an MLX pack's weights, for SenseNova's
+Reference/idol_reference.py   idol-sdk's code on the MLX pack's weights, for Idol's checks
 Reference/moss_image_reference.py  OpenMOSS's pipeline on a checkpoint, for MOSS-Image's
 Licenses/                     the licenses of the projects the ports follow (mflux, ltx-2-mlx,
                               SenseNova-U1, OpenMOSS's MOSS-Image pipeline, mlx-lm with
@@ -91,6 +97,7 @@ names its tensors instead, and only the VAE's convolutions are transposed on loa
 | Ming-Image 0.1 Design | Ling-mini-2.0 MoE (256 experts, 8 routed with group-limited top-k, bf16 router as upstream), Qwen2 connector over 256 query tokens, direct-VLM head | S3-DiT in bf16, no padding, two caption streams | Qwen VAE for RGBA, one scaling factor, tiles | zeroed conditions |
 | SenseNova-U1.5 8B-MoT (8-step) | the understanding stack (Qwen3, 42 layers of 4096, each head's first half rotated by text position, the rest by row and column, separate norms) reads the "neo1_0" query with SenseTime's system message into a key–value cache; guidance above 1 adds an unconditional query; an edit's picture (resized with Pillow's Lanczos to about the image's area, within 512² and 2048²) goes in through the stack's own patch embedding, its tokens between `<img>` and `</img>` at one text position, seeing each other; guidance's unconditional query is then the picture alone | the generation stack (the same layers' `_mot_gen` weights) over the image's tokens (32 × 32 pixels: a 16-pixel patch embedding with a 2D rotation, merged 2 × 2) plus time and noise-scale embeddings, attending to the cache without a mask; activations bf16 as the reference | none: a convolutional pixel head (pixel shuffles, two 3 × 3 convolutions) predicts the clean image, the velocity is derived from it; Euler steps from t = 0 on a schedule shifted by 3, noise scaled with the image's size | off (the distilled packs); true CFG otherwise |
 | LTX-2.3 distilled | Gemma 3 12B (4-bit, all 49 hidden states, prompt left-padded to 1024), per-token RMS, two projections and two 8-block connectors with learnable registers | 48 audio–video blocks (4096 + 2048 wide, cross-modal attention both ways), block linears 4 or 8 bits, float32 activations | causal-3D conv VAE (non-causal decoder, 32 × 32 × 8, 128 channels), tiled over frames and pixels; audio VAE + BigVGAN vocoder with bandwidth extension to 48 kHz | none (distilled); two stages: 8 steps at half size, ×2 latent upsampler, 3 steps |
+| Idol (3D object) | none: the picture, cut out by BiRefNet (unless it has an alpha), cropped around the object (1.2 × its box for a render, 1.7 for a photo) to 1024 on black; its DINOv3 ViT-H+/16 tokens (bf16, the affine final norm then a plain LayerNorm) and a sample of the FLUX.2 VAE's posterior, patchified and normalized, 4,101 tokens each | a rectified-flow transformer over the object's 8,192 × 16 latent and a camera token: the latent refined by two time-modulated blocks, the picture by two plain ones (once per guidance branch), then 24 joint blocks; each block's rotation learned per token (RePo); 8-bit linears, float16 stream, float32 norms and heads; 50 Euler steps on a grid shifted by 3 | an octree descent (eight levels, systematic resampling) places an anchor per 32 Gaussians, a cross-attending decoder turns each into 32; written as a GLB of discs, turned so the picture's view faces +Z | CFG 3 against zeroed picture tokens, the unconditional pass with them collapsed to two weighted keys |
 | SeedVR2 3B (upscaler) | none: a fixed 58 × 5120 embedding | 32 blocks of 2560 (10 with separate video and text weights, then shared), the video's 2 × 2 patches attending in windows (shifted every other block) with the whole text, rotary frequencies read from the checkpoint, float16 weights and float32 activations; input: noise, the picture's latent and a mask of ones; one Euler step from t = 1000 | causal 3D VAE, 16 channels, encode and decode in 512-pixel tiles; then the picture's low frequencies under the result's detail (five-level wavelet) and its Lab a/b (and 20% of L) histograms | none |
 
 Every family keeps a prompt cache and encodes the queued prompts while its text encoder is
@@ -480,6 +487,38 @@ reference's in bf16, 30.4 dB in 8 bits; from the reference's own prompt states 4
 latents decoded here 52 dB from its float32 decode. Both bf16 encoders sit 1.2% (RMS) from the
 float32 one, which is what moves the prompt's states 1.6% apart.
 
+## Checking Idol against idol-sdk
+
+Idol's reference is Sperid Labs' own code, [idol-sdk](https://github.com/speridlabs/idol-sdk) (Apache 2.0), run on
+MPS with the weights of the MLX pack the app downloads (`ddalcu/Idol-MLX-Serve-8bit`, mlx-serve's conversion of the
+release), its 8-bit linears dequantized, DINOv3 and the VAE's encoder from the pack's own folders, so nothing gated
+is fetched. `Reference/idol_reference.py` runs it stage by stage and writes the GLB and the PLY; `--record <dir>`
+writes what every stage computed, from the matte's picture to both decoders on fixed inputs; `--truth <dir>` adds the
+16-bit stages again in float32 and the reference's own float16 loop run another way; `--latent <file>` decodes a
+latent denoised elsewhere with idol-sdk's decoders.
+
+```bash
+$PY -I Engine/Reference/idol_reference.py --sdk <idol-sdk> --pack <snapshot> --image fox.jpg --out <dir> --record build/fixtures/idol
+$PY -I Engine/Reference/idol_reference.py --truth build/fixtures/idol --sdk <idol-sdk>
+build/bin/turbo-engine verify build/fixtures/idol
+build/bin/turbo-engine bench-idol build/fixtures/idol [--collapse]            # the denoiser alone, step by step
+build/bin/turbo-engine bench-idol --generate <snapshot> --out <dir> [--exact build/fixtures/idol] \
+    can=can.jpg:synthetic:50 glasses=glasses.jpg:real:50                       # whole objects through the engine
+```
+
+On 1 November 2026 (an M1 Max, the 8-bit pack): BiRefNet's alpha map within 2e-5 of the reference's, its bytes off by
+one in 0.17% of them; the crop to 1024 on black from the reference's alpha byte for byte (Pillow's Lanczos on
+premultiplied RGBA, its MinFilter and paste); DINOv3 in bf16 as close to its float32 run as the reference's (1.2% RMS
+against 1.1%); the VAE's moments in bf16 at cos 0.9998 to float32 (the reference's 0.99997), far below the scatter of
+the posterior's sample (60% of its mean), the sample's arithmetic exact; the octree's logits within 0.3%; the Gaussian
+decoder as close to float32 as the reference (0.27% against 0.29%), its activations exact; one guided velocity at cos
+0.99998. A guided loop in float16 carries rounding a long way (four coarse steps land ~8% from float32, in both
+engines), so the short loop is decided against float32 too; from the reference's own noise the whole pipeline makes
+the reference's object (disc centres 0.4% of its size apart, the same colours). The engine draws its own noise (MLX's
+generator, not PyTorch's), so a seed gives another object of the same picture. Through the protocol a 262,144-Gaussian
+object takes 300 s at 50 steps (5.9 s a guided step) and 153 s at 25, peaking at 8.3 GB (6.8 with Save memory),
+against 530–607 s for the reference; picture, encoders and decoders take 6 s of it.
+
 ## Checking the tokenizers
 
 The engine tokenizes on its own (`Tokenizer/`), with no library: each family's prompt pipeline
@@ -534,7 +573,11 @@ Commands on stdin, one JSON object per line: `generate` (id, model, params), `lo
 `cancel` (id), `unload`, `shutdown`; `params` may carry `precision` ("bf16"), `preview`
 (true), `loras` (`[{"path": …, "scale": 1}]`) and, for LTX-2, `quality` (true: the full pipeline,
 `steps` then its first stage's and `guidance` the video's CFG), described under Families and in
-Checking LTX-2 against ltx-2-mlx. Events on stdout: `ready`, `phase`, `progress`, `preview` (id,
+Checking LTX-2 against ltx-2-mlx. Idol (`family: "idol"`) reads the picture (`images` or `image`), `num_gaussians`
+(32,768 to 1,048,576, a multiple of 32), `mode` ("synthetic" or "real"), `steps` (1 to 100), `guidance` and `seed`, and
+refuses anything else by name before loading; it reports the phases `segmenting`, `encoding`, `denoising` (with its
+`total`), `decoding` and `saving`, writes the GLB at `output` (whole or not at all), and its `done` gives the discs
+written as `gaussians` and the timings `segment`, `encode`, `denoise`, `decode` and `save`, with no size or poster. Events on stdout: `ready`, `phase`, `progress`, `preview` (id,
 step, path: a small PNG of the image as it forms, written again at each), `done` (path, seed, size,
 seconds, peak_memory, timings per phase), `failed`, `cancelled`, `model_loaded`, `load_failed` (a
 `load` that did not), `unloaded`. Everything else goes to stderr, which the app shows as the

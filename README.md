@@ -126,6 +126,7 @@ the disk.
 | [LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q8) | 64 GB | 37.8 GB | the 8-bit version, closer to the original |
 | [LTX-2.5](https://huggingface.co/dgrauet/ltx-2.5-mlx-q4) | 32 GB | 28.8 GB | Lightricks' newer model: video with sound, several shots in one prompt, from a prompt or pictures as the first and last frames · 22B, 4-bit · LTX-2 Community, gated: accept its terms on Hugging Face |
 | [SeedVR2 Upscaler 3B](https://huggingface.co/numz/SeedVR2_comfyUI) | 16 GB | 7.3 GB | enlarges a picture 2–4× with sharper, faithful detail, up to 4096 × 4096, no prompt · Apache 2.0 |
+| [Idol](https://huggingface.co/ddalcu/Idol-MLX-Serve-8bit) | 16 GB | 3 GB | a 3D object from one picture of one object, its sides and back invented, as a GLB · 1.8B, 8-bit · 50 steps, no prompt · Apache 2.0, its DINOv3 encoder under Meta's DINOv3 License |
 
 **Which one?** For a first try, Z-Image Turbo (4-bit) or SenseNova-U1.5, which both run on 16 GB
 (so does FLUX 3 Image Klein, more slowly).
@@ -134,7 +135,8 @@ Image Klein. For logos, layouts and lettering, Ming-Image; for long text, Chines
 layout given box by box, MOSS-Image, slow (its 50 steps run the model twice each). For crowded scenes
 and long text, Qwen-Image 2512, if you have time to wait. To edit a picture: FLUX.2 Klein in
 seconds, SenseNova-U1.5, or Qwen-Image Edit, the slowest but the one that touches the least
-besides what you asked. For video, LTX-2.5.
+besides what you asked. For video, LTX-2.5. For a 3D object, Idol: a picture of one object on a
+plain background, a render or a photo.
 
 More checkpoints of the same families can be added from **⋯ → Add Model…** (a Hugging Face
 repository or a local folder; for Klein you can pick the 4B, 9B or base variant).
@@ -170,6 +172,8 @@ adds a few seconds to load it).
 | LTX-2.5 | 10-second clip with sound, 1024 × 576, from a picture | 13 min |
 | SeedVR2 Upscaler | 640 × 512 → 1280 × 1024 | 11 s |
 | SeedVR2 Upscaler | 768 × 768 → 3072 × 3072 | 1 min 10 s |
+| Idol | 3D object from a picture, 262,144 Gaussians, 50 steps | 5 min |
+| Idol | the same in 25 steps | 2½ min |
 
 Newer chips (M3, M4, M5) and Max or Ultra ones with more graphics cores are faster; a base M1 or
 M2 is slower. The estimate on the *Generate* button learns from your own Mac after a few images.
@@ -207,6 +211,7 @@ PNG next to the prompt and settings, in an MP4 in an XMP box.
 | LTX-2.3 4-bit / 8-bit | 18 GB / 37 GB (768 × 512, 5 s) | dgrauet's ltx-2-mlx |
 | LTX-2.5 | 19 GB (768 × 512, 5 s); 34 GB at 640 × 640 without *Save memory* | dgrauet's ltx-2-mlx |
 | SeedVR2 Upscaler 3B | 11 GB to 2304 × 2304, 18 GB to 4096 × 4096 | mflux, to 57–62 dB |
+| Idol | 8.3–8.9 GB whatever the picture and the detail, 6.8 GB with *Save memory* | Sperid Labs' PyTorch code (idol-sdk), the same object from the same noise |
 
 Measured on an M1 Max with mflux 0.20, the Python reference the native engine is checked against
 (the 8-bit Z-Image peak adds its larger weights to the measured 4-bit one); LTX and SenseNova-U1.5
@@ -231,6 +236,14 @@ images.
   same; both engines' bf16 text encoders are as far from Qwen3.5 run in float32 (1.2% RMS), and from
   the reference's own prompt states the rest of the engine lands at 43 dB. Every step runs the
   transformer twice (guidance, its negative pass skipping block 22).
+- **Idol** is measured against Sperid Labs' own code ([idol-sdk](https://github.com/speridlabs/idol-sdk), PyTorch on
+  the Mac's GPU) on the same 8-bit pack: an object of 262,144 Gaussians in 50 steps takes 300 s here against 530–607 s
+  there, 153 s in 25 steps; picture, encoders and decoders take 6 s of it, the rest is the denoiser's guided steps.
+  Every stage matches the reference's (the picture's cutout and crop byte for byte from the same alpha; the 16-bit
+  encoders and decoders as close to float32 as the reference's own), and from the reference's own noise the engine
+  makes the reference's object. The engine draws its own noise, so a seed gives another object of the same picture.
+  The object is a Gaussian splat written as a GLB of small opaque discs, which any viewer draws: fine for fur, fabric
+  and matte surfaces, speckled on smooth dark or glossy ones, where the splat's faint layers cannot blend.
 - **LTX-2.3** is measured with the native engine against dgrauet's
   [ltx-2-mlx](https://github.com/dgrauet/ltx-2-mlx), with *Save memory*: a 5-second 768 × 512 clip
   with sound takes 206 s, a 3-second one from an image 122 s; the 8-bit version, without *Save
@@ -312,7 +325,7 @@ SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo-engine serve ──▶ 
 - **Engine.** `Engine/` is a Swift package that runs every family of the catalog (FLUX.2 Klein,
   FLUX 3 Image Klein from BFL's own checkpoint, MOSS-Image from OpenMOSS's (checked against its PyTorch pipeline), Z-Image Turbo, Qwen-Image 2512 and Qwen-Image-Edit 2511, Ming-Image from mflux's checkpoints,
   SenseNova-U1.5 from mlx-community's, LTX-2.3 and LTX-2.5 from dgrauet's, the SeedVR2 upscaler from its
-  original one) on MLX Swift. The app's
+  original one, Idol from mlx-serve's pack of Sperid Labs' release, checked against idol-sdk) on MLX Swift. The app's
   build embeds its `turbo-engine` binary in the bundle (`Contents/MacOS`, signed with the app),
   and every model runs there: nothing is installed on first launch, the engine starts in an
   instant, and no Python process sits between the app and the GPU. The engine keeps the

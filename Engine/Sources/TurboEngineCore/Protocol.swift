@@ -68,6 +68,10 @@ public struct GenerationParams: Decodable {
     public let loras: [LoRASpec]?
     /// LTX-2: the full pipeline, guided, with the pack's dev transformer (`FamilyRequest.quality`).
     public let quality: Bool?
+    /// Idol: how many Gaussians to make (32,768 to 1,048,576, a multiple of 32), and how the picture was made:
+    /// "synthetic" (a render or a generated picture, cropped tight) or "real" (a photo, cropped looser).
+    public let numGaussians: Int?
+    public let mode: String?
 
     /// The pictures given, `images` or else `image`.
     public var imagePaths: [String] {

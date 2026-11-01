@@ -169,6 +169,8 @@ private struct NewTile: View {
 }
 
 private func thumbnailWidth(for size: PixelSize, height: CGFloat) -> CGFloat {
+    // A 3D object has no size: its still is square.
+    guard size.width > 0, size.height > 0 else { return height }
     let ratio = CGFloat(size.width) / CGFloat(max(size.height, 1))
     return min(max(height * ratio, height * 0.56), height * 1.78)
 }

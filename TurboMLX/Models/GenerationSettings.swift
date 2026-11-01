@@ -145,6 +145,9 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     var livePreview = true
     /// LTX: the full pipeline (Quality) instead of the distilled one (Fast).
     var videoQuality = false
+    /// Idol: how many Gaussians the object is made of (its detail), and what kind of picture it comes from.
+    var gaussians = ObjectDetail.defaultGaussians
+    var objectMode = ObjectMode.render
     /// The LoRA chosen for each family that takes them (`ModelFamily.takesLoRAs`), by its raw
     /// value: a LoRA fits one family, so each keeps its own.
     var loras: [String: LoRAChoice] = [:]
@@ -163,6 +166,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     }
 
     func size(for family: ModelFamily) -> PixelSize {
+        if family.media == .model3D { return PixelSize(width: 0, height: 0) }
         if family.isUpscaler {
             return upscaledSize ?? PixelSize(width: Int(1024 * upscale), height: Int(1024 * upscale))
         }
@@ -223,7 +227,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         case blocks, negativePrompt, aspect, resolution, usesCustomSize, customWidth, customHeight, steps, guidance,
              randomSeed, seed, batchCount, transparentBackground, lowMemory,
              videoResolution, videoSeconds, videoFrameRate, videoAutoDuration, referenceImage, lastFrameImage, upscale, softness,
-             halfPrecision, livePreview, loras, videoQuality
+             halfPrecision, livePreview, loras, videoQuality, gaussians, objectMode
     }
 
     /// Settings saved before the prompt had blocks kept a single string.
@@ -264,6 +268,8 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         livePreview = try values.decodeIfPresent(Bool.self, forKey: .livePreview) ?? livePreview
         loras = try values.decodeIfPresent([String: LoRAChoice].self, forKey: .loras) ?? loras
         videoQuality = try values.decodeIfPresent(Bool.self, forKey: .videoQuality) ?? videoQuality
+        gaussians = try values.decodeIfPresent(Int.self, forKey: .gaussians) ?? gaussians
+        objectMode = try values.decodeIfPresent(ObjectMode.self, forKey: .objectMode) ?? objectMode
     }
 
     /// Seeds for the next batch: consecutive from the fixed seed, or fresh random ones.
@@ -289,6 +295,35 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         usesCustomSize = true
         customWidth = size.width
         customHeight = size.height
+    }
+}
+
+/// Idol's detail: the Gaussians an object is made of, 64K to 1M (the engine takes 32,768 to 1,048,576, multiples of 32).
+nonisolated enum ObjectDetail {
+    static let defaultGaussians = 262_144
+    static let choices: [(gaussians: Int, label: String)] = [
+        (65_536, "64K"), (131_072, "128K"), (262_144, "256K"), (524_288, "512K"), (1_048_576, "1M"),
+    ]
+
+    static func label(_ gaussians: Int) -> String {
+        choices.first { $0.gaussians == gaussians }?.label ?? "\(gaussians / 1024)K"
+    }
+}
+
+/// What kind of picture Idol is given, which sets how tightly it is cropped around the object.
+nonisolated enum ObjectMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    /// A render or a generated picture: idol-sdk's "synthetic", cropped tight.
+    case render = "synthetic"
+    /// A photo: "real", cropped looser.
+    case photo = "real"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .render: "Render"
+        case .photo: "Photo"
+        }
     }
 }
 
@@ -325,13 +360,77 @@ nonisolated struct GenerationRequest: Codable, Hashable, Sendable {
     var loras: [LoRAChoice]?
     /// LTX's Quality mode (the full pipeline); nil for Fast, and for the other families.
     var quality: Bool?
+    /// A 3D object (Idol): its Gaussians and its picture's kind ("synthetic" or "real"); nil for the others. Such a
+    /// request is saved without a size: an object has none.
+    var numGaussians: Int?
+    var objectMode: String?
 
-    /// What to show for it: the prompt, or for an upscale, what it did ("Upscaled 2×").
+    /// What to show for it: the prompt, for an upscale what it did ("Upscaled 2×"), for an object its detail.
     var caption: String {
+        if let numGaussians { return "3D object, \(ObjectDetail.label(numGaussians)) Gaussians" }
         guard let upscale else { return prompt }
         let factor = upscale.rounded() == upscale ? "\(Int(upscale))" : upscale.formatted(.number.precision(.fractionLength(1)))
         let softened = (softness ?? 0) > 0 ? ", softened \(Int(((softness ?? 0) * 100).rounded()))%" : ""
         return "Upscaled \(factor)×\(softened)"
+    }
+}
+
+nonisolated extension GenerationRequest {
+    private enum CodingKeys: String, CodingKey {
+        case prompt, blocks, negativePrompt, seed, size, steps, guidance, transparentBackground, lowMemory, frames, fps,
+             autoDuration, referenceImage, lastFrameImage, upscale, softness, halfPrecision, loras, quality, numGaussians,
+             objectMode
+    }
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        prompt = try values.decode(String.self, forKey: .prompt)
+        blocks = try values.decodeIfPresent([PromptBlock].self, forKey: .blocks)
+        negativePrompt = try values.decodeIfPresent(String.self, forKey: .negativePrompt)
+        seed = try values.decode(Int.self, forKey: .seed)
+        // A 3D object has no size.
+        size = try values.decodeIfPresent(PixelSize.self, forKey: .size) ?? PixelSize(width: 0, height: 0)
+        steps = try values.decode(Int.self, forKey: .steps)
+        guidance = try values.decode(Double.self, forKey: .guidance)
+        transparentBackground = try values.decode(Bool.self, forKey: .transparentBackground)
+        lowMemory = try values.decode(Bool.self, forKey: .lowMemory)
+        frames = try values.decodeIfPresent(Int.self, forKey: .frames)
+        fps = try values.decodeIfPresent(Int.self, forKey: .fps)
+        autoDuration = try values.decodeIfPresent(Bool.self, forKey: .autoDuration)
+        referenceImage = try values.decodeIfPresent(String.self, forKey: .referenceImage)
+        lastFrameImage = try values.decodeIfPresent(String.self, forKey: .lastFrameImage)
+        upscale = try values.decodeIfPresent(Double.self, forKey: .upscale)
+        softness = try values.decodeIfPresent(Double.self, forKey: .softness)
+        halfPrecision = try values.decodeIfPresent(Bool.self, forKey: .halfPrecision)
+        loras = try values.decodeIfPresent([LoRAChoice].self, forKey: .loras)
+        quality = try values.decodeIfPresent(Bool.self, forKey: .quality)
+        numGaussians = try values.decodeIfPresent(Int.self, forKey: .numGaussians)
+        objectMode = try values.decodeIfPresent(String.self, forKey: .objectMode)
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(prompt, forKey: .prompt)
+        try values.encodeIfPresent(blocks, forKey: .blocks)
+        try values.encodeIfPresent(negativePrompt, forKey: .negativePrompt)
+        try values.encode(seed, forKey: .seed)
+        if numGaussians == nil { try values.encode(size, forKey: .size) }
+        try values.encode(steps, forKey: .steps)
+        try values.encode(guidance, forKey: .guidance)
+        try values.encode(transparentBackground, forKey: .transparentBackground)
+        try values.encode(lowMemory, forKey: .lowMemory)
+        try values.encodeIfPresent(frames, forKey: .frames)
+        try values.encodeIfPresent(fps, forKey: .fps)
+        try values.encodeIfPresent(autoDuration, forKey: .autoDuration)
+        try values.encodeIfPresent(referenceImage, forKey: .referenceImage)
+        try values.encodeIfPresent(lastFrameImage, forKey: .lastFrameImage)
+        try values.encodeIfPresent(upscale, forKey: .upscale)
+        try values.encodeIfPresent(softness, forKey: .softness)
+        try values.encodeIfPresent(halfPrecision, forKey: .halfPrecision)
+        try values.encodeIfPresent(loras, forKey: .loras)
+        try values.encodeIfPresent(quality, forKey: .quality)
+        try values.encodeIfPresent(numGaussians, forKey: .numGaussians)
+        try values.encodeIfPresent(objectMode, forKey: .objectMode)
     }
 }
 

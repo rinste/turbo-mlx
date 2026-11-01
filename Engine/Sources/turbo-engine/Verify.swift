@@ -50,11 +50,12 @@ enum Verify {
             case "ltx-2": ok = try VerifyLTX.run(fixture: fixture, json: json, references: references)
             case "seedvr2": ok = try VerifySeedVR2.run(fixture: fixture, json: json, references: references)
             case "sensenova": ok = try VerifySenseNova.run(fixture: fixture, json: json, references: references)
+            case "idol": ok = try VerifyIdol.run(fixture: fixture, json: json, references: references)
             default:
                 print("fixture.json names an unknown family: \(family)"); return false
             }
             let reference = family == "ltx-2" ? "ltx-2-mlx" : family == "sensenova" ? "SenseTime's PyTorch code"
-                : family == "moss-image" ? "OpenMOSS's PyTorch pipeline" : "mflux"
+                : family == "moss-image" ? "OpenMOSS's PyTorch pipeline" : family == "idol" ? "idol-sdk's PyTorch code" : "mflux"
             print(ok ? "OK: the \(family) port matches \(reference) on this checkpoint" : "FAILED: see the stages above")
             return ok
         } catch {

@@ -13,6 +13,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     case ltx2 = "ltx-2"
     case ltx25 = "ltx-2.5"
     case seedVR2 = "seedvr2"
+    case idol
 
     var displayName: String {
         switch self {
@@ -27,13 +28,14 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .ltx2: "LTX-2"
         case .ltx25: "LTX-2.5"
         case .seedVR2: "SeedVR2"
+        case .idol: "Idol"
         }
     }
 
     /// Whether the model outputs RGBA, so a transparent background can be kept.
     var producesAlpha: Bool { self == .ming }
 
-    var media: MediaKind { isLTX ? .video : .image }
+    var media: MediaKind { isLTX ? .video : self == .idol ? .model3D : .image }
 
     /// Lightricks' video models: LTX-2.3 with Gemma 3 beside it, LTX-2.5 with its own Gemma 4.
     var isLTX: Bool { self == .ltx2 || self == .ltx25 }
@@ -48,14 +50,17 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     /// A reference image: the first frame of a clip (LTX-2), the picture an image is edited from
     /// as the prompt says (FLUX.2 Klein, FLUX 3, Qwen-Image Edit, SenseNova), the picture an upscaler enlarges.
     var takesReferenceImage: Bool {
-        isLTX || self == .flux2Klein || self == .flux3Klein || self == .qwenImageEdit || self == .senseNova || isUpscaler
+        isLTX || self == .flux2Klein || self == .flux3Klein || self == .qwenImageEdit || self == .senseNova || isUpscaler || self == .idol
     }
 
     /// A second image, the frame a clip ends on (LTX), with or without the first.
     var takesLastFrame: Bool { isLTX }
 
-    /// Qwen-Image Edit only edits and SeedVR2 only upscales: they need the picture.
-    var requiresReferenceImage: Bool { self == .qwenImageEdit || isUpscaler }
+    /// Qwen-Image Edit only edits, SeedVR2 only upscales and Idol makes an object of the picture: they need it.
+    var requiresReferenceImage: Bool { self == .qwenImageEdit || isUpscaler || self == .idol }
+
+    /// A prompt to write: not for an upscaler or Idol, which work from the picture alone.
+    var takesPrompt: Bool { !isUpscaler && self != .idol }
 
     /// Enlarges the reference picture instead of following a prompt: no prompt, no format, a scale.
     var isUpscaler: Bool { self == .seedVR2 }
@@ -69,7 +74,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     var takesLoRAs: Bool {
         switch self {
         case .zImageTurbo, .flux2Klein, .flux3Klein, .qwenImage, .qwenImageEdit, .ltx2, .ltx25: true
-        case .ming, .mossImage, .senseNova, .seedVR2: false
+        case .ming, .mossImage, .senseNova, .seedVR2, .idol: false
         }
     }
 
@@ -87,7 +92,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .ming: ["mllm", "connector", "mlp", "transformer", "vae"]
         case .zImageTurbo, .flux2Klein, .flux3Klein, .mossImage, .qwenImage, .qwenImageEdit: ["transformer", "text_encoder", "vae"]
         case .senseNova: ["."]
-        case .ltx2, .ltx25, .seedVR2: []
+        case .ltx2, .ltx25, .seedVR2, .idol: []
         }
     }
 
@@ -105,6 +110,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
              "audio_vae.safetensors", "vocoder.safetensors", "spatial_upscaler_x2_v1_0.safetensors"]
         case .seedVR2: Self.seedVR2Files
         case .senseNova: ["config.json", "model.safetensors.index.json"]
+        case .idol: Self.idolFiles
         default: []
         }
     }
@@ -119,8 +125,15 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .ltx2: nil // in the text encoder's checkpoint
         case .ltx25: "tokenizer.json"
         case .seedVR2: nil // no prompt: the engine has the fixed text embedding
+        case .idol: nil // no prompt
         }
     }
+
+    /// The Idol MLX pack's files: the release's four weight files with BiRefNet among them, DINOv3 and the FLUX.2
+    /// VAE's encoder.
+    static let idolFiles = ["config.json", "denoiser.safetensors", "decoder.safetensors", "decoder_gs.safetensors",
+                            "birefnet.safetensors", "dinov3/config.json", "dinov3/model.safetensors", "vae/config.json",
+                            "vae/model.safetensors"]
 
     /// SeedVR2's original checkpoint (numz/SeedVR2_comfyUI) holds every size and precision; the 3B
     /// model in float16 is these two files.
@@ -155,6 +168,8 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
                     "spatial_upscaler_x2_v1_0.safetensors", "spatial_upscaler_x2_v1_0_config.json"]
         case .seedVR2: return ["README.md"] + Self.seedVR2Files
         case .senseNova: return ["README.md", "config.json", "model.safetensors.index.json", "model-*.safetensors", "tokenizer.json"]
+        // With the licences: Idol's (Apache 2.0), its NOTICE, DINOv3's own.
+        case .idol: return Self.idolFiles + ["LICENSE", "NOTICE", "README.md", "dinov3/LICENSE.md"]
         }
     }
 
@@ -252,7 +267,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
 
     var supportsGuidance: Bool {
         switch family {
-        case .ming, .mossImage, .qwenImage, .qwenImageEdit: true
+        case .ming, .mossImage, .qwenImage, .qwenImageEdit, .idol: true
         // The catalog's SenseNova packs are the 8-step distillation, which runs without guidance.
         case .zImageTurbo, .senseNova, .ltx2, .ltx25, .seedVR2: false
         case .flux2Klein, .flux3Klein: isKleinBase
@@ -263,7 +278,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
     /// its editor, MOSS-Image and FLUX.2 Klein base. Ming's unconditional pass zeroes the prompt instead, so
     /// there is no text to give it; FLUX 3 Base's is the empty prompt, as BFL's pipeline has it.
     var supportsNegativePrompt: Bool {
-        supportsGuidance && family != .ming && family != .flux3Klein
+        supportsGuidance && family != .ming && family != .flux3Klein && family != .idol
     }
 
     /// LTX-2: the steps of the first stage (three more refine the upscaled clip).
@@ -278,6 +293,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .senseNova: 8
         case .ltx2, .ltx25: 8
         case .seedVR2: 1
+        case .idol: 50
         }
     }
 
@@ -285,7 +301,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
     /// Base at mflux's 3.5, MOSS-Image at OpenMOSS's 3; the others default to off.
     var defaultGuidance: Double {
         if family == .flux3Klein { return isKleinBase ? 3.5 : 1 }
-        if family == .mossImage { return 3 }
+        if family == .mossImage || family == .idol { return 3 }
         return family == .qwenImage || family == .qwenImageEdit || isKleinBase ? 4 : 1
     }
 
@@ -310,6 +326,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .senseNova: 4...16
         case .ltx2, .ltx25: 4...8
         case .seedVR2: 1...1
+        case .idol: 10...100
         }
     }
 }
@@ -515,6 +532,21 @@ enum ModelCatalog {
             revision: "09ced71023636e9bc8cdf9cdecfb2625d1e691e8",
             sizeBytes: 6_783_018_808 + 501_324_814 + 41_823,
             license: "Apache 2.0",
+            recommendedMemoryGB: 16,
+            isBuiltIn: true
+        ),
+        // Idol (Sperid Labs, Apache 2.0): one picture of one object to 3D Gaussians, written as a GLB of discs. The MLX
+        // pack mlx-serve made of the release, its blocks' linears in 8 bits, with BiRefNet, DINOv3 ViT-H+/16 (DINOv3
+        // License) and the FLUX.2 VAE's encoder, so nothing gated is fetched. Measured on an M1 Max (1 November 2026):
+        // 50 steps in 300 s, 25 in 153 s, 262,144 Gaussians, peaking at 8.3 GB (6.8 with Save memory).
+        ModelDescriptor(
+            name: "Idol · 16 GB RAM",
+            detail: "Sperid Labs' Idol: one picture of one object becomes a 3D object, its sides and back included, as a GLB. No prompt.",
+            family: .idol,
+            source: .huggingFace(repo: "ddalcu/Idol-MLX-Serve-8bit"),
+            revision: "12fbe4b06ef7cc377100b8f60238a6824546cacc",
+            sizeBytes: 2_979_218_839,
+            license: "Apache 2.0 · DINOv3 License",
             recommendedMemoryGB: 16,
             isBuiltIn: true
         ),

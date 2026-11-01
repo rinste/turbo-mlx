@@ -36,6 +36,9 @@ public struct FamilyRequest {
     /// LTX-2: the full pipeline (the dev transformer with guidance in stage 1, `LTXFullPipeline`)
     /// instead of the distilled one; `steps` are then stage 1's, `guidance` the video's CFG.
     public var quality = false
+    /// Idol: the Gaussians to make, and the picture's kind ("synthetic" or "real").
+    public var gaussians: Int?
+    public var mode: String?
 
     public init(
         prompt: String, negativePrompt: String? = nil, seed: Int, width: Int, height: Int, steps: Int, guidance: Double,
@@ -113,7 +116,7 @@ extension PreviewingFamilyModel {
 /// Loads the model a spec names, by family.
 public enum FamilyLoader {
     /// Families this engine implements, as the app names them.
-    public static let families = ["flux2-klein", "flux3-klein", "moss-image", "z-image-turbo", "qwen-image", "qwen-image-edit", "ming", "sensenova", "ltx-2", "ltx-2.5", "seedvr2"]
+    public static let families = ["flux2-klein", "flux3-klein", "moss-image", "z-image-turbo", "qwen-image", "qwen-image-edit", "ming", "sensenova", "ltx-2", "ltx-2.5", "seedvr2", "idol"]
 
     public static func load(_ spec: ModelSpec, loadTokenizer: Bool = true) throws -> FamilyModel {
         let root = URL(fileURLWithPath: spec.path)
@@ -138,6 +141,8 @@ public enum FamilyLoader {
             return try SenseNovaModel(modelPath: root, loadTokenizer: loadTokenizer)
         case "seedvr2":
             return try SeedVR2Model(modelPath: root, config: .seedVR2_3B)
+        case "idol":
+            return try IdolModel(folder: root)
         case "ltx-2", "ltx-2.5":
             // LTX-2.5 packs carry their text encoder; LTX-2.3 needs the Gemma 3 folder.
             if spec.textEncoderPath == nil, !LTXVideoModel.hasOwnTextEncoder(root) { throw EngineError.missingTextEncoder(spec.family) }

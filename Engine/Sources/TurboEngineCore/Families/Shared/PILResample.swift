@@ -56,6 +56,27 @@ enum PILResample {
         return source
     }
 
+    /// The same resize for bytes of any number of channels (4 for Pillow's premultiplied `RGBa`, which is how it
+    /// resizes an `RGBA` picture: `Idol`'s preparation), every channel filtered alike.
+    static func resize(_ bytes: [UInt8], channels: Int, width: Int, height: Int, toWidth: Int, toHeight: Int, filter: Filter) -> [UInt8] {
+        if channels == 3 { return resize(bytes, width: width, height: height, toWidth: toWidth, toHeight: toHeight, filter: filter) }
+        let horizontal = coefficients(inSize: width, outSize: toWidth, filter: filter)
+        var vertical = coefficients(inSize: height, outSize: toHeight, filter: filter)
+        var source = bytes
+        var rows = height
+        if toWidth != width {
+            let first = vertical.bounds[0].start
+            let last = vertical.bounds[toHeight - 1].start + vertical.bounds[toHeight - 1].count
+            vertical.bounds = vertical.bounds.map { ($0.start - first, $0.count) }
+            source = horizontalPass(source, channels: channels, width: width, firstRow: first, rows: last - first, outWidth: toWidth, horizontal)
+            rows = last - first
+        }
+        if toHeight != height {
+            source = verticalPass(source, channels: channels, width: toWidth, rows: rows, outHeight: toHeight, vertical)
+        }
+        return source
+    }
+
     private struct Coefficients {
         var bounds: [(start: Int, count: Int)]
         /// `size` fixed-point weights per output position.
@@ -126,6 +147,57 @@ enum PILResample {
                         output[o] = clip8(r)
                         output[o + 1] = clip8(g)
                         output[o + 2] = clip8(b)
+                    }
+                }
+            }
+        }
+        return out
+    }
+
+    private static func horizontalPass(_ bytes: [UInt8], channels: Int, width: Int, firstRow: Int, rows: Int, outWidth: Int, _ c: Coefficients) -> [UInt8] {
+        var out = [UInt8](repeating: 0, count: outWidth * rows * channels)
+        let half = 1 << (precisionBits - 1)
+        var sums = [Int](repeating: 0, count: channels)
+        bytes.withUnsafeBufferPointer { input in
+            out.withUnsafeMutableBufferPointer { output in
+                for y in 0 ..< rows {
+                    let row = (firstRow + y) * width * channels
+                    for xx in 0 ..< outWidth {
+                        let (start, count) = c.bounds[xx]
+                        let k = xx * c.size
+                        for ch in 0 ..< channels { sums[ch] = half }
+                        for x in 0 ..< count {
+                            let p = row + (start + x) * channels
+                            let w = c.weights[k + x]
+                            for ch in 0 ..< channels { sums[ch] += Int(input[p + ch]) * w }
+                        }
+                        let o = (y * outWidth + xx) * channels
+                        for ch in 0 ..< channels { output[o + ch] = clip8(sums[ch]) }
+                    }
+                }
+            }
+        }
+        return out
+    }
+
+    private static func verticalPass(_ bytes: [UInt8], channels: Int, width: Int, rows: Int, outHeight: Int, _ c: Coefficients) -> [UInt8] {
+        var out = [UInt8](repeating: 0, count: width * outHeight * channels)
+        let half = 1 << (precisionBits - 1)
+        var sums = [Int](repeating: 0, count: channels)
+        bytes.withUnsafeBufferPointer { input in
+            out.withUnsafeMutableBufferPointer { output in
+                for yy in 0 ..< outHeight {
+                    let (start, count) = c.bounds[yy]
+                    let k = yy * c.size
+                    for x in 0 ..< width {
+                        for ch in 0 ..< channels { sums[ch] = half }
+                        for y in 0 ..< count {
+                            let p = ((start + y) * width + x) * channels
+                            let w = c.weights[k + y]
+                            for ch in 0 ..< channels { sums[ch] += Int(input[p + ch]) * w }
+                        }
+                        let o = (yy * width + x) * channels
+                        for ch in 0 ..< channels { output[o + ch] = clip8(sums[ch]) }
                     }
                 }
             }
