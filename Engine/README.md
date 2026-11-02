@@ -557,6 +557,14 @@ the protocol 6 s took 53 s on both (composing 16.9 s here against 17.6 s, the fl
 (composing 171 s, 114 ms a frame; 420 flow steps on 14 windows 651 s, 1.55 s each; the vocoder 13 s), peaking at
 17.8–18.8 GB, 14.4 GB with Save memory, which lets the language models go once the song is composed.
 
+The 4-bit pack (`mlx-community/MiniMax-Music3-4bit`, the same layout with the linears in 4 bits; 2 November 2026) was
+recorded the same way into `build/fixtures/minimax-music3-4bit` and passes against it: the prompt's last hidden states
+1.01% from its float32 against mlx-audio's 1.04%, the velocities 5.0% against 5.1%, a window's latents 4.5% against
+4.7%, two windows 7.1% against 6.9%. Against the 8-bit pack's float32 it is much further (the prompt's states 13%, the
+velocities 23%, a window's latents 17%), what 4 bits cost; the semantic tokens of the first frames are still the
+same. 20 s of song took 229 s (compose 51 s, flow 172 s) against 242 s for the 8-bit pack, peaking at 12.7 GB, 9.6 GB
+with Save memory (the 8-bit pack 14.5).
+
 ## Checking the tokenizers
 
 The engine tokenizes on its own (`Tokenizer/`), with no library: each family's prompt pipeline

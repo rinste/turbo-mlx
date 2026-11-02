@@ -63,8 +63,8 @@ public enum Music3Error: LocalizedError {
     }
 }
 
-/// MiniMax Music 3 (MiniMax-Music3 Community License) from mlx-audio's MLX pack (`mlx-community/MiniMax-Music3-8bit`:
-/// the language models and the flow transformer in 8 bits, the rest bf16), run as mlx-audio runs it: the prompt's
+/// MiniMax Music 3 (MiniMax-Music3 Community License) from mlx-audio's MLX packs (`mlx-community/MiniMax-Music3-8bit`:
+/// the language models and the flow transformer in 8 bits, the rest bf16; `-4bit` the same in 4 bits), run as mlx-audio runs it: the prompt's
 /// tokens, the hierarchical autoregressive frames, the guided flow on windows of 200 frames, the vocoder at 44.1 kHz
 /// stereo. With Save memory, the language models (11 GB) go once the frames are written and are read again for the
 /// next song.
@@ -79,7 +79,7 @@ public final class Music3Model: AudioFamilyModel {
     private var resident: (languageModel: Music3LanguageModel, depth: Music3DepthDecoder)?
     private var tokenizer: BPETokenizer?
     public var lowRam = false
-    public var bits: Int? { 8 }
+    public var bits: Int? { config.bits }
 
     public init(folder: URL, loadTokenizer: Bool = true) throws {
         self.folder = folder

@@ -27,7 +27,9 @@ nonisolated enum MemoryEstimate {
         if model.family.isLTX, model.isBuiltIn {
             return clipPeak(model: model, size: size, frames: frames ?? 121, lowMemory: lowMemory, memory: memory)
         }
-        if model.family == .minimaxMusic3, model.isBuiltIn { return songPeak(frames: frames ?? 1500, lowMemory: lowMemory) }
+        if model.family == .minimaxMusic3, model.isBuiltIn {
+            return songPeak(fourBit: model.id.hasSuffix("4bit"), frames: frames ?? 1500, lowMemory: lowMemory)
+        }
         return peaks(model.id, lowMemory: lowMemory)?.gigabytes(size.megapixels)
     }
 
@@ -85,9 +87,11 @@ nonisolated enum MemoryEstimate {
 
     // MiniMax-Music3, mlx-audio's 8-bit pack (1 November 2026): 18.8 GB for 6 s and 17.8 for 60 s, the flow's window and
     // the vocoder on top of every weight; 14.4 GB with Save memory, which lets the language models go before the flow, so the composing
-    // sets it. Each frame (25 a second) adds its key-value cache (147 KB) and its hidden states (64 KB).
-    private static func songPeak(frames: Int, lowMemory: Bool) -> Double {
-        (lowMemory ? 14.4 : 18.9) + 0.00021 * Double(frames)
+    // sets it. Each frame (25 a second) adds its key-value cache (147 KB) and its hidden states (64 KB). The 4-bit pack
+    // (2 November 2026), 5 GB lighter: 12.7 GB for 20 s, 9.6 with Save memory.
+    private static func songPeak(fourBit: Bool, frames: Int, lowMemory: Bool) -> Double {
+        let base = fourBit ? (lowMemory ? 9.6 : 12.7) : (lowMemory ? 14.4 : 18.9)
+        return base + 0.00021 * Double(frames)
     }
 
     // LTX-2.3 (29 September 2026): the 4-bit pack with Save memory peaks at 17.9 / 18.2 / 19.2 GB

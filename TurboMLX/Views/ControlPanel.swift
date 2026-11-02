@@ -1900,7 +1900,7 @@ private struct MemoryRows: View {
         case .idol:
             "Frees the cutout's network and DINOv3 (about 2.5 GB) once the picture is read: about 7 GB instead of 9 GB. The next object loads them again, a second or two."
         case .minimaxMusic3:
-            "Frees the language models (about 11 GB) once the song is composed, before its sound is made: about 15 GB instead of 19 GB. The next song loads them again."
+            "Frees the language models (about 11 GB, 8 GB in the 4-bit version) once the song is composed, before its sound is made: about 15 GB instead of 19 GB (10 instead of 13 in 4 bits). The next song loads them again."
         }
         return base + " On by default below 64 GB of memory."
     }

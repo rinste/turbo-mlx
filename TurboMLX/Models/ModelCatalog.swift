@@ -566,12 +566,25 @@ enum ModelCatalog {
             isBuiltIn: true
         ),
         // MiniMax Music 3 (MiniMax-Music3 Community License): a description and lyrics to a song of up to six minutes,
-        // 44.1 kHz stereo. mlx-audio's MLX pack, its language models' and flow transformer's linears in 8 bits, run as
-        // mlx-audio runs it. The licence asks commercial products to show the name "MiniMax-Music3" and every product
-        // that lets others generate to keep safeguards against infringing uses (`MusicSection`).
+        // 44.1 kHz stereo. mlx-audio's MLX packs, their language models' and flow transformer's linears in 4 or 8 bits,
+        // run as mlx-audio runs them. The 4-bit pack (2 November 2026) peaks at 9.6 GB with Save memory against 14.5 and
+        // takes as long; its flow is 17% from the 8-bit pack's float32 after a window's 30 steps, so the same seed gives
+        // another song. The licence asks commercial products to show the name "MiniMax-Music3" and every
+        // product that lets others generate to keep safeguards against infringing uses (`MusicSection`).
+        ModelDescriptor(
+            name: "MiniMax-Music3 · 16 GB RAM",
+            detail: "MiniMax's music model: a description of the music and its lyrics become a complete song with vocals, up to six minutes long. The lighter 4-bit version.",
+            family: .minimaxMusic3,
+            source: .huggingFace(repo: "mlx-community/MiniMax-Music3-4bit"),
+            revision: "c7ea32923b245fe5afc22d740a1936ad2ac590f3",
+            sizeBytes: 9_210_770_326,
+            license: "MiniMax-Music3 Community License",
+            recommendedMemoryGB: 16,
+            isBuiltIn: true
+        ),
         ModelDescriptor(
             name: "MiniMax-Music3 · 24 GB RAM",
-            detail: "MiniMax's music model: a description of the music and its lyrics become a complete song with vocals, up to six minutes long.",
+            detail: "MiniMax's music model: a description of the music and its lyrics become a complete song with vocals, up to six minutes long. The 8-bit version, closer to the original.",
             family: .minimaxMusic3,
             source: .huggingFace(repo: "mlx-community/MiniMax-Music3-8bit"),
             revision: "10aa4ca578d04c6f5256c1bc22fc8405a09602b5",

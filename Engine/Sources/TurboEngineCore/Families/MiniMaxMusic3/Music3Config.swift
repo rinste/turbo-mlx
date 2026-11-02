@@ -47,6 +47,8 @@ public struct Music3Config {
     public var vocoderUpsamplingRatios = [8, 8, 4, 2]
     public var sampleRate = 44100
     public var frameRate = 25.0
+    /// The bits of the quantized linears (`quantization.bits`); nil for the bf16 pack.
+    public var bits: Int?
 
     /// Classifier-free guidance of the global and local language models, and the top-k both sample from.
     public static let arGuidance: Float = 1.5
@@ -118,6 +120,7 @@ public struct Music3Config {
         if let ratios = json["vocoder_upsampling_ratios"] as? [NSNumber] { vocoderUpsamplingRatios = ratios.map(\.intValue) }
         int("sample_rate", &sampleRate)
         if let rate = json["frame_rate"] as? NSNumber { frameRate = rate.doubleValue }
+        bits = ((json["quantization"] as? [String: Any])?["bits"] as? NSNumber)?.intValue
     }
 
     /// The flow's latents for `frames` language-model frames: `latent_length_from_frames`.

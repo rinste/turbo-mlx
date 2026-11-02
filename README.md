@@ -126,7 +126,8 @@ the disk.
 | [LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q8) | 64 GB | 37.8 GB | the 8-bit version, closer to the original |
 | [LTX-2.5](https://huggingface.co/dgrauet/ltx-2.5-mlx-q4) | 32 GB | 28.8 GB | Lightricks' newer model: video with sound, several shots in one prompt, from a prompt or pictures as the first and last frames · 22B, 4-bit · LTX-2 Community, gated: accept its terms on Hugging Face |
 | [SeedVR2 Upscaler 3B](https://huggingface.co/numz/SeedVR2_comfyUI) | 16 GB | 7.3 GB | enlarges a picture 2–4× with sharper, faithful detail, up to 4096 × 4096, no prompt · Apache 2.0 |
-| [MiniMax-Music3](https://huggingface.co/mlx-community/MiniMax-Music3-8bit) | 24 GB | 14.2 GB | MiniMax's music model: a description of the music and its lyrics become a complete song with vocals, up to six minutes, a 44.1 kHz stereo WAV · 8B + 2.4B, 8-bit · MiniMax-Music3 Community License: show the model's name where you use it, no songs that imitate artists or infringe others' rights |
+| [MiniMax-Music3](https://huggingface.co/mlx-community/MiniMax-Music3-4bit) | 16 GB | 9.2 GB | MiniMax's music model: a description of the music and its lyrics become a complete song with vocals, up to six minutes, a 44.1 kHz stereo WAV · 8B + 2.4B, 4-bit · MiniMax-Music3 Community License: show the model's name where you use it, no songs that imitate artists or infringe others' rights |
+| [MiniMax-Music3](https://huggingface.co/mlx-community/MiniMax-Music3-8bit) | 24 GB | 14.2 GB | the 8-bit version, closer to the original |
 | [Idol](https://huggingface.co/ddalcu/Idol-MLX-Serve-8bit) | 16 GB | 3 GB | a 3D object from one picture of one object, its sides and back invented, as a GLB · 1.8B, 8-bit · 50 steps, no prompt · Apache 2.0, its DINOv3 encoder under Meta's DINOv3 License |
 
 **Which one?** For a first try, Z-Image Turbo (4-bit) or SenseNova-U1.5, which both run on 16 GB
@@ -215,7 +216,7 @@ PNG next to the prompt and settings, in an MP4 in an XMP box.
 | LTX-2.3 4-bit / 8-bit | 18 GB / 37 GB (768 × 512, 5 s) | dgrauet's ltx-2-mlx |
 | LTX-2.5 | 19 GB (768 × 512, 5 s); 34 GB at 640 × 640 without *Save memory* | dgrauet's ltx-2-mlx |
 | SeedVR2 Upscaler 3B | 11 GB to 2304 × 2304, 18 GB to 4096 × 4096 | mflux, to 57–62 dB |
-| MiniMax-Music3 | 14.4 GB with *Save memory* (17.8–18.8 GB without), a little more for long songs | mlx-audio, every stage as close to float32 as its own |
+| MiniMax-Music3 4-bit / 8-bit | 9.6 / 14.4 GB with *Save memory* (12.7 / 17.8–18.8 GB without), a little more for long songs | mlx-audio, every stage as close to float32 as its own |
 | Idol | 8.3–8.9 GB whatever the picture and the detail, 6.8 GB with *Save memory* | Sperid Labs' PyTorch code (idol-sdk), the same object from the same noise |
 
 Measured on an M1 Max with mflux 0.20, the Python reference the native engine is checked against
@@ -254,7 +255,9 @@ images.
   seconds 116 s, a minute 14 minutes (3 to write it frame by frame, 11 to make its sound window by window). The prompt and
   its tokens are the reference's exactly, and every stage after them is as close to float32 as mlx-audio's own run;
   the two builds of MLX round apart now and then, which can tip a near tie in the model's draws, so a seed gives
-  another song than mlx-audio's from the same prompt.
+  another song than mlx-audio's from the same prompt. The 4-bit version, checked the same way on its own pack, takes
+  as long (20 seconds of song in about 4 minutes, like the 8-bit one) in 5 GB less; its flow lands 17% from the
+  8-bit pack's float32 after a window's 30 steps (2.7% for the 8-bit pack itself), so a seed gives another song.
 - **LTX-2.3** is measured with the native engine against dgrauet's
   [ltx-2-mlx](https://github.com/dgrauet/ltx-2-mlx), with *Save memory*: a 5-second 768 × 512 clip
   with sound takes 206 s, a 3-second one from an image 122 s; the 8-bit version, without *Save
@@ -337,7 +340,7 @@ SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo-engine serve ──▶ 
   FLUX 3 Image Klein from BFL's own checkpoint, MOSS-Image from OpenMOSS's (checked against its PyTorch pipeline), Z-Image Turbo, Qwen-Image 2512 and Qwen-Image-Edit 2511, Ming-Image from mflux's checkpoints,
   SenseNova-U1.5 from mlx-community's, LTX-2.3 and LTX-2.5 from dgrauet's, the SeedVR2 upscaler from its
   original one, Idol from mlx-serve's pack of Sperid Labs' release, checked against idol-sdk, MiniMax-Music3 from
-  mlx-community's pack, checked against mlx-audio) on MLX Swift. The app's
+  mlx-community's 4-bit and 8-bit packs, checked against mlx-audio) on MLX Swift. The app's
   build embeds its `turbo-engine` binary in the bundle (`Contents/MacOS`, signed with the app),
   and every model runs there: nothing is installed on first launch, the engine starts in an
   instant, and no Python process sits between the app and the GPU. The engine keeps the
