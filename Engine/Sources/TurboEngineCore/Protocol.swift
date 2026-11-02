@@ -74,7 +74,9 @@ public struct GenerationParams: Decodable {
     public let mode: String?
     /// Songs (MiniMax Music 3): the lyrics, with section tags such as "[verse]" on lines of their own ("[instrumental]"
     /// for none), and the longest the song may last in seconds (up to 360; the model may end it sooner). `prompt` is the
-    /// description of the music, `steps` the flow's steps (1 to 30).
+    /// description of the music, `steps` the flow's steps (1 to 30). Sound effects (MOSS-SoundEffect): no lyrics, and
+    /// `duration` the clip's length (0.1 to 30 s, in tenths); `prompt` describes the sound, `guidance` and
+    /// `negative_prompt` steer it, `steps` are the DiT's (1 to 200).
     public let lyrics: String?
     public let duration: Double?
 

@@ -40,6 +40,7 @@ public struct FamilyRequest {
     public var gaussians: Int?
     public var mode: String?
     /// Songs (MiniMax Music 3): the lyrics `prompt` describes the music of, and the longest the song may last, in seconds.
+    /// Sound effects (MOSS-SoundEffect): `duration` is the clip's length.
     public var lyrics: String?
     public var duration: Double?
 
@@ -119,7 +120,7 @@ extension PreviewingFamilyModel {
 /// Loads the model a spec names, by family.
 public enum FamilyLoader {
     /// Families this engine implements, as the app names them.
-    public static let families = ["flux2-klein", "flux3-klein", "moss-image", "z-image-turbo", "qwen-image", "qwen-image-edit", "ming", "sensenova", "ltx-2", "ltx-2.5", "seedvr2", "idol", "minimax-music3"]
+    public static let families = ["flux2-klein", "flux3-klein", "moss-image", "z-image-turbo", "qwen-image", "qwen-image-edit", "ming", "sensenova", "ltx-2", "ltx-2.5", "seedvr2", "idol", "minimax-music3", "moss-soundeffect"]
 
     public static func load(_ spec: ModelSpec, loadTokenizer: Bool = true) throws -> FamilyModel {
         let root = URL(fileURLWithPath: spec.path)
@@ -148,6 +149,8 @@ public enum FamilyLoader {
             return try IdolModel(folder: root)
         case "minimax-music3":
             return try Music3Model(folder: root, loadTokenizer: loadTokenizer)
+        case "moss-soundeffect":
+            return try MossSoundEffectModel(folder: root, loadTokenizer: loadTokenizer)
         case "ltx-2", "ltx-2.5":
             // LTX-2.5 packs carry their text encoder; LTX-2.3 needs the Gemma 3 folder.
             if spec.textEncoderPath == nil, !LTXVideoModel.hasOwnTextEncoder(root) { throw EngineError.missingTextEncoder(spec.family) }

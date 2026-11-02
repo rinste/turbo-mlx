@@ -109,6 +109,8 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     static let upscaleFactors: [Double] = [2, 3, 4]
     /// A song's longest length, in seconds: MiniMax-Music3 makes up to six minutes, and may end sooner.
     static let songDurations = 10.0...360.0
+    /// A sound effect's length, in seconds: MOSS-SoundEffect makes up to 30, in tenths.
+    static let soundDurations = 0.5...30.0
 
     var blocks = PromptBlock.defaults()
     /// What the image should not have, for the models that take it (`supportsNegativePrompt`).
@@ -154,6 +156,8 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     /// it may last (the prompt describes the music).
     var lyrics = ""
     var songSeconds = 60.0
+    /// A sound effect's length (the prompt describes the sound).
+    var soundSeconds = 10.0
     /// The LoRA chosen for each family that takes them (`ModelFamily.takesLoRAs`), by its raw
     /// value: a LoRA fits one family, so each keeps its own.
     var loras: [String: LoRAChoice] = [:]
@@ -235,7 +239,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         case blocks, negativePrompt, aspect, resolution, usesCustomSize, customWidth, customHeight, steps, guidance,
              randomSeed, seed, batchCount, transparentBackground, lowMemory,
              videoResolution, videoSeconds, videoFrameRate, videoAutoDuration, referenceImage, lastFrameImage, upscale, softness,
-             halfPrecision, livePreview, loras, videoQuality, gaussians, objectMode, lyrics, songSeconds
+             halfPrecision, livePreview, loras, videoQuality, gaussians, objectMode, lyrics, songSeconds, soundSeconds
     }
 
     /// Settings saved before the prompt had blocks kept a single string.
@@ -280,6 +284,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         objectMode = try values.decodeIfPresent(ObjectMode.self, forKey: .objectMode) ?? objectMode
         lyrics = try values.decodeIfPresent(String.self, forKey: .lyrics) ?? lyrics
         songSeconds = try values.decodeIfPresent(Double.self, forKey: .songSeconds) ?? songSeconds
+        soundSeconds = try values.decodeIfPresent(Double.self, forKey: .soundSeconds) ?? soundSeconds
     }
 
     /// Seeds for the next batch: consecutive from the fixed seed, or fresh random ones.
@@ -375,7 +380,8 @@ nonisolated struct GenerationRequest: Codable, Hashable, Sendable {
     var numGaussians: Int?
     var objectMode: String?
     /// A song (MiniMax-Music3): its lyrics and its length in seconds, the longest asked until it is made, then the
-    /// length it came out at; nil for the others. Such a request is saved without a size.
+    /// length it came out at; a sound effect (MOSS-SoundEffect): no lyrics, and its length. Nil for the others. Such a
+    /// request is saved without a size.
     var lyrics: String?
     var duration: Double?
 
@@ -403,7 +409,7 @@ nonisolated extension GenerationRequest {
         blocks = try values.decodeIfPresent([PromptBlock].self, forKey: .blocks)
         negativePrompt = try values.decodeIfPresent(String.self, forKey: .negativePrompt)
         seed = try values.decode(Int.self, forKey: .seed)
-        // A 3D object and a song have no size.
+        // A 3D object and a sound have no size.
         size = try values.decodeIfPresent(PixelSize.self, forKey: .size) ?? PixelSize(width: 0, height: 0)
         steps = try values.decode(Int.self, forKey: .steps)
         guidance = try values.decode(Double.self, forKey: .guidance)
@@ -431,7 +437,7 @@ nonisolated extension GenerationRequest {
         try values.encodeIfPresent(blocks, forKey: .blocks)
         try values.encodeIfPresent(negativePrompt, forKey: .negativePrompt)
         try values.encode(seed, forKey: .seed)
-        if numGaussians == nil, lyrics == nil { try values.encode(size, forKey: .size) }
+        if numGaussians == nil, lyrics == nil, duration == nil { try values.encode(size, forKey: .size) }
         try values.encode(steps, forKey: .steps)
         try values.encode(guidance, forKey: .guidance)
         try values.encode(transparentBackground, forKey: .transparentBackground)

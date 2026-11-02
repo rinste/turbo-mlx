@@ -24,9 +24,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard model.isBusy || downloading else { return .terminateNow }
         let alert = NSAlert()
         alert.messageText = "Quit Turbo MLX?"
-        let media = model.activeJob?.model.family.media ?? .image
+        let family = model.activeJob?.model.family
+        let media = family?.media ?? .image
+        let noun = media == .audio && family?.isSong == false ? "sound" : media.noun
         alert.informativeText = model.isBusy
-            ? (media == .video ? "A clip is being generated and will be stopped." : "A\(media == .image ? "n" : "") \(media.noun) is being generated and will be stopped.")
+            ? (media == .video ? "A clip is being generated and will be stopped." : "A\(media == .image ? "n" : "") \(noun) is being generated and will be stopped.")
             : "A download is in progress. It will resume where it left off next time you open the app."
         alert.addButton(withTitle: "Quit")
         alert.addButton(withTitle: "Cancel")
@@ -103,7 +105,7 @@ private struct GenerationCommands: Commands {
             Divider()
 
             let item = model.displayedItem
-            Button("Copy \((item?.kind ?? .image).title)") {
+            Button("Copy \(item?.title ?? MediaKind.image.title)") {
                 if let item { NSPasteboard.general.copyItem(item, at: model.url(for: item)) }
             }
             .keyboardShortcut("c", modifiers: [.command, .shift])

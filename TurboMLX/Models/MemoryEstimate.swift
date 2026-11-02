@@ -30,6 +30,9 @@ nonisolated enum MemoryEstimate {
         if model.family == .minimaxMusic3, model.isBuiltIn {
             return songPeak(fourBit: model.id.hasSuffix("4bit"), frames: frames ?? 1500, lowMemory: lowMemory)
         }
+        if model.family == .mossSoundEffect {
+            return soundPeak(frames: frames ?? 1500, lowMemory: lowMemory)
+        }
         return peaks(model.id, lowMemory: lowMemory)?.gigabytes(size.megapixels)
     }
 
@@ -89,6 +92,16 @@ nonisolated enum MemoryEstimate {
     // the vocoder on top of every weight; 14.4 GB with Save memory, which lets the language models go before the flow, so the composing
     // sets it. Each frame (25 a second) adds its key-value cache (147 KB) and its hidden states (64 KB). The 4-bit pack
     // (2 November 2026), 5 GB lighter: 12.7 GB for 20 s, 9.6 with Save memory.
+    // MOSS-SoundEffect, the bf16 pack (2 November 2026): its weights 7.0 GB (Qwen3 3.2 without its tied head, the DiT
+    // 2.6, the VAE 1.4); decoding adds 0.4 / 3.2 / 4.9 GB for 1 / 10 / 30 s, peaking at 7.4 / 10.2 / 11.9 GB. With Save
+    // memory the encoder has gone by then: 7.0 GB to 10 s (reading the prompt sets it), 8.7 GB for 30 s. `frames` are
+    // the clip's latent frames, 50 a second. The 4-bit pack has 2 GB less of weights; this is its ceiling.
+    private static func soundPeak(frames: Int, lowMemory: Bool) -> Double {
+        let seconds = Double(frames) / 50
+        let decode = seconds <= 10 ? 0.4 + 0.31 * max(seconds - 1, 0) : 3.2 + 0.083 * (seconds - 10)
+        return lowMemory ? max(7.0, 3.8 + decode) : 7.0 + decode
+    }
+
     private static func songPeak(fourBit: Bool, frames: Int, lowMemory: Bool) -> Double {
         let base = fourBit ? (lowMemory ? 9.6 : 12.7) : (lowMemory ? 14.4 : 18.9)
         return base + 0.00021 * Double(frames)

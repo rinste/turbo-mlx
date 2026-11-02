@@ -78,12 +78,17 @@ struct OutputPanel: View {
             ModelDownloadCard(model: model)
         } else {
             let media = app.selectedModel?.family.media ?? .image
+            let effects = media == .audio && app.selectedModel?.family.isSong == false
             ContentUnavailableView {
-                Label(media == .video ? "No Clips Yet" : media == .model3D ? "No Objects Yet" : media == .audio ? "No Songs Yet" : "No Images Yet",
-                      systemImage: media == .video ? "film.stack" : media == .model3D ? "cube" : media == .audio ? "music.note.list" : "photo.on.rectangle.angled")
+                Label(media == .video ? "No Clips Yet" : media == .model3D ? "No Objects Yet" : effects ? "No Sounds Yet"
+                      : media == .audio ? "No Songs Yet" : "No Images Yet",
+                      systemImage: media == .video ? "film.stack" : media == .model3D ? "cube" : effects ? "waveform"
+                      : media == .audio ? "music.note.list" : "photo.on.rectangle.angled")
             } description: {
                 Text(media == .model3D
                      ? "Choose a picture of one object on the left and click Generate.\nThe objects you create stay here, in the history."
+                     : effects
+                     ? "Describe the sound on the left and click Generate.\nThe sounds you create stay here, in the history."
                      : media == .audio
                      ? "Describe the music and write its lyrics on the left, then click Generate.\nThe songs you create stay here, in the history."
                      : "Write a prompt on the left and click Generate.\nThe \(media == .video ? "clips" : "images") you create stay here, in the history.")
@@ -103,14 +108,14 @@ struct OutputPanel: View {
             } label: {
                 Label("Copy", systemImage: "doc.on.doc")
             }
-            .help("Copy the \((item?.kind ?? .image).noun) (⇧⌘C)")
+            .help("Copy the \(item?.noun ?? MediaKind.image.noun) (⇧⌘C)")
             .disabled(item == nil)
 
             if let item {
                 ShareLink(item: app.url(for: item)) {
                     Label("Share", systemImage: "square.and.arrow.up")
                 }
-                .help("Share or save the \(item.kind.noun)")
+                .help("Share or save the \(item.noun)")
             }
 
             Button {
@@ -126,7 +131,7 @@ struct OutputPanel: View {
             } label: {
                 Label("Move to Trash", systemImage: "trash")
             }
-            .help("Move the \((item?.kind ?? .image).noun) to the Trash")
+            .help("Move the \(item?.noun ?? MediaKind.image.noun) to the Trash")
             .disabled(item == nil)
         }
     }
@@ -415,6 +420,9 @@ private struct ItemInfoBar: View {
                     if let gaussians = item.request.numGaussians {
                         MetadataChip(systemImage: "cube", text: "\(ObjectDetail.label(gaussians)) Gaussians",
                                      help: "\(gaussians) Gaussians, from a \(item.request.objectMode == ObjectMode.photo.rawValue ? "photo" : "render")")
+                    } else if item.kind == .audio, item.request.lyrics == nil {
+                        // A sound effect: its length, to the tenth.
+                        MetadataChip(systemImage: "waveform", text: Format.soundDuration(item.request.duration ?? 0))
                     } else if item.kind == .audio {
                         // The length it came out at, 25 frames a second, and the longest asked.
                         let length = item.request.frames.map { Double($0) / 25 } ?? item.request.duration ?? 0
@@ -440,7 +448,7 @@ private struct ItemInfoBar: View {
                                          help: "The full model with guidance (CFG \(Format.guidance(item.request.guidance))) and a negative prompt")
                         }
                         MetadataChip(systemImage: "stairs", text: "\(item.request.steps) steps")
-                        if item.kind != .video, item.kind != .audio {
+                        if item.kind != .video, item.kind != .audio || item.request.lyrics == nil {
                             MetadataChip(systemImage: "dial.medium", text: "CFG \(Format.guidance(item.request.guidance))")
                         }
                     }
@@ -520,7 +528,7 @@ struct HistoryItemMenu: View {
                 NSPasteboard.general.setString(item.prompt, forType: .string)
             }
         }
-        Button("Copy \(item.kind.title)") { NSPasteboard.general.copyItem(item, at: app.url(for: item)) }
+        Button("Copy \(item.title)") { NSPasteboard.general.copyItem(item, at: app.url(for: item)) }
         Divider()
         let url = app.url(for: item)
         Button(Self.openTitle(for: url)) { NSWorkspace.shared.open(url) }
@@ -550,13 +558,14 @@ private struct GenerationFrame: View {
     /// The model picks the clip's length, `frames` being the longest.
     var isLongest = false
     var isPulsing = false
-    /// A song: the longest it may last.
+    /// A song: the longest it may last; a sound effect: its length.
     var songSeconds: Double?
 
-    /// "768 × 512", and the duration for a clip ("up to 5 s" while the model has to pick it); for a 3D object or a song,
-    /// what it is.
+    /// "768 × 512", and the duration for a clip ("up to 5 s" while the model has to pick it); for a 3D object or a
+    /// sound, what it is.
     private var sizeLabel: String {
         if model.family.media == .model3D { return "3D object" }
+        if model.family.media == .audio, !model.family.isSong { return "Sound, \(Format.soundDuration(songSeconds ?? 10))" }
         if model.family.media == .audio { return "Song, up to \(Format.songDuration(songSeconds ?? 60))" }
         let dimensions = "\(size.width) × \(size.height)"
         guard let frames, let fps, fps > 0 else { return dimensions }
@@ -625,10 +634,11 @@ private struct DraftView: View {
                     frames: video ? app.settings.videoFrames : nil,
                     fps: video ? app.settings.videoFrameRate : nil,
                     isLongest: video && app.settings.autoDuration(for: model.family),
-                    songSeconds: model.family.media == .audio ? app.settings.songSeconds : nil
+                    songSeconds: model.family.isSong ? app.settings.songSeconds : model.family.media == .audio ? app.settings.soundSeconds : nil
                 )
                 VStack(spacing: 6) {
-                    Text(video ? "New Clip" : model.family.media == .model3D ? "New 3D Object" : model.family.media == .audio ? "New Song" : "New Image")
+                    Text(video ? "New Clip" : model.family.media == .model3D ? "New 3D Object" : model.family.isSong ? "New Song"
+                         : model.family.media == .audio ? "New Sound" : "New Image")
                         .font(.headline)
                     Text("Set it up on the left, then Generate (⌘↩). What you change here stays for the next time you come back to +.")
                         .font(.callout)

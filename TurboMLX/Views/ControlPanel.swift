@@ -21,10 +21,16 @@ struct ControlPanel: View {
                 } else if model.family.media == .model3D {
                     // No prompt and no format: the picture, the object's detail, the picture's kind.
                     ObjectSection(settings: $app.settings)
-                } else if model.family.media == .audio {
+                } else if model.family.isSong {
                     // No format: the music described, then the words and the length.
                     PromptSection(settings: $app.settings, focus: $focusedBlock, title: "Music")
                     SongSection(settings: $app.settings)
+                } else if model.family.media == .audio {
+                    // No format: the sound described, what to keep out of it, its length and the guidance.
+                    PromptSection(settings: $app.settings, focus: $focusedBlock, title: "Sound")
+                    NegativePromptSection(settings: $app.settings, sound: true)
+                    SoundSection(settings: $app.settings)
+                    ParametersSection(settings: $app.settings, model: model)
                 } else {
                     let quality = app.settings.fullPipeline(for: model)
                     PromptSection(settings: $app.settings, focus: $focusedBlock)
@@ -91,7 +97,8 @@ private struct ModelSelection: View {
                         section("Image") { $0.family.media == .image && !$0.family.isUpscaler },
                         section("Video") { $0.family.media == .video },
                         section("3D") { $0.family.media == .model3D },
-                        section("Music") { $0.family.media == .audio },
+                        section("Music") { $0.family.isSong },
+                        section("Sound Effects") { $0.family.media == .audio && !$0.family.isSong },
                     ].filter { !$0.entries.isEmpty },
                     selection: $app.selectedModelID,
                     help: "A picture: the model also takes a reference image. Lines: it works from the prompt alone. A small arrow: not downloaded yet."
@@ -924,6 +931,13 @@ private struct PromptBlockEditor<Reorder: Gesture>: View {
 
     private var placeholder: String {
         let video = app.selectedModel?.family.media == .video
+        if let family = app.selectedModel?.family, family.media == .audio, !family.isSong {
+            switch block.name {
+            case PromptBlock.subjectName: return "The sound: what makes it, where, how it moves. Rain on a tin roof, a door creaking open slowly."
+            case PromptBlock.styleName: return "How it sounds: close or far, the room, the texture, how it starts and ends."
+            default: return "A piece of the description: a second sound, a detail. It follows the block above."
+            }
+        }
         if app.selectedModel?.family.media == .audio {
             switch block.name {
             case PromptBlock.subjectName: return "The music: genre, mood, tempo and key, the voice that sings and how."
@@ -1018,6 +1032,8 @@ private struct NegativePromptSection: View {
     /// LTX's Quality mode: an empty field means the model's own list, and the sound's guidance
     /// always uses it.
     var hasOwnDefault = false
+    /// A sound effect's: what to keep out of the sound.
+    var sound = false
 
     var body: some View {
         Section {
@@ -1028,6 +1044,7 @@ private struct NegativePromptSection: View {
                     if settings.negativePrompt.isEmpty {
                         Text(hasOwnDefault
                              ? "Empty: LTX’s own list of flaws to avoid, from blur and flicker to robotic voices."
+                             : sound ? "What to keep out of the sound: music, speech, hiss."
                              : "What to keep out of the image: blur, watermarks, extra fingers.")
                             .foregroundStyle(.tertiary)
                             .padding(.leading, 5)
@@ -1535,7 +1552,7 @@ private struct ParametersSection: View {
                 Text("Guidance")
                     .help(model.family.isLTX
                           ? "How strictly the picture follows the prompt. 3 is the recommended value; the sound keeps its own (7)."
-                          : model.family == .qwenImage || model.family == .qwenImageEdit
+                          : model.family == .qwenImage || model.family == .qwenImageEdit || model.family == .mossSoundEffect
                           ? "How strictly to follow the prompt. 4 is the recommended value."
                           : "How strictly to follow the prompt. 1 = off; higher values double the time of each step.")
             }
@@ -1619,6 +1636,36 @@ private struct SongSection: View {
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+// MARK: - Sound effect
+
+/// A sound effect's length: every sound is made as 30 seconds and cut, so a short one takes as long as a long one.
+private struct SoundSection: View {
+    @Binding var settings: GenerationSettings
+
+    var body: some View {
+        Section {
+            LabeledContent {
+                HStack(spacing: 6) {
+                    Slider(value: $settings.soundSeconds, in: GenerationSettings.soundDurations, step: 0.5)
+                    Text(verbatim: Format.soundDuration(settings.soundSeconds))
+                        .monospacedDigit()
+                        .frame(width: 44, alignment: .trailing)
+                }
+            } label: {
+                Text("Duration")
+                    .help("How long the sound lasts, up to 30 seconds. The model always makes 30 seconds and keeps this much, so every length takes about as long: about 2¾ minutes in 100 steps on an M1 Max.")
+            }
+        } header: {
+            Text("Length")
+        } footer: {
+            Text("Sound effects and ambiences, not music or speech. Describe the sound in English or Chinese.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -1899,6 +1946,8 @@ private struct MemoryRows: View {
             "SeedVR2 always reads and writes the picture in tiles."
         case .idol:
             "Frees the cutout's network and DINOv3 (about 2.5 GB) once the picture is read: about 7 GB instead of 9 GB. The next object loads them again, a second or two."
+        case .mossSoundEffect:
+            "Frees the text encoder (about 3 GB) once the description is read: at most about 9 GB instead of 12 GB, for 30 seconds of sound. The next sound loads it again, in a second or two."
         case .minimaxMusic3:
             "Frees the language models (about 11 GB, 8 GB in the 4-bit version) once the song is composed, before its sound is made: about 15 GB instead of 19 GB (10 instead of 13 in 4 bits). The next song loads them again."
         }
@@ -2068,7 +2117,7 @@ private struct GenerateBar: View {
             halfPrecision: model.family.supportsHalfPrecision && settings.halfPrecision,
             quality: settings.fullPipeline(for: model),
             gaussians: model.family.media == .model3D ? settings.gaussians : nil,
-            songSeconds: model.family.media == .audio ? settings.songSeconds : nil,
+            songSeconds: model.family.isSong ? settings.songSeconds : model.family.media == .audio ? settings.soundSeconds : nil,
             count: settings.batchCount,
             // A model the queue is using will be in memory by then.
             isLoaded: app.isLoaded(model) || (app.queue.last ?? app.activeJob)?.model.id == model.id,
@@ -2084,7 +2133,7 @@ private struct GenerateBar: View {
         if app.selectedModel?.family.isUpscaler == true { return count > 1 ? "Upscale \(count) Times" : "Upscale" }
         let things = switch app.selectedModel?.family.media {
         case .video: "Clips"
-        case .audio: "Songs"
+        case .audio: app.selectedModel?.family.isSong == true ? "Songs" : "Sounds"
         default: "Images"
         }
         return count > 1 ? "Generate \(count) \(things)" : "Generate"

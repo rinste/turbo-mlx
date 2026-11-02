@@ -1,7 +1,8 @@
 # turbo-engine
 
 The engine of Turbo MLX: the catalog's families (the image models, LTX-2 for video, the SeedVR2
-upscaler, Idol, which makes a 3D object of a picture, and MiniMax-Music3, which makes songs) on
+upscaler, Idol, which makes a 3D object of a picture, MiniMax-Music3, which makes songs, and MOSS-SoundEffect,
+which makes sound effects) on
 [MLX Swift](https://github.com/ml-explore/mlx-swift), behind a JSON-lines protocol (below) that
 the app speaks to it; the Python engine the app used to ship, `Reference/turbo_worker.py`, speaks
 it too for the image families (see `docs/native-engine.md` for the why and the plan).
@@ -44,6 +45,9 @@ Sources/TurboEngineCore/      protocol, mflux checkpoint loading, PNG output, th
                               semantics, Qwen3-8B with a key-value cache and the RVQ depth decoder
                               drawing the frames with guidance (mlx-audio's keys), the condition
                               encoder, the 1D flow transformer on overlapping windows, the vocoder
+  Families/MossSoundEffect/   MOSS-SoundEffect v2.0: ftfy's text fixes and the Wan prompter's cleaning,
+                              Qwen3-1.7B's last state, the Wan 2.1 audio DiT over 30 s of 50 Hz latents
+                              with guidance, the DAC VAE's decoder at 48 kHz mono
   Families/Idol/              Idol: the picture's cutout (BiRefNet: Swin-L, deformable ASPP, its
                               columns in a Metal kernel) and crop in Pillow's arithmetic, DINOv3
                               ViT-H+/16, FLUX.2's VAE encoder and its posterior's sample, the
@@ -71,12 +75,15 @@ Reference/idol_reference.py   idol-sdk's code on the MLX pack's weights, for Ido
 Reference/music3_reference.py  mlx-audio on the MLX pack, stage by stage, and the official prompt
                               functions on a corpus, for MiniMax-Music3's checks
 Reference/moss_image_reference.py  OpenMOSS's pipeline on a checkpoint, for MOSS-Image's
+Fixtures/make_moss_soundeffect_fixture.py  MOSS-SoundEffect's prompt corpus, Qwen3's float32 states and the
+                              schedule from PyPI code, with the goldens of OpenMOSS's code (see below)
 Licenses/                     the licenses of the projects the ports follow (mflux, ltx-2-mlx,
                               SenseNova-U1, OpenMOSS's MOSS-Image pipeline, mlx-lm with
                               mlx-swift-lm for the mixture-of-experts layers and the gated delta
                               rule's kernel, Pillow for its resizes, tokenizers for the tokenizer,
-                              mlx-audio, minimax-music3-mlx and diffusers for MiniMax-Music3, and
-                              MiniMax-Music3's own licence), which the app's acknowledgements reproduce
+                              mlx-audio, minimax-music3-mlx and diffusers for MiniMax-Music3,
+                              MiniMax-Music3's own licence, OpenMOSS's MOSS-TTS and ftfy for
+                              MOSS-SoundEffect), which the app's acknowledgements reproduce
 ```
 
 SeedVR2's text embedding ships with the engine, in its resource bundle
@@ -106,6 +113,7 @@ names its tensors instead, and only the VAE's convolutions are transposed on loa
 | LTX-2.3 distilled | Gemma 3 12B (4-bit, all 49 hidden states, prompt left-padded to 1024), per-token RMS, two projections and two 8-block connectors with learnable registers | 48 audio–video blocks (4096 + 2048 wide, cross-modal attention both ways), block linears 4 or 8 bits, float32 activations | causal-3D conv VAE (non-causal decoder, 32 × 32 × 8, 128 channels), tiled over frames and pixels; audio VAE + BigVGAN vocoder with bandwidth extension to 48 kHz | none (distilled); two stages: 8 steps at half size, ×2 latent upsampler, 3 steps |
 | Idol (3D object) | none: the picture, cut out by BiRefNet (unless it has an alpha), cropped around the object (1.2 × its box for a render, 1.7 for a photo) to 1024 on black; its DINOv3 ViT-H+/16 tokens (bf16, the affine final norm then a plain LayerNorm) and a sample of the FLUX.2 VAE's posterior, patchified and normalized, 4,101 tokens each | a rectified-flow transformer over the object's 8,192 × 16 latent and a camera token: the latent refined by two time-modulated blocks, the picture by two plain ones (once per guidance branch), then 24 joint blocks; each block's rotation learned per token (RePo); 8-bit linears, float16 stream, float32 norms and heads; 50 Euler steps on a grid shifted by 3 | an octree descent (eight levels, systematic resampling) places an anchor per 32 Gaussians, a cross-attending decoder turns each into 32; written as a GLB of discs, turned so the picture's view faces +Z | CFG 3 against zeroed picture tokens, the unconditional pass with them collapsed to two weighted keys |
 | MiniMax-Music3 (song) | the description cleaned and the lyrics normalized as the official integration does (code point for code point), between the checkpoint's special tokens, at most 5,000; the unconditional prompt the same with every token but the first and last two replaced by the guidance token | a hierarchical autoregressive stage: Qwen3-8B (36 layers of 4096, 8-bit, its own 200k vocabulary and head) draws each frame's semantic code (25 a second) and a 4-layer depth decoder its seven residual codes, both with guidance 1.5 and top-50 sampling from mlx-audio's keys; each frame's hidden states (the global model's and the depth decoder's seven) mixed by learned weights into the condition; then a 36-layer 1D flow transformer (2048 wide, partial rotary, 8-bit) on windows of 200 frames every 100, 30 Euler steps each, the overlap pulled toward the previous window's | DAC-style vocoder (snake activations, ×512) to 44.1 kHz stereo, the middle of each window kept; a WAV | CFG 1.5 (language models), 1.7 (flow, against a zero condition) |
+| MOSS-SoundEffect v2.0 (sound effect) | the prompt stripped with " duration: {s:.1f}s" appended, cleaned as `WanPrompter` does (ftfy's fixes without its mojibake repair, HTML references, Python's strip, runs of whitespace made one space), Qwen3's tokens with no special ones, at most 512; Qwen3-1.7B's last hidden state after its final norm (bf16), zeros past the prompt up to 512 | Wan 2.1's 1.3B DiT (30 blocks of 1536, 12 heads) over 1500 latent frames, always 30 s whatever the length: 1-D rotary on interleaved pairs, q and k RMS-normed over the whole width, unmasked cross-attention to the 512 text states through a GELU projection; bf16 projections with the norms, modulation and residual stream in float32, as the reference's autocast; 100 Euler steps on a shift-5 schedule | the continuous DAC VAE's decoder (snake activations, ×960 in five transposed convolutions, 2048 → 64 channels) in float32 to 48 kHz mono, only the latents the kept seconds need (16 frames of margin); a WAV | CFG 4 against the negative prompt, by default empty (all-zero states) |
 | SeedVR2 3B (upscaler) | none: a fixed 58 × 5120 embedding | 32 blocks of 2560 (10 with separate video and text weights, then shared), the video's 2 × 2 patches attending in windows (shifted every other block) with the whole text, rotary frequencies read from the checkpoint, float16 weights and float32 activations; input: noise, the picture's latent and a mask of ones; one Euler step from t = 1000 | causal 3D VAE, 16 channels, encode and decode in 512-pixel tiles; then the picture's low frequencies under the result's detail (five-level wavelet) and its Lab a/b (and 20% of L) histograms | none |
 
 Every family keeps a prompt cache and encodes the queued prompts while its text encoder is
@@ -565,6 +573,40 @@ velocities 23%, a window's latents 17%), what 4 bits cost; the semantic tokens o
 same. 20 s of song took 229 s (compose 51 s, flow 172 s) against 242 s for the 8-bit pack, peaking at 12.7 GB, 9.6 GB
 with Save memory (the 8-bit pack 14.5).
 
+## Checking MOSS-SoundEffect against OpenMOSS's code
+
+MOSS-SoundEffect v2.0's reference is OpenMOSS's own pipeline (`moss_soundeffect_v2/` in
+[MOSS-TTS](https://github.com/OpenMOSS/MOSS-TTS), PyTorch), which is not on PyPI; it is not run here. Its DiT, its
+loop and its decode are checked against the float32 golden tensors that
+[xocialize/moss-soundeffect-mlx](https://github.com/xocialize/moss-soundeffect-mlx) captured from that code on a CPU
+(`tests/fixtures/swift_goldens.safetensors` and `golden_meta.json`, commit 4e8e3e3: "a heavy wooden door creaks open
+slowly" for 10 s, numpy noise, the velocity at t = 1000 and 500, ten guided steps at scale 4, the decode); their
+prompt states match transformers' float32 Qwen3 on the same tokens to 1.5e-6, which vouches for them. The rest comes
+from PyPI code on the real weights (`Fixtures/make_moss_soundeffect_fixture.py`): the prompt text and its cleaning
+(ftfy, html, regex) and tokens for a corpus (curly quotes, fullwidth punctuation, ligatures, HTML references,
+control characters, combining marks, Chinese, a prompt past 512 tokens), Qwen3-1.7B's last hidden state in float32
+and in bf16 (transformers), and the schedule (torch). `verify` runs the port in float32 with OpenMOSS's float32 DiT
+(`transformer/diffusion_pytorch_model.safetensors` of `OpenMOSS-Team/MOSS-SoundEffect-v2.0`), then the MLX pack's bf16
+DiT on the same inputs:
+
+```sh
+build/moss-sfx/venv/bin/python -I Engine/Fixtures/make_moss_soundeffect_fixture.py <goldens dir> <mlx pack snapshot> <OpenMOSS snapshot> build/fixtures/moss-soundeffect
+build/bin/turbo-engine verify build/fixtures/moss-soundeffect
+```
+
+Everything in float32 is the reference's (2 November 2026): the corpus's texts, cleaning and tokens identical, the
+schedule exact for 1 to 200 steps, the encoder 1e-6 RMS from transformers, both velocities 1e-6, the ten guided steps
+3e-6, the decode exact, and the decode of only the latents a shorter clip needs equal to the whole one's first
+samples. In bf16 the encoder lands 2.4–5.7% from float32 against transformers' 2.7–5.1% in bf16, the velocities 0.4
+and 0.6%, the ten steps 1.1%, the decoded sound 2.2%.
+
+Through the protocol on an M1 Max, 100 guided steps took 157–164 s for 6, 10 and 30 s of sound alike (0.8 s a DiT
+pass over the 1500 latents), the decode 1.1 s for 10 s and 2.5 s for 30 s, reading the prompt 0.1 s. The peaks: 7.4 /
+10.2 / 11.9 GB for 1 / 10 / 30 s, the weights 7.0 GB of it (Qwen3 without its tied head 3.2, the DiT 2.6, the VAE
+1.4); with Save memory, which lets the text encoder go once the prompts are read, 7.0 GB to 10 s and 8.7 GB for 30 s.
+The three sounds (a door creaking open, typing, rain with thunder) look as described in their spectrograms: the
+creak's pulses, the keys' even clicks, the rain's broadband hiss under two low rumbles.
+
 ## Checking the tokenizers
 
 The engine tokenizes on its own (`Tokenizer/`), with no library: each family's prompt pipeline
@@ -629,7 +671,13 @@ their own, `[instrumental]` for none), `duration` (the longest the song may last
 sooner), `steps` (1 to 30, the flow's on each window) and `seed`, and refuses anything else by name before loading; it
 reports `encoding`, `composing` (`total`: the most frames, 25 a second, `progress` counting them), `denoising` (with
 its `total`), `decoding` and `saving`, writes a 16-bit WAV at `output`, and its `done` gives `duration` (seconds),
-`sample_rate`, `frames` and the timings `encode`, `compose`, `denoise`, `decode` and `save`, with no size. Events on stdout: `ready`, `phase`, `progress`, `preview` (id,
+`sample_rate`, `frames` and the timings `encode`, `compose`, `denoise`, `decode` and `save`, with no size.
+MOSS-SoundEffect (`family: "moss-soundeffect"`) reads the description as `prompt`, `duration` (the clip's length, 0.1 to
+30 s, in tenths), `steps` (1 to 200), `guidance` (1: no unconditional pass), `negative_prompt` (empty: the reference's
+all-zero states) and `seed`, and refuses anything else by name before loading; it reports `encoding`, `denoising`
+(with its `total`), `decoding` and `saving`, writes a 16-bit mono WAV at 48 kHz, and its `done` gives `duration`,
+`sample_rate`, `frames` (the kept latent frames, 50 a second) and the timings `encode`, `denoise`, `decode` and `save`.
+Events on stdout: `ready`, `phase`, `progress`, `preview` (id,
 step, path: a small PNG of the image as it forms, written again at each), `done` (path, seed, size,
 seconds, peak_memory, timings per phase), `failed`, `cancelled`, `model_loaded`, `load_failed` (a
 `load` that did not), `unloaded`. Everything else goes to stderr, which the app shows as the

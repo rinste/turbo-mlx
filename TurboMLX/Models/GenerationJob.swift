@@ -85,10 +85,11 @@ final class GenerationJob: Identifiable {
             default: break
             }
         }
-        // A song: written, then its sound made window by window, then decoded.
+        // A song: written, then its sound made window by window, then decoded. A sound effect: its description read,
+        // then made and decoded.
         if model.family.media == .audio {
             switch phase {
-            case .encodingPrompt: return "Reading the lyrics…"
+            case .encodingPrompt: return model.family.isSong ? "Reading the lyrics…" : "Reading the description…"
             case .composing: return "Composing: \(Format.songDuration(Double(step) / 25)) of up to \(Format.songDuration(Double(composeTotal) / 25))"
             case .denoising: return "Making the sound: step \(step) of \(totalSteps)"
             case .decoding: return "Decoding the sound…"

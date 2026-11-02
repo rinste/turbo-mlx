@@ -192,7 +192,7 @@ private struct HistoryThumbnail: View {
             }
             .overlay(alignment: .bottomLeading) {
                 if item.kind == .video || item.kind == .audio {
-                    Image(systemName: item.kind == .audio ? "music.note" : "play.fill")
+                    Image(systemName: item.isSoundEffect ? "waveform" : item.kind == .audio ? "music.note" : "play.fill")
                         .font(.caption2)
                         .padding(4)
                         .background(.black.opacity(0.5), in: Circle())

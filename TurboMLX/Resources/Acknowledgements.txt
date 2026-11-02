@@ -33,6 +33,10 @@ The engine's Swift ports follow these projects:
     https://github.com/mikolaj92/minimax-music3-mlx
   diffusers: MiniMax-Music3's prompt, from the official integration
     https://github.com/huggingface/diffusers
+  MOSS-TTS: MOSS-SoundEffect, from OpenMOSS's own pipeline (moss_soundeffect_v2)
+    https://github.com/OpenMOSS/MOSS-TTS
+  ftfy: MOSS-SoundEffect's prompt cleaning, which follows its fixes
+    https://github.com/rspeer/python-ftfy
   mlx-lm: the mixture-of-experts layers and the gated delta rule's kernel
     https://github.com/ml-explore/mlx-lm
   mlx-swift-lm: the mixture-of-experts layers
@@ -767,7 +771,8 @@ Apache License 2.0
 ================================================================================
 
 The license of SenseNova-U1, MOSS-Image, Idol, minimax-music3-mlx, diffusers,
-tokenizers, swift-numerics, metal-cpp, and SeedVR2's text embedding:
+MOSS-TTS, ftfy, tokenizers, swift-numerics, metal-cpp, and SeedVR2's text
+embedding:
 
 Apache License
                            Version 2.0, January 2004

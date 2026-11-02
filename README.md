@@ -128,6 +128,7 @@ the disk.
 | [SeedVR2 Upscaler 3B](https://huggingface.co/numz/SeedVR2_comfyUI) | 16 GB | 7.3 GB | enlarges a picture 2–4× with sharper, faithful detail, up to 4096 × 4096, no prompt · Apache 2.0 |
 | [MiniMax-Music3](https://huggingface.co/mlx-community/MiniMax-Music3-4bit) | 16 GB | 9.2 GB | MiniMax's music model: a description of the music and its lyrics become a complete song with vocals, up to six minutes, a 44.1 kHz stereo WAV · 8B + 2.4B, 4-bit · MiniMax-Music3 Community License: show the model's name where you use it, no songs that imitate artists or infringe others' rights |
 | [MiniMax-Music3](https://huggingface.co/mlx-community/MiniMax-Music3-8bit) | 24 GB | 14.2 GB | the 8-bit version, closer to the original |
+| [MOSS-SoundEffect](https://huggingface.co/mlx-community/MOSS-SoundEffect-v2.0-bf16) | 16 GB | 8.4 GB | OpenMOSS's sound-effect model: a description becomes up to 30 seconds of sound, from footsteps and doors to rain, engines and crowds (no music or speech), a 48 kHz mono WAV · 1.3B + Qwen3-1.7B · 100 steps · Apache 2.0 |
 | [Idol](https://huggingface.co/ddalcu/Idol-MLX-Serve-8bit) | 16 GB | 3 GB | a 3D object from one picture of one object, its sides and back invented, as a GLB · 1.8B, 8-bit · 50 steps, no prompt · Apache 2.0, its DINOv3 encoder under Meta's DINOv3 License |
 
 **Which one?** For a first try, Z-Image Turbo (4-bit) or SenseNova-U1.5, which both run on 16 GB
@@ -139,7 +140,8 @@ and long text, Qwen-Image 2512, if you have time to wait. To edit a picture: FLU
 seconds, SenseNova-U1.5, or Qwen-Image Edit, the slowest but the one that touches the least
 besides what you asked. For video, LTX-2.5. For a 3D object, Idol: a picture of one object on a
 plain background, a render or a photo. For a song, MiniMax-Music3: describe the genre, the voice and
-the instruments, write the lyrics with tags such as [verse] and [chorus] on lines of their own.
+the instruments, write the lyrics with tags such as [verse] and [chorus] on lines of their own. For a sound effect or
+an ambience, MOSS-SoundEffect: describe what makes the sound, where, and how it changes, in English or Chinese.
 
 More checkpoints of the same families can be added from **⋯ → Add Model…** (a Hugging Face
 repository or a local folder; for Klein you can pick the 4B, 9B or base variant).
@@ -177,6 +179,7 @@ adds a few seconds to load it).
 | SeedVR2 Upscaler | 768 × 768 → 3072 × 3072 | 1 min 10 s |
 | MiniMax-Music3 | 10-second song, 30 steps | 2 min |
 | MiniMax-Music3 | 1-minute song, 30 steps | 14 min |
+| MOSS-SoundEffect | sound effect of any length up to 30 s, 100 steps | 2¾ min |
 | Idol | 3D object from a picture, 262,144 Gaussians, 50 steps | 5 min |
 | Idol | the same in 25 steps | 2½ min |
 
@@ -218,6 +221,7 @@ PNG next to the prompt and settings, in an MP4 in an XMP box.
 | SeedVR2 Upscaler 3B | 11 GB to 2304 × 2304, 18 GB to 4096 × 4096 | mflux, to 57–62 dB |
 | MiniMax-Music3 4-bit / 8-bit | 9.6 / 14.4 GB with *Save memory* (12.7 / 17.8–18.8 GB without), a little more for long songs | mlx-audio, every stage as close to float32 as its own |
 | Idol | 8.3–8.9 GB whatever the picture and the detail, 6.8 GB with *Save memory* | Sperid Labs' PyTorch code (idol-sdk), the same object from the same noise |
+| MOSS-SoundEffect | 7.0 GB to 10 s, 8.7 GB for 30 s with *Save memory* (10.2 / 11.9 GB without) | OpenMOSS's PyTorch code (its float32 goldens), to 1e-6 in float32 |
 
 Measured on an M1 Max with mflux 0.20, the Python reference the native engine is checked against
 (the 8-bit Z-Image peak adds its larger weights to the measured 4-bit one); LTX and SenseNova-U1.5
@@ -258,6 +262,12 @@ images.
   another song than mlx-audio's from the same prompt. The 4-bit version, checked the same way on its own pack, takes
   as long (20 seconds of song in about 4 minutes, like the 8-bit one) in 5 GB less; its flow lands 17% from the
   8-bit pack's float32 after a window's 30 steps (2.7% for the 8-bit pack itself), so a seed gives another song.
+- **MOSS-SoundEffect** is checked against OpenMOSS's own pipeline (MOSS-TTS, PyTorch) through the float32 tensors
+  captured from it by xocialize's MLX port, and against transformers for its text encoder: in float32 every stage is
+  the reference's (the prompt's text and tokens exactly, the velocities and ten guided steps to 1e-6, the decode
+  exactly); the bf16 pack lands 1% from float32 after ten steps. Like the reference, it makes every sound as 30 s and
+  keeps the length asked for, so 100 steps take 2¾ minutes on an M1 Max whatever the length; the engine draws its own
+  noise, so a seed gives another sound than OpenMOSS's from the same prompt.
 - **LTX-2.3** is measured with the native engine against dgrauet's
   [ltx-2-mlx](https://github.com/dgrauet/ltx-2-mlx), with *Save memory*: a 5-second 768 × 512 clip
   with sound takes 206 s, a 3-second one from an image 122 s; the 8-bit version, without *Save
@@ -340,7 +350,8 @@ SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo-engine serve ──▶ 
   FLUX 3 Image Klein from BFL's own checkpoint, MOSS-Image from OpenMOSS's (checked against its PyTorch pipeline), Z-Image Turbo, Qwen-Image 2512 and Qwen-Image-Edit 2511, Ming-Image from mflux's checkpoints,
   SenseNova-U1.5 from mlx-community's, LTX-2.3 and LTX-2.5 from dgrauet's, the SeedVR2 upscaler from its
   original one, Idol from mlx-serve's pack of Sperid Labs' release, checked against idol-sdk, MiniMax-Music3 from
-  mlx-community's 4-bit and 8-bit packs, checked against mlx-audio) on MLX Swift. The app's
+  mlx-community's 4-bit and 8-bit packs, checked against mlx-audio, MOSS-SoundEffect from mlx-community's pack,
+  checked against OpenMOSS's pipeline) on MLX Swift. The app's
   build embeds its `turbo-engine` binary in the bundle (`Contents/MacOS`, signed with the app),
   and every model runs there: nothing is installed on first launch, the engine starts in an
   instant, and no Python process sits between the app and the GPU. The engine keeps the

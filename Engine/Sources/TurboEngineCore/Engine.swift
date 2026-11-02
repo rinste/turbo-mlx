@@ -91,8 +91,9 @@ public final class Engine {
             if isCancelled(id) { throw GenerationError.cancelled }
             // A 3D object's settings are refused before anything loads.
             if spec.family == "idol" { try IdolError.validate(Self.meshRequest(params)) }
-            // So are a song's.
+            // So are a song's and a sound effect's.
             if spec.family == "minimax-music3" { try Music3Error.validate(Self.audioRequest(params)) }
+            if spec.family == "moss-soundeffect" { try MossSoundEffectError.validate(Self.audioRequest(params)) }
             let model = try ensureModel(spec, jobID: id)
             try applyLoRAs(params.loras ?? [], to: model, spec: spec)
             let lowRam = spec.lowRam == true
@@ -378,10 +379,11 @@ public final class Engine {
         return request
     }
 
-    /// A song (MiniMax Music 3), written as a WAV. Phases encoding, composing (`total`: the most frames the song may
-    /// take, `frame_rate` a second), denoising (with its total), decoding, saving; `progress` counts the frames while
-    /// composing (the model may end the song before `total`), then the steps. `done` gives the WAV's path, the song's
-    /// length in seconds (`duration`), its sample rate and frames, and the time of each phase.
+    /// A song (MiniMax Music 3) or a sound effect (MOSS-SoundEffect), written as a WAV. Phases encoding, composing
+    /// (songs: `total` the most frames the song may take, `frame_rate` a second), denoising (with its total), decoding,
+    /// saving; `progress` counts the frames while composing (the model may end the song before `total`), then the steps.
+    /// `done` gives the WAV's path, the sound's length in seconds (`duration`), its sample rate and frames, and the time
+    /// of each phase.
     private func generateAudio(_ model: AudioFamilyModel, id: String, spec: ModelSpec, params: GenerationParams, started: Date) throws {
         let request = Self.audioRequest(params)
         var spans: [String: Double] = [:]
@@ -423,6 +425,10 @@ public final class Engine {
             "duration": (song.seconds * 100).rounded() / 100,
         ]
         if let lyrics = params.lyrics { metadata["lyrics"] = lyrics }
+        if model is MossSoundEffectModel {
+            metadata["guidance"] = params.guidance
+            if let negative = params.negativePrompt, !negative.isEmpty { metadata["negative_prompt"] = negative }
+        }
         try AudioOutput.writeWAV(song.samples, sampleRate: song.sampleRate, to: URL(fileURLWithPath: params.output),
                                  source: .trainedAlgorithmicMedia, metadata: metadata)
         enter(nil)
@@ -442,8 +448,8 @@ public final class Engine {
         ])
     }
 
-    /// A song's request: the description, the lyrics, the longest duration, the steps and the seed (the size, guidance
-    /// and alpha flag are not read: the reference's guidance is fixed).
+    /// A sound's request: the description, the lyrics (songs), the duration (a song's longest, a sound effect's own),
+    /// the steps, the guidance and negative prompt (sound effects; a song's guidance is the reference's) and the seed.
     static func audioRequest(_ params: GenerationParams) -> FamilyRequest {
         var request = FamilyRequest(
             prompt: params.prompt, seed: params.seed, width: params.width, height: params.height, steps: params.steps,
@@ -451,6 +457,7 @@ public final class Engine {
         )
         request.lyrics = params.lyrics
         request.duration = params.duration
+        request.negativePrompt = params.negativePrompt.flatMap { $0.isEmpty ? nil : $0 }
         return request
     }
 

@@ -109,6 +109,13 @@ enum VerifyTokenizers {
         case "minimax-music3":
             let tokenizer = try BPETokenizer(folder: folder)
             return { tokenizer.encode(Music3Prompt.assemble(caption: $0, lyrics: $0), addSpecialTokens: true) }
+        // MOSS-SoundEffect: each prompt as a 10 s clip's text, cleaned as `WanPrompter` does, at most 512 tokens.
+        case "moss-soundeffect":
+            let tokenizer = try BPETokenizer(folder: folder)
+            return {
+                Array(tokenizer.encode(MossSoundEffectPrompt.clean(MossSoundEffectPrompt.withDuration($0, seconds: 10)),
+                                       addSpecialTokens: true).prefix(512))
+            }
         default:
             throw BPETokenizer.TokenizerError.unsupported("the pipeline \(name)")
         }

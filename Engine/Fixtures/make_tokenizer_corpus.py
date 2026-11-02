@@ -13,7 +13,8 @@ Qwen-Image Edit with their templates around the prompt, Ming-Image with its temp
 special tokens, LTX-2's Gemma 3 with `<bos>` and the prompt stripped, SenseNova-U1.5 with its
 "neo1_0" generation query (and the unconditional one, the same for every prompt), and its edit
 query with 16 picture tokens (and the picture-only one), MiniMax Music 3 with each prompt as the description and as
-the lyrics, assembled by the official functions (Engine/Reference/music3_reference.py). SenseNova's
+the lyrics, assembled by the official functions (Engine/Reference/music3_reference.py), MOSS-SoundEffect with each
+prompt as a 10 s clip's text, cleaned as OpenMOSS's `WanPrompter` does (ftfy, html, regex) and cut to 512. SenseNova's
 reference is the tokenizer SenseTime's code builds from `vocab.json` and `merges.txt` (the original
 checkpoint has no `tokenizer.json`): the MLX pack's `tokenizer.json`, which the engine reads, was
 made from them by the pack's author, so it is left out here and checked against them.
@@ -111,6 +112,7 @@ PIPELINES = [
     ("sensenova-edit", "mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit", "ff6d0c2dfe21b19891ae4551e11fcc99f6aa82ae", ""),
     ("sensenova-edit-unconditional", "mlx-community/SenseNova-U1.5-8B-MoT-8step-4bit", "ff6d0c2dfe21b19891ae4551e11fcc99f6aa82ae", ""),
     ("minimax-music3", "mlx-community/MiniMax-Music3-8bit", "10aa4ca578d04c6f5256c1bc22fc8405a09602b5", "tokenizer"),
+    ("moss-soundeffect", "mlx-community/MOSS-SoundEffect-v2.0-bf16", "71a08a420dcac61b73fc1f721d56ac41078973bf", "tokenizer"),
 ]
 
 PROMPTS = [
@@ -181,6 +183,18 @@ PROMPTS = [
 ]
 
 
+def moss_soundeffect_text(prompt: str) -> str:
+    """`MossSoundEffectPipeline`'s text for a 10 s clip, then `HuggingfaceTokenizer._clean` with clean='whitespace'."""
+    import html
+
+    import ftfy
+    import regex
+
+    text = ftfy.fix_text(f"{prompt.strip()} duration: 10.0s")
+    text = html.unescape(html.unescape(text)).strip()
+    return regex.sub(r"\s+", " ", text).strip()
+
+
 def pipeline_ids(name: str, tokenizer, prompt: str) -> list[int]:
     if name == "qwen3-chat-no-thinking":
         text = tokenizer.apply_chat_template([{"role": "user", "content": prompt}], tokenize=False,
@@ -216,6 +230,8 @@ def pipeline_ids(name: str, tokenizer, prompt: str) -> list[int]:
         return tokenizer(sensenova_picture(SENSENOVA_EDIT_UNCONDITIONAL, 16))["input_ids"]
     if name == "minimax-music3":
         return tokenizer(music3_assemble(prompt, prompt))["input_ids"]
+    if name == "moss-soundeffect":
+        return tokenizer(moss_soundeffect_text(prompt), truncation=True, max_length=512)["input_ids"]
     raise ValueError(name)
 
 

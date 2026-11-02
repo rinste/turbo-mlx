@@ -15,6 +15,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     case seedVR2 = "seedvr2"
     case idol
     case minimaxMusic3 = "minimax-music3"
+    case mossSoundEffect = "moss-soundeffect"
 
     var displayName: String {
         switch self {
@@ -32,13 +33,17 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .idol: "Idol"
         // The licence asks for this name, as written, wherever a product shows the model.
         case .minimaxMusic3: "MiniMax-Music3"
+        case .mossSoundEffect: "MOSS-SoundEffect"
         }
     }
 
     /// Whether the model outputs RGBA, so a transparent background can be kept.
     var producesAlpha: Bool { self == .ming }
 
-    var media: MediaKind { isLTX ? .video : self == .idol ? .model3D : self == .minimaxMusic3 ? .audio : .image }
+    var media: MediaKind { isLTX ? .video : self == .idol ? .model3D : self == .minimaxMusic3 || self == .mossSoundEffect ? .audio : .image }
+
+    /// Songs with lyrics (MiniMax-Music3), as against sound effects (MOSS-SoundEffect): both are sound.
+    var isSong: Bool { self == .minimaxMusic3 }
 
     /// Lightricks' video models: LTX-2.3 with Gemma 3 beside it, LTX-2.5 with its own Gemma 4.
     var isLTX: Bool { self == .ltx2 || self == .ltx25 }
@@ -77,7 +82,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     var takesLoRAs: Bool {
         switch self {
         case .zImageTurbo, .flux2Klein, .flux3Klein, .qwenImage, .qwenImageEdit, .ltx2, .ltx25: true
-        case .ming, .mossImage, .senseNova, .seedVR2, .idol, .minimaxMusic3: false
+        case .ming, .mossImage, .senseNova, .seedVR2, .idol, .minimaxMusic3, .mossSoundEffect: false
         }
     }
 
@@ -95,6 +100,8 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .ming: ["mllm", "connector", "mlp", "transformer", "vae"]
         case .zImageTurbo, .flux2Klein, .flux3Klein, .mossImage, .qwenImage, .qwenImageEdit: ["transformer", "text_encoder", "vae"]
         case .senseNova, .minimaxMusic3: ["."]
+        // The MLX pack: Qwen3's shards as OpenMOSS ships them, the DiT and the VAE converted in `mlx/`.
+        case .mossSoundEffect: ["text_encoder"]
         case .ltx2, .ltx25, .seedVR2, .idol: []
         }
     }
@@ -115,6 +122,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .senseNova: ["config.json", "model.safetensors.index.json"]
         case .idol: Self.idolFiles
         case .minimaxMusic3: ["config.json", "model.safetensors.index.json"]
+        case .mossSoundEffect: ["model_index.json", "transformer/config.json", "mlx/dit.safetensors", "mlx/vae.safetensors"]
         default: []
         }
     }
@@ -130,7 +138,7 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .ltx25: "tokenizer.json"
         case .seedVR2: nil // no prompt: the engine has the fixed text embedding
         case .idol: nil // no prompt
-        case .minimaxMusic3: "tokenizer/tokenizer.json"
+        case .minimaxMusic3, .mossSoundEffect: "tokenizer/tokenizer.json"
         }
     }
 
@@ -180,6 +188,10 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         case .minimaxMusic3:
             return ["LICENSE", "README.md", "config.json", "model.safetensors.index.json", "model-*.safetensors",
                     "tokenizer/tokenizer.json", "tokenizer/tokenizer_config.json"]
+        // The MLX pack's converted DiT and VAE with the settings the engine reads, Qwen3 and its tokenizer.
+        case .mossSoundEffect:
+            return weights + ["README.md", "model_index.json", "mlx/*.safetensors", "transformer/config.json", "vae/config.json",
+                              "scheduler/*.json", "tokenizer/*"]
         }
     }
 
@@ -277,7 +289,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
 
     var supportsGuidance: Bool {
         switch family {
-        case .ming, .mossImage, .qwenImage, .qwenImageEdit, .idol: true
+        case .ming, .mossImage, .qwenImage, .qwenImageEdit, .idol, .mossSoundEffect: true
         // The catalog's SenseNova packs are the 8-step distillation, which runs without guidance.
         // MiniMax-Music3's guidance (1.5 for its language models, 1.7 for the flow) is the reference's own, fixed.
         case .zImageTurbo, .senseNova, .ltx2, .ltx25, .seedVR2, .minimaxMusic3: false
@@ -307,6 +319,8 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .idol: 50
         // The flow's Euler steps on each window of the song.
         case .minimaxMusic3: 30
+        // OpenMOSS's default, on the whole 30 s of latents whatever the length.
+        case .mossSoundEffect: 100
         }
     }
 
@@ -315,7 +329,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
     var defaultGuidance: Double {
         if family == .flux3Klein { return isKleinBase ? 3.5 : 1 }
         if family == .mossImage || family == .idol { return 3 }
-        return family == .qwenImage || family == .qwenImageEdit || isKleinBase ? 4 : 1
+        return family == .qwenImage || family == .qwenImageEdit || family == .mossSoundEffect || isKleinBase ? 4 : 1
     }
 
     // The Quality mode (`GenerationSettings.fullPipeline(for:)`): LTX's full pipeline runs its dev
@@ -342,6 +356,7 @@ nonisolated struct ModelDescriptor: Identifiable, Hashable, Codable, Sendable {
         case .idol: 10...100
         // The reference's own limit is 30.
         case .minimaxMusic3: 8...30
+        case .mossSoundEffect: 10...200
         }
     }
 }
@@ -591,6 +606,20 @@ enum ModelCatalog {
             sizeBytes: 14_179_317_410,
             license: "MiniMax-Music3 Community License",
             recommendedMemoryGB: 24,
+            isBuiltIn: true
+        ),
+        // MOSS-SoundEffect v2.0 (OpenMOSS, Apache 2.0): a description to up to 30 s of sound effect or ambience, 48 kHz
+        // mono. The MLX pack (its DiT in bf16, the DAC VAE in float32, Qwen3-1.7B as OpenMOSS ships it), run as
+        // OpenMOSS's pipeline runs it: every sound denoised as 30 s and cut, 100 guided steps by default.
+        ModelDescriptor(
+            name: "MOSS-SoundEffect · 16 GB RAM",
+            detail: "OpenMOSS's sound-effect model: a description becomes up to 30 seconds of sound, from footsteps and doors to rain, engines and crowds. No music or speech.",
+            family: .mossSoundEffect,
+            source: .huggingFace(repo: "mlx-community/MOSS-SoundEffect-v2.0-bf16"),
+            revision: "71a08a420dcac61b73fc1f721d56ac41078973bf",
+            sizeBytes: 8_397_791_730,
+            license: "Apache 2.0",
+            recommendedMemoryGB: 16,
             isBuiltIn: true
         ),
     ]

@@ -30,6 +30,9 @@ nonisolated enum ModelCompatibility {
         "qwen/qwen-image-edit-2511": (.qwenImageEdit, nil),
         // mlx-serve's packs of the release, which carry DINOv3 and the VAE's encoder (the release alone does not).
         "speridlabs/idol": (.idol, nil),
+        // The MLX packs (`mlx/` holds the DiT and the VAE converted); OpenMOSS's own repository keeps its VAE as a
+        // pickled object, which `requiredFiles` turns away.
+        "openmoss-team/moss-soundeffect-v2.0": (.mossSoundEffect, nil),
     ]
 
     /// The families that share mflux's `transformer`, `text_encoder`, `vae` and `tokenizer` layout,
@@ -60,6 +63,7 @@ nonisolated enum ModelCompatibility {
         let name = model.id.lowercased()
         if name.contains("ming-image") { return (.ming, nil) }
         if name.contains("moss-image") { return (.mossImage, nil) }
+        if name.contains("moss-soundeffect-v2") { return (.mossSoundEffect, nil) }
         if name.contains("z-image-turbo") { return (.zImageTurbo, nil) }
         if name.contains("qwen-image-edit-2511") { return (.qwenImageEdit, nil) }
         if name.contains("klein"), ["flux2", "flux.2", "flux-2"].contains(where: name.contains), !name.contains("kv") {

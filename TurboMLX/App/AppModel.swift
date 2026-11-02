@@ -469,7 +469,7 @@ final class AppModel {
         }
         if model.family.requiresReferenceImage, !hasReferenceImage { return .missingReference }
         if model.family.takesPrompt, settings.trimmedPrompt.isEmpty { return .emptyPrompt }
-        if model.family.media == .audio, settings.trimmedLyrics.isEmpty { return .emptyLyrics }
+        if model.family.isSong, settings.trimmedLyrics.isEmpty { return .emptyLyrics }
         if model.family.isUpscaler, let size = settings.upscaledSize, size.megapixels > Upscale.maxMegapixels { return .upscaleTooLarge }
         switch loraState(for: model) {
         case .missing(let choice): return .loraMissing(choice.name)
@@ -512,7 +512,8 @@ final class AppModel {
     private func memoryBlocker(for model: ModelDescriptor) -> Blocker? {
         let size = settings.size(for: model.family)
         let frames = model.family.media == .video ? settings.videoFrames
-            : model.family.media == .audio ? Int(settings.songSeconds * 25) : nil
+            : model.family.isSong ? Int(settings.songSeconds * 25)
+            : model.family.media == .audio ? Int(settings.soundSeconds * 50) : nil
         guard let peak = MemoryEstimate.peak(model: model, size: size, frames: frames, lowMemory: settings.lowMemory)
         else { return nil }
         // A LoRA's matrices stay in memory beside the model's, as large as its file.
@@ -554,7 +555,7 @@ final class AppModel {
         preloadDeclined = false
         let isVideo = model.family.media == .video
         let isObject = model.family.media == .model3D
-        let isSong = model.family.media == .audio
+        let isSound = model.family.media == .audio
         let upscales = model.family.isUpscaler
         let quality = settings.fullPipeline(for: model)
         // A reference image whose file is gone (a history folder emptied by hand) is dropped.
@@ -592,13 +593,17 @@ final class AppModel {
                 request.numGaussians = settings.gaussians
                 request.objectMode = settings.objectMode.rawValue
             }
-            if isSong {
+            if model.family.isSong {
                 request.lyrics = settings.trimmedLyrics
                 request.duration = min(max(settings.songSeconds, GenerationSettings.songDurations.lowerBound),
                                        GenerationSettings.songDurations.upperBound)
+            } else if isSound {
+                // A sound effect's length, in the tenths the model reads.
+                request.duration = (min(max(settings.soundSeconds, GenerationSettings.soundDurations.lowerBound),
+                                        GenerationSettings.soundDurations.upperBound) * 10).rounded() / 10
             }
             let output = isVideo ? history.newVideoURL(seed: seed) : isObject ? history.newObjectURL(seed: seed)
-                : isSong ? history.newSongURL(seed: seed) : history.newImageURL(seed: seed)
+                : isSound ? history.newSongURL(seed: seed) : history.newImageURL(seed: seed)
             let job = GenerationJob(model: model, request: request, outputURL: output)
             job.plan = TimeEstimate.plan(model: model, request: request, history: history.items, models: models)
             queue.append(job)
@@ -773,10 +778,10 @@ final class AppModel {
             let still = job.outputURL.deletingPathExtension().appendingPathExtension("png")
             if (try? ObjectStill.write(of: job.outputURL, to: still)) != nil { poster = still.lastPathComponent }
         }
-        // A song: the frames it came out at, 25 a second (the model may end it before `duration`, the longest asked),
-        // and its waveform drawn.
+        // A song: the frames it came out at, 25 a second (the model may end it before `duration`, the longest asked);
+        // a sound effect lasts its `duration`. Either way its waveform drawn.
         if job.model.family.media == .audio {
-            if let frames = event.frames { request.frames = frames }
+            if job.model.family.isSong, let frames = event.frames { request.frames = frames }
             let still = job.outputURL.deletingPathExtension().appendingPathExtension("png")
             if (try? SongWaveform.write(of: job.outputURL, to: still)) != nil { poster = still.lastPathComponent }
         }
@@ -923,6 +928,11 @@ final class AppModel {
             // A 3D object: its detail and its picture's kind; the prompt and the format stay as they are.
             updated.gaussians = request.numGaussians ?? updated.gaussians
             updated.objectMode = request.objectMode.flatMap(ObjectMode.init(rawValue:)) ?? updated.objectMode
+        } else if media == .audio, model?.family.isSong == false {
+            // A sound effect: its description, what guidance kept out of it, its length; the format stays as it is.
+            updated.blocks = request.blocks.flatMap { $0.isEmpty ? nil : $0 } ?? PromptBlock.defaults(subject: request.prompt)
+            if request.guidance > 1 { updated.negativePrompt = request.negativePrompt ?? "" }
+            updated.soundSeconds = request.duration ?? updated.soundSeconds
         } else if media == .audio {
             // A song: its description, its lyrics and the longest it was asked to last; the format stays as it is.
             updated.blocks = request.blocks.flatMap { $0.isEmpty ? nil : $0 } ?? PromptBlock.defaults(subject: request.prompt)

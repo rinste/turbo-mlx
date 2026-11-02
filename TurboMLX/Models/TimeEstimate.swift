@@ -66,7 +66,12 @@ enum TimeEstimate {
              lastFrame: Bool = false, quality: Bool = false, gaussians: Int? = nil, songSeconds: Double? = nil) {
             let pixels = Double(size.width * size.height)
             cfg = model.supportsGuidance && guidance > 1
-            if model.family.media == .audio {
+            if model.family.media == .audio, !model.family.isSong {
+                // A sound effect: every step runs the DiT over the whole 30 s of latents (twice with guidance); the decode
+                // grows with the length kept, a unit for 10 s.
+                stepUnits = Array(repeating: cfg ? 2 : 1, count: max(steps, 0))
+                decode = (songSeconds ?? 10) / 10
+            } else if model.family.media == .audio {
                 // A song: its frames (the ones it came out at, else the longest asked, 25 a second), then the flow's steps
                 // on each window of 200 frames, one every 100 (the last ones shorter, counted whole), each decoded.
                 let count = frames ?? Int((songSeconds ?? 60) * 25)
@@ -174,6 +179,9 @@ enum TimeEstimate {
         // A minute of song (1 November 2026): 1,500 frames composed in 171 s (114 ms each), 420 steps on 14 windows in
         // 651 s (1.55 s each), the vocoder 13 s (0.95 s a window); 836 s in all against 816 estimated.
         case .minimaxMusic3: Rates(denoise: 1.5, decode: 1, fixed: 0.5, load: 3, compose: 113)
+        // 100 guided steps on the 30 s of latents in 157–164 s whatever the length (0.8 s a pass); decoding 10 s in
+        // 1.1 s, 30 s in 2.5 s; reading the prompt 0.1 s (2 November 2026).
+        case .mossSoundEffect: Rates(denoise: 0.81, decode: 0.9, fixed: 0.3, load: 3)
         }
     }
 

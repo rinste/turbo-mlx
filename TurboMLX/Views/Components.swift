@@ -196,6 +196,12 @@ enum Format {
         let whole = Int(seconds.rounded())
         return whole < 60 ? "\(whole) s" : "\(whole / 60):\(String(format: "%02d", whole % 60))"
     }
+
+    /// A sound effect's length, to the tenth: "10 s", "2.5 s".
+    static func soundDuration(_ seconds: Double) -> String {
+        let tenths = (seconds * 10).rounded() / 10
+        return tenths == tenths.rounded() ? "\(Int(tenths)) s" : "\(tenths.formatted(.number.precision(.fractionLength(1)))) s"
+    }
 }
 
 extension NSPasteboard {
