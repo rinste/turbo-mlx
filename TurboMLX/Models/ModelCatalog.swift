@@ -585,9 +585,10 @@ enum ModelCatalog {
         // run as mlx-audio runs them. The 4-bit pack (2 November 2026) peaks at 9.6 GB with Save memory against 14.5 and
         // takes as long; its flow is 17% from the 8-bit pack's float32 after a window's 30 steps, so the same seed gives
         // another song. The licence asks commercial products to show the name "MiniMax-Music3" and every
-        // product that lets others generate to keep safeguards against infringing uses (`MusicSection`).
+        // product that lets others generate to keep safeguards against infringing uses (`MusicSection`). Unlike the other
+        // families' versions, these two name their bits too, so the picker tells them apart by more than their memory.
         ModelDescriptor(
-            name: "MiniMax-Music3 · 16 GB RAM",
+            name: "MiniMax-Music3 4-bit · 16 GB RAM",
             detail: "MiniMax's music model: a description of the music and its lyrics become a complete song with vocals, up to six minutes long. The lighter 4-bit version.",
             family: .minimaxMusic3,
             source: .huggingFace(repo: "mlx-community/MiniMax-Music3-4bit"),
@@ -598,7 +599,7 @@ enum ModelCatalog {
             isBuiltIn: true
         ),
         ModelDescriptor(
-            name: "MiniMax-Music3 · 24 GB RAM",
+            name: "MiniMax-Music3 8-bit · 24 GB RAM",
             detail: "MiniMax's music model: a description of the music and its lyrics become a complete song with vocals, up to six minutes long. The 8-bit version, closer to the original.",
             family: .minimaxMusic3,
             source: .huggingFace(repo: "mlx-community/MiniMax-Music3-8bit"),
