@@ -73,8 +73,9 @@ models want more, see the table) and room on the disk for the models you pick.
 - **Model and Generate**, at the bottom. The model picker groups upscale, image and video models
   and shows how much memory each one needs; an icon marks the ones that take a picture, a small
   arrow the ones not downloaded yet. The big button tells how long the next generation should
-  take on your Mac, judged from your earlier ones: *Generate (~4 min · ⌘↩)*. *Reset* goes back to
-  the default settings with an empty prompt; ⌘Z undoes it.
+  take on your Mac, judged from your earlier ones: *Generate (~4 min · ⌘↩)*. *Reset*, next to the
+  model or as the arrow at the top of the column, goes back to the default settings with a single
+  empty prompt block; ⌘Z undoes it.
 
 ### On the right: the results
 
@@ -140,7 +141,8 @@ and long text, Qwen-Image 2512, if you have time to wait. To edit a picture: FLU
 seconds, SenseNova-U1.5, or Qwen-Image Edit, the slowest but the one that touches the least
 besides what you asked. For video, LTX-2.5. For a 3D object, Idol: a picture of one object on a
 plain background, a render or a photo. For a song, MiniMax-Music3: describe the genre, the voice and
-the instruments, write the lyrics with tags such as [verse] and [chorus] on lines of their own. For a sound effect or
+the instruments, write the lyrics with tags such as [verse] and [chorus] on lines of their own, or turn on
+*Instrumental* for a song without words (the model may still add wordless vocals). For a sound effect or
 an ambience, MOSS-SoundEffect: describe what makes the sound, where, and how it changes, in English or Chinese.
 
 More checkpoints of the same families can be added from **⋯ → Add Model…** (a Hugging Face

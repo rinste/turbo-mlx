@@ -152,9 +152,10 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     /// Idol: how many Gaussians the object is made of (its detail), and what kind of picture it comes from.
     var gaussians = ObjectDetail.defaultGaussians
     var objectMode = ObjectMode.render
-    /// A song's lyrics, section tags such as "[verse]" on lines of their own ("[instrumental]" for none), and the longest
-    /// it may last (the prompt describes the music).
+    /// A song's lyrics, section tags such as "[verse]" on lines of their own, and the longest it may last (the prompt
+    /// describes the music). An instrumental song keeps the lyrics aside and gets `instrumentalTag` instead.
     var lyrics = ""
+    var instrumental = false
     var songSeconds = 60.0
     /// A sound effect's length (the prompt describes the sound).
     var soundSeconds = 10.0
@@ -220,8 +221,13 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     /// The prompt sent to the model: the blocks joined in order, already trimmed.
     var prompt: String { PromptBlock.joined(blocks) }
     var trimmedPrompt: String { prompt }
-    /// The lyrics as the song gets them: without the blank lines around them.
-    var trimmedLyrics: String { lyrics.trimmingCharacters(in: .whitespacesAndNewlines) }
+    /// MiniMax-Music3's section tag for a song without words (the model card's only way to ask for one).
+    static let instrumentalTag = "[instrumental]"
+
+    /// The lyrics as the song gets them: the instrumental tag, or the lyrics without the blank lines around them.
+    var songLyrics: String {
+        instrumental ? Self.instrumentalTag : lyrics.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     /// The negative prompt `model` would get: nil where it has none, or guidance is off and there
     /// is no unconditional pass to use it.
@@ -239,7 +245,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         case blocks, negativePrompt, aspect, resolution, usesCustomSize, customWidth, customHeight, steps, guidance,
              randomSeed, seed, batchCount, transparentBackground, lowMemory,
              videoResolution, videoSeconds, videoFrameRate, videoAutoDuration, referenceImage, lastFrameImage, upscale, softness,
-             halfPrecision, livePreview, loras, videoQuality, gaussians, objectMode, lyrics, songSeconds, soundSeconds
+             halfPrecision, livePreview, loras, videoQuality, gaussians, objectMode, lyrics, instrumental, songSeconds, soundSeconds
     }
 
     /// Settings saved before the prompt had blocks kept a single string.
@@ -283,6 +289,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         gaussians = try values.decodeIfPresent(Int.self, forKey: .gaussians) ?? gaussians
         objectMode = try values.decodeIfPresent(ObjectMode.self, forKey: .objectMode) ?? objectMode
         lyrics = try values.decodeIfPresent(String.self, forKey: .lyrics) ?? lyrics
+        instrumental = try values.decodeIfPresent(Bool.self, forKey: .instrumental) ?? instrumental
         songSeconds = try values.decodeIfPresent(Double.self, forKey: .songSeconds) ?? songSeconds
         soundSeconds = try values.decodeIfPresent(Double.self, forKey: .soundSeconds) ?? soundSeconds
     }

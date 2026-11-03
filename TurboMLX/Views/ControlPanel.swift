@@ -56,6 +56,12 @@ struct ControlPanel: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             GenerateBar()
         }
+        // Reset again at the top right of the column, for a window whose tray is far below.
+        .toolbar {
+            ToolbarItem {
+                ResetButton()
+            }
+        }
         .onAppear { focusedBlock = app.settings.blocks.first?.id }
     }
 }
@@ -63,14 +69,17 @@ struct ControlPanel: View {
 // MARK: - Reset
 
 /// Back to the model and settings of a first launch, with an empty prompt; ⌘Z brings them back.
-/// Next to the model, in the tray.
+/// Next to the model, in the tray, as a word; at the top of the column, by the sidebar button, as
+/// an icon.
 private struct ResetButton: View {
     @Environment(AppModel.self) private var app
     @Environment(\.undoManager) private var undoManager
 
     var body: some View {
-        Button("Reset") {
+        Button {
             app.resetControls(undoManager: undoManager)
+        } label: {
+            Label("Reset", systemImage: "arrow.counterclockwise")
         }
         .help("Reset the prompt, the model and the settings to their defaults (⌘Z undoes it)")
     }
@@ -105,6 +114,7 @@ private struct ModelSelection: View {
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
                 ResetButton()
+                    .labelStyle(.titleOnly)
                 ModelMenu(showsAddModel: $showsAddModel)
             }
 
@@ -935,14 +945,18 @@ private struct PromptBlockEditor<Reorder: Gesture>: View {
             switch block.name {
             case PromptBlock.subjectName: return "The sound: what makes it, where, how it moves. Rain on a tin roof, a door creaking open slowly."
             case PromptBlock.styleName: return "How it sounds: close or far, the room, the texture, how it starts and ends."
-            default: return "A piece of the description: a second sound, a detail. It follows the block above."
+            default:
+                if position > 0 { return "A piece of the description: a second sound, a detail. It follows the block above." }
+                return "Describe the sound: what makes it, where, how it moves and sounds. Rain on a tin roof, a door creaking open slowly."
             }
         }
         if app.selectedModel?.family.media == .audio {
             switch block.name {
             case PromptBlock.subjectName: return "The music: genre, mood, tempo and key, the voice that sings and how."
             case PromptBlock.styleName: return "The arrangement and the sound: the instruments, how the song builds, the production."
-            default: return "A piece of the description: an instrument, a section, the mix. It follows the block above."
+            default:
+                if position > 0 { return "A piece of the description: an instrument, a section, the mix. It follows the block above." }
+                return "Describe the music: genre, mood, tempo and key, the voice, the instruments, the production."
             }
         }
         switch block.name {
@@ -1601,19 +1615,26 @@ private struct SongSection: View {
 
     var body: some View {
         Section {
-            TextEditor(text: $settings.lyrics)
-                .scrollContentBackground(.hidden)
-                .frame(minHeight: 160, maxHeight: 320)
-                .overlay(alignment: .topLeading) {
-                    if settings.lyrics.isEmpty {
-                        Text(verbatim: "[verse]\nThe words of the first verse\n[chorus]\nThe words of the chorus")
-                            .foregroundStyle(.tertiary)
-                            .padding(.leading, 5)
-                            .allowsHitTesting(false)
+            Toggle(isOn: $settings.instrumental) {
+                Text("Instrumental")
+                Text("A song without words: the model gets the [instrumental] tag instead of lyrics, and may still add wordless vocals.")
+            }
+            // The lyrics stay aside while the song is instrumental, and come back with them.
+            if !settings.instrumental {
+                TextEditor(text: $settings.lyrics)
+                    .scrollContentBackground(.hidden)
+                    .frame(minHeight: 160, maxHeight: 320)
+                    .overlay(alignment: .topLeading) {
+                        if settings.lyrics.isEmpty {
+                            Text(verbatim: "[verse]\nThe words of the first verse\n[chorus]\nThe words of the chorus")
+                                .foregroundStyle(.tertiary)
+                                .padding(.leading, 5)
+                                .allowsHitTesting(false)
+                        }
                     }
-                }
-                .font(.system(size: 15))
-                .accessibilityLabel("Lyrics")
+                    .font(.system(size: 15))
+                    .accessibilityLabel("Lyrics")
+            }
             LabeledContent {
                 HStack(spacing: 6) {
                     Slider(value: $settings.songSeconds, in: GenerationSettings.songDurations, step: 5)
@@ -1629,7 +1650,9 @@ private struct SongSection: View {
             Text("Lyrics")
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Put section tags such as [verse], [chorus] or [bridge] on lines of their own: words after a tag on its line are dropped. Write [instrumental] for a song without words.")
+                if !settings.instrumental {
+                    Text("Put section tags such as [verse], [chorus] or [bridge] on lines of their own: words after a tag on its line are dropped.")
+                }
                 Label("Describe the music in your own words, without naming an artist to imitate, and sing only lyrics you may use. MiniMax-Music3’s licence forbids songs that infringe others’ rights; each song is marked as made by AI.",
                       systemImage: "exclamationmark.shield")
             }

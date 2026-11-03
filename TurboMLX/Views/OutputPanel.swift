@@ -557,7 +557,9 @@ private struct GenerationFrame: View {
     let fps: Int?
     /// The model picks the clip's length, `frames` being the longest.
     var isLongest = false
-    var isPulsing = false
+    /// A job's frame shows the icon's dots, moving while it runs (`isRunning`); the draft's, sparkles.
+    var isJob = false
+    var isRunning = false
     /// A song: the longest it may last; a sound effect: its length.
     var songSeconds: Double?
 
@@ -582,9 +584,15 @@ private struct GenerationFrame: View {
             }
             .overlay {
                 VStack(spacing: 6) {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 34, weight: .light))
-                        .symbolEffect(.pulse, isActive: isPulsing)
+                    if isJob {
+                        // As large as the frame leaves room for, up to 120 points.
+                        DotGrid(isAnimating: isRunning)
+                            .aspectRatio(1, contentMode: .fit)
+                            .frame(maxWidth: 120, maxHeight: 120)
+                    } else {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 34, weight: .light))
+                    }
                     // The family, as under a finished image; the tooltip has the full name.
                     Text(model.family.displayName)
                         .font(.callout.weight(.medium))
@@ -599,6 +607,79 @@ private struct GenerationFrame: View {
             .aspectRatio(size.width > 0 && size.height > 0 ? CGSize(width: size.width, height: size.height) : CGSize(width: 1, height: 1),
                          contentMode: .fit)
             .frame(maxWidth: min(CGFloat(size.width), 520), maxHeight: min(CGFloat(size.height), 520))
+    }
+}
+
+/// The app icon's dots, alive while a generation runs: the bright middle drifts around the grid and
+/// swells in waves from its center outward. The grid is wider than the icon's and fades out toward
+/// its edges, so it has no border to show. Still (queued, stopping, or with Reduce Motion), it is the
+/// icon's pattern, which is also where the movement starts.
+private struct DotGrid: View {
+    let isAnimating: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// When the movement started, so that it starts from the icon.
+    @State private var start = Date.now
+
+    var body: some View {
+        let moves = isAnimating && !reduceMotion
+        // 30 frames a second are smooth for this, and leave the display's rate to the machine
+        // that is generating.
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !moves)) { timeline in
+            Canvas { context, size in
+                Self.draw(in: &context, size: size,
+                          elapsed: moves ? max(timeline.date.timeIntervalSince(start), 0) : 0)
+            }
+        }
+        .onChange(of: moves) { if $1 { start = .now } }
+        .accessibilityHidden(true)
+    }
+
+    /// Dots on a side: the icon has 9, the rest is room to fade out in.
+    private static let count = 15
+    /// The fade, in cells from the grid's center: whole up to `fadeStart`, gone at `fadeEnd`
+    /// (before the edges' middles, at 7), drawn in this many steps of opacity.
+    private static let fadeStart = 3.4
+    private static let fadeEnd = 7.2
+    private static let fadeSteps = 24
+
+    /// The dots at `elapsed` seconds in, in the view's foreground style. Measured on the icon
+    /// (icon_1024.png): a 9 × 9 grid whose dots go from 18% of the spacing at the corners to 92% in
+    /// the middle, as 0.18 + 0.74 · e^−(r / 2.82)^2.85, with r the distance from the middle in cells.
+    private static func draw(in context: inout GraphicsContext, size: CGSize, elapsed: Double) {
+        let side = min(size.width, size.height)
+        let cell = side / CGFloat(count)
+        let origin = CGPoint(x: (size.width - side) / 2, y: (size.height - side) / 2)
+        let middle = Double(count - 1) / 2
+        // The middle wanders on a slow figure of eight, about a cell from the grid's center.
+        let wander = 2 * Double.pi * elapsed / 7
+        let centerX = middle + 1.3 * sin(wander)
+        let centerY = middle + 1.0 * sin(2 * wander)
+        // Waves every two seconds, faded in over the first second so the start is the icon.
+        let wave = 2 * Double.pi * elapsed / 2
+        let swell = 0.12 * min(elapsed, 1)
+        // One path for each step of opacity: a fill per dot would be 225 fills a frame.
+        var layers = [Path](repeating: Path(), count: fadeSteps)
+        for row in 0..<count {
+            for column in 0..<count {
+                let fromMiddle = hypot(Double(column) - middle, Double(row) - middle)
+                let fade = min(max((fromMiddle - fadeStart) / (fadeEnd - fadeStart), 0), 1)
+                let opacity = 1 - fade * fade * (3 - 2 * fade)
+                let step = Int((opacity * Double(fadeSteps)).rounded(.up))
+                guard step > 0 else { continue }
+                let distance = hypot(Double(column) - centerX, Double(row) - centerY)
+                let reach = 2.82 * (1 + swell * sin(wave - 0.9 * distance))
+                let diameter = cell * CGFloat(0.18 + 0.74 * exp(-pow(distance / reach, 2.85)))
+                let center = CGPoint(x: origin.x + (CGFloat(column) + 0.5) * cell,
+                                     y: origin.y + (CGFloat(row) + 0.5) * cell)
+                layers[step - 1].addEllipse(in: CGRect(x: center.x - diameter / 2, y: center.y - diameter / 2,
+                                                       width: diameter, height: diameter))
+            }
+        }
+        for (index, layer) in layers.enumerated() where !layer.isEmpty {
+            var faded = context
+            faded.opacity = Double(index + 1) / Double(fadeSteps)
+            faded.fill(layer, with: .foreground)
+        }
     }
 }
 
@@ -665,7 +746,8 @@ private struct JobView: View {
                 PreviewFrame(image: preview, size: job.request.size)
             } else {
                 GenerationFrame(model: job.model, size: job.request.size, frames: job.request.frames, fps: job.request.fps,
-                                isLongest: job.framesAreLongest, isPulsing: !isQueued && !job.isCancelling, songSeconds: job.request.duration)
+                                isLongest: job.framesAreLongest, isJob: true, isRunning: !isQueued && !job.isCancelling,
+                                songSeconds: job.request.duration)
             }
 
             VStack(spacing: 10) {

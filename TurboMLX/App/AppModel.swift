@@ -47,7 +47,7 @@ final class AppModel {
             case .modelDownloading: "Waiting for the download to finish."
             case .missingReference: "Add the picture to edit."
             case .emptyPrompt: "Write a prompt."
-            case .emptyLyrics: "Write the lyrics, or [instrumental]."
+            case .emptyLyrics: "Write the lyrics, or turn on Instrumental."
             case .upscaleTooLarge: "Choose a smaller scale: at most 4096 × 4096 pixels."
             case .qualityNotDownloaded: "Quality runs the full model: download its files once."
             case .qualityDownloading: "Waiting for the Quality files to download."
@@ -469,7 +469,7 @@ final class AppModel {
         }
         if model.family.requiresReferenceImage, !hasReferenceImage { return .missingReference }
         if model.family.takesPrompt, settings.trimmedPrompt.isEmpty { return .emptyPrompt }
-        if model.family.isSong, settings.trimmedLyrics.isEmpty { return .emptyLyrics }
+        if model.family.isSong, settings.songLyrics.isEmpty { return .emptyLyrics }
         if model.family.isUpscaler, let size = settings.upscaledSize, size.megapixels > Upscale.maxMegapixels { return .upscaleTooLarge }
         switch loraState(for: model) {
         case .missing(let choice): return .loraMissing(choice.name)
@@ -594,7 +594,7 @@ final class AppModel {
                 request.objectMode = settings.objectMode.rawValue
             }
             if model.family.isSong {
-                request.lyrics = settings.trimmedLyrics
+                request.lyrics = settings.songLyrics
                 request.duration = min(max(settings.songSeconds, GenerationSettings.songDurations.lowerBound),
                                        GenerationSettings.songDurations.upperBound)
             } else if isSound {
@@ -934,9 +934,13 @@ final class AppModel {
             if request.guidance > 1 { updated.negativePrompt = request.negativePrompt ?? "" }
             updated.soundSeconds = request.duration ?? updated.soundSeconds
         } else if media == .audio {
-            // A song: its description, its lyrics and the longest it was asked to last; the format stays as it is.
+            // A song: its description, its lyrics (none for an instrumental) and the longest it was asked to last;
+            // the format stays as it is.
             updated.blocks = request.blocks.flatMap { $0.isEmpty ? nil : $0 } ?? PromptBlock.defaults(subject: request.prompt)
-            updated.lyrics = request.lyrics ?? updated.lyrics
+            if let lyrics = request.lyrics {
+                updated.instrumental = lyrics.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == GenerationSettings.instrumentalTag
+                updated.lyrics = updated.instrumental ? "" : lyrics
+            }
             updated.songSeconds = request.duration ?? updated.songSeconds
         } else {
             if let blocks = request.blocks, !blocks.isEmpty {
@@ -994,10 +998,13 @@ final class AppModel {
         return (updated, model?.id ?? selectedModelID)
     }
 
-    /// Reset: the model and settings of a first launch, with an empty prompt, as a new draft.
+    /// Reset: the model and settings of a first launch, as a new draft, with the prompt down to one
+    /// empty block without a name instead of the subject and the style.
     func resetControls(undoManager: UndoManager? = nil) {
         let model = models.first { $0.id == ModelCatalog.defaultModelID } ?? models.first
-        replaceControls(with: Self.initialSettings(for: model), modelID: model?.id ?? selectedModelID, viewer: .draft,
+        var initial = Self.initialSettings(for: model)
+        initial.blocks = [PromptBlock(name: "")]
+        replaceControls(with: initial, modelID: model?.id ?? selectedModelID, viewer: .draft,
                         source: .draft, actionName: "Reset", undoManager: undoManager)
     }
 
