@@ -63,6 +63,7 @@ let ported: [(name: String, url: String, use: String)] = [
     ("diffusers", "https://github.com/huggingface/diffusers", "MiniMax-Music3's prompt, from the official integration"),
     ("MOSS-TTS", "https://github.com/OpenMOSS/MOSS-TTS", "MOSS-SoundEffect, from OpenMOSS's own pipeline (moss_soundeffect_v2)"),
     ("ftfy", "https://github.com/rspeer/python-ftfy", "MOSS-SoundEffect's prompt cleaning, which follows its fixes"),
+    ("mlx-vlm", "https://github.com/Blaizzy/mlx-vlm", "Describe Image's Qwen2.5-VL, from its MLX port"),
     ("mlx-lm", "https://github.com/ml-explore/mlx-lm", "the mixture-of-experts layers and the gated delta rule's kernel"),
     ("mlx-swift-lm", "https://github.com/ml-explore/mlx-swift-lm", "the mixture-of-experts layers"),
     ("Pillow", "https://github.com/python-pillow/Pillow", "its bicubic and Lanczos resizes, for the pictures edits start from"),

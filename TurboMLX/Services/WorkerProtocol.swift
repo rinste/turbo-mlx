@@ -27,6 +27,8 @@ nonisolated struct WorkerEvent: Decodable, Sendable {
     /// Seconds per phase of a finished image: load, encode, denoise, decode, save.
     var timings: [String: Double]?
     var message: String?
+    /// A picture's description: so far in "text", whole in "done".
+    var text: String?
     // "ready"
     var engine: String?
     var mlx: String?
@@ -66,6 +68,8 @@ nonisolated enum WorkerCommand: Sendable {
                   output: URL, upcomingPrompts: [String], preview: Bool)
     /// Loads the model ahead of its first image.
     case load(model: ModelDescriptor, modelPath: String, textEncoderPath: String?, lowMemory: Bool)
+    /// Describes the picture at `image` with the describer at `describerPath` (Describe Image); cancelled by its ID.
+    case describe(id: UUID, describerPath: String, image: URL)
     case cancel(jobID: UUID)
     case unload
     case shutdown
@@ -95,6 +99,8 @@ nonisolated enum WorkerCommand: Sendable {
             ]
         case let .load(model, modelPath, textEncoderPath, lowMemory):
             ["cmd": "load", "model": Self.modelObject(model, path: modelPath, textEncoderPath: textEncoderPath, lowMemory: lowMemory)]
+        case let .describe(id, describerPath, image):
+            ["cmd": "describe", "id": id.uuidString, "model": ["family": "qwen2.5-vl", "path": describerPath], "image": image.path]
         case let .cancel(jobID):
             ["cmd": "cancel", "id": jobID.uuidString]
         case .unload:

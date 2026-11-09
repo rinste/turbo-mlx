@@ -51,6 +51,12 @@ models want more, see the table) and room on the disk for the models you pick.
   says; video models use it as the first frame of the clip, and LTX also takes a last frame: give
   it both and the prompt says how the clip gets from one to the other. Qwen-Image Edit always
   needs one.
+- **A prompt from a picture.** *Describe* (the text-under-a-picture button next to a reference image), or *Describe Image* in the
+  menu of an image in the history (*Describe First Frame* for a clip) writes the prompt that would
+  make that picture again: the subject, the setting, the composition, the light, the colors and the
+  style, any text in it in quotes. It takes the prompt's place as it is written, in a second or two;
+  *Stop* ends it, and ⌘Z brings back the prompt you had. The first time, it downloads the model that
+  reads pictures, Qwen2.5-VL 7B (5.6 GB), once.
 - **Videos.** Choose the duration and the frame rate, or let LTX-2.5 pick the length the prompt
   describes. *Fast* runs the distilled model (8 steps, a few minutes for 5 seconds); *Quality*
   runs the full model with guidance and a *Negative Prompt* (30 steps of four passes each, about
@@ -131,6 +137,7 @@ the disk.
 | [MiniMax-Music3 8-bit](https://huggingface.co/mlx-community/MiniMax-Music3-8bit) | 24 GB | 14.2 GB | the 8-bit version, closer to the original |
 | [MOSS-SoundEffect](https://huggingface.co/mlx-community/MOSS-SoundEffect-v2.0-bf16) | 16 GB | 8.4 GB | OpenMOSS's sound-effect model: a description becomes up to 30 seconds of sound, from footsteps and doors to rain, engines and crowds (no music or speech), a 48 kHz mono WAV · 1.3B + Qwen3-1.7B · 100 steps · Apache 2.0 |
 | [Idol](https://huggingface.co/ddalcu/Idol-MLX-Serve-8bit) | 16 GB | 3 GB | a 3D object from one picture of one object, its sides and back invented, as a GLB · 1.8B, 8-bit · 50 steps, no prompt · Apache 2.0, its DINOv3 encoder under Meta's DINOv3 License |
+| [Qwen2.5-VL 7B](https://huggingface.co/mlx-community/Qwen2.5-VL-7B-Instruct-4bit) | 16 GB | 5.6 GB | not one to generate with: *Describe Image* runs it to write a prompt from a picture, and downloads it the first time · 7B, 4-bit · Apache 2.0 |
 
 **Which one?** For a first try, Z-Image Turbo (4-bit) or SenseNova-U1.5, which both run on 16 GB
 (so does FLUX 3 Image Klein, more slowly).
@@ -224,6 +231,7 @@ PNG next to the prompt and settings, in an MP4 in an XMP box.
 | MiniMax-Music3 4-bit / 8-bit | 9.6 / 14.4 GB with *Save memory* (12.7 / 17.8–18.8 GB without), a little more for long songs | mlx-audio, every stage as close to float32 as its own |
 | Idol | 8.3–8.9 GB whatever the picture and the detail, 6.8 GB with *Save memory* | Sperid Labs' PyTorch code (idol-sdk), the same object from the same noise |
 | MOSS-SoundEffect | 7.0 GB to 10 s, 8.7 GB for 30 s with *Save memory* (10.2 / 11.9 GB without) | OpenMOSS's PyTorch code (its float32 goldens), to 1e-6 in float32 |
+| Qwen2.5-VL 7B (*Describe Image*) | 6.5–7.1 GB, the weights 5.7 of it (on an M5 Ultra) | mlx-vlm, the same words on six pictures of eight |
 
 Measured on an M1 Max with mflux 0.20, the Python reference the native engine is checked against
 (the 8-bit Z-Image peak adds its larger weights to the measured 4-bit one); LTX and SenseNova-U1.5
@@ -270,6 +278,13 @@ images.
   exactly); the bf16 pack lands 1% from float32 after ten steps. Like the reference, it makes every sound as 30 s and
   keeps the length asked for, so 100 steps take 2¾ minutes on an M1 Max whatever the length; the engine draws its own
   noise, so a seed gives another sound than OpenMOSS's from the same prompt.
+- **Describe Image** runs Qwen2.5-VL 7B as [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) runs it, on
+  mlx-community's 4-bit pack, the picture read at 256 to 1280 tokens and the words chosen greedily: on
+  eight pictures, six descriptions came out word for word as mlx-vlm's, the two others parting at
+  exact ties (971 of 1,085 tokens the same). On an M5 Ultra a description takes 1 to 2.5 s (the model
+  loaded in 0.3 s, the picture read in half a second at most, 140 tokens written a second). The image
+  model stays loaded beside it when both fit in the GPU's memory, and is let go first otherwise; the
+  describer goes once the description is written.
 - **LTX-2.3** is measured with the native engine against dgrauet's
   [ltx-2-mlx](https://github.com/dgrauet/ltx-2-mlx), with *Save memory*: a 5-second 768 × 512 clip
   with sound takes 206 s, a 3-second one from an image 122 s; the 8-bit version, without *Save
@@ -353,7 +368,8 @@ SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo-engine serve ──▶ 
   SenseNova-U1.5 from mlx-community's, LTX-2.3 and LTX-2.5 from dgrauet's, the SeedVR2 upscaler from its
   original one, Idol from mlx-serve's pack of Sperid Labs' release, checked against idol-sdk, MiniMax-Music3 from
   mlx-community's 4-bit and 8-bit packs, checked against mlx-audio, MOSS-SoundEffect from mlx-community's pack,
-  checked against OpenMOSS's pipeline) on MLX Swift. The app's
+  checked against OpenMOSS's pipeline; and Describe Image's Qwen2.5-VL 7B from mlx-community's pack, checked against
+  mlx-vlm) on MLX Swift. The app's
   build embeds its `turbo-engine` binary in the bundle (`Contents/MacOS`, signed with the app),
   and every model runs there: nothing is installed on first launch, the engine starts in an
   instant, and no Python process sits between the app and the GPU. The engine keeps the

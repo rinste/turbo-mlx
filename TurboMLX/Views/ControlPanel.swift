@@ -775,6 +775,7 @@ private struct PromptSection: View {
             Text(title)
         } footer: {
             VStack(alignment: .leading, spacing: 8) {
+                DescriptionStatus()
                 Button("Add Prompt Block", systemImage: "plus") { addBlock() }
                     .labelStyle(.titleAndIcon)
                     .help("Add a block at the end: the blocks are joined, in order, into one prompt")
@@ -914,6 +915,8 @@ private struct PromptBlockEditor<Reorder: Gesture>: View {
                 focus: focus,
                 id: block.id
             )
+            // Being written by Describe Image: typed words would be written over.
+            .disabled(app.describing?.block == block.id)
         }
         .contextMenu {
             Button("Move Up") { onMove(-1) }
@@ -973,6 +976,46 @@ private struct PromptBlockEditor<Reorder: Gesture>: View {
             return video
                 ? "Describe the clip: the action, the camera, the light, the sound."
                 : "Describe the image: subject, style, light, colors. Put any text to render in quotes."
+        }
+    }
+}
+
+/// Describe Image under way, under the prompt: the describer downloading, or the picture being described, which can
+/// be stopped.
+private struct DescriptionStatus: View {
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
+        let download = app.describeAfterDownload == nil ? nil : app.downloads.progress(of: ModelCatalog.describer)
+        if download != nil || app.describing != nil {
+            HStack(spacing: 8) {
+                if let download {
+                    ProgressView(value: download.fraction ?? 0)
+                        .frame(width: 60)
+                    Text("Downloading \(ModelCatalog.describer.name) to describe the picture: \(Format.bytes(download.bytes)) of \(Format.bytes(download.total))")
+                } else {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text(state)
+                }
+                Spacer(minLength: 0)
+                Button("Stop") {
+                    if download != nil { app.cancelDescriberDownload() } else { app.cancelDescription() }
+                }
+                .controlSize(.small)
+                .help(download != nil ? "Stop the download: what arrived is kept, to resume later" : "Stop describing the picture: what was written stays")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private var state: String {
+        switch app.describing?.phase {
+        case nil: app.isBusy ? "The picture will be described once the current generation is done." : "Describing the picture…"
+        case "loading": "Loading the describer…"
+        case "encoding": "Looking at the picture…"
+        default: "Describing the picture…"
         }
     }
 }
@@ -1205,9 +1248,10 @@ private struct ReferenceImageSection: View {
 }
 
 /// One reference image of the section: its thumbnail or an empty well to drop on, and the buttons
-/// to choose, pick from the history or remove it. `name` is a file in the references folder.
+/// to choose, pick from the history, describe (Describe Image) or remove it. `name` is a file in the references folder.
 private struct ReferenceSlot: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.undoManager) private var undoManager
     @Binding var name: String?
     let prompt: String
     let panelMessage: String
@@ -1235,6 +1279,17 @@ private struct ReferenceSlot: View {
                                 use(app.url(for: item))
                             }
                         }
+                    // Describe Image: a prompt that describes the picture takes the prompt's place. An
+                    // icon, so the row's four buttons fit the column without cutting "From History…".
+                    if let name, app.selectedModel?.family.takesPrompt == true {
+                        Button {
+                            app.describe(HistoryStore.referenceURL(name), undoManager: undoManager)
+                        } label: {
+                            Label("Describe", systemImage: "text.below.photo")
+                                .labelStyle(.iconOnly)
+                        }
+                        .help("Describe: write a prompt that describes this picture, in place of the prompt (⌘Z brings it back)")
+                    }
                     if name != nil {
                         Button("Remove", role: .destructive) {
                             withAnimation(.snappy) { name = nil }

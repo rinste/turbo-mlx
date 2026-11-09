@@ -3,12 +3,12 @@ import Foundation
 /// A byte-pair-encoding tokenizer read from Hugging Face's `tokenizer.json`: the two kinds the
 /// catalog's text encoders use, byte-level BPE after a regex split (Qwen2 / Qwen3, Ling: GPT-2's
 /// byte alphabet) and SentencePiece-style BPE with byte fallback (Gemma 3: spaces as "▁", the
-/// text in one piece). Encoding only, as `tokenizers` does it: added tokens are cut out of the raw
+/// text in one piece). Encoding as `tokenizers` does it: added tokens are cut out of the raw
 /// text first, each stretch between them is normalized, split and turned into symbols, then pairs
 /// merge by rank, the lowest first (the leftmost among equals). Tokens are matched by their exact
 /// bytes: Swift's `String` would take canonically equivalent tokens for one (see `TokenizerJSON`).
 /// `turbo-engine verify-tokenizers` checks it id for id against `transformers` on a corpus
-/// (Fixtures/tokenizers.json).
+/// (Fixtures/tokenizers.json). Decoding, for the byte-level kind only: `decode`.
 public final class BPETokenizer {
     /// A token as its UTF-8 bytes.
     private typealias Key = [UInt8]
@@ -64,6 +64,8 @@ public final class BPETokenizer {
     private let prefix: [Int]
     private let suffix: [Int]
     private var cache: [Key: [Int]] = [:]
+    /// Each id's bytes, for `decode`: built the first time it is asked for.
+    private var tokenBytes: [Int: Key]?
 
     public init(folder: URL) throws {
         let url = folder.appending(path: "tokenizer.json")
@@ -161,6 +163,28 @@ public final class BPETokenizer {
         flush(scalars.count)
         if addSpecialTokens { ids += suffix }
         return ids
+    }
+
+    /// `tokenizer.decode(ids)` for a byte-level vocabulary (Qwen's, whose model writes Describe
+    /// Image's text): each token's characters turned back into the bytes GPT-2's alphabet stands
+    /// for, an added token as its own text, the bytes read as UTF-8 (a character cut between tokens,
+    /// or bytes that are not UTF-8, as U+FFFD, as `tokenizers` does). A SentencePiece vocabulary's
+    /// tokens would come out as written, "▁" for a space: no model decodes one.
+    public func decode(_ ids: [Int]) -> String {
+        if tokenBytes == nil {
+            var table = [Int: Key](minimumCapacity: vocab.count + addedIDs.count)
+            var byteOfScalar: [Unicode.Scalar: UInt8] = [:]
+            for (byte, symbol) in Self.gpt2Alphabet().enumerated() { byteOfScalar[symbol.unicodeScalars.first!] = UInt8(byte) }
+            for (token, id) in vocab {
+                let scalars = String(decoding: token, as: UTF8.self).unicodeScalars
+                table[id] = byteSymbols == nil ? token : scalars.map { byteOfScalar[$0] ?? 0x3F }
+            }
+            for (token, id) in addedIDs { table[id] = token }
+            tokenBytes = table
+        }
+        var bytes: [UInt8] = []
+        for id in ids { bytes += tokenBytes?[id] ?? [] }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     // MARK: Text between added tokens

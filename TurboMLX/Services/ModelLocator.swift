@@ -26,6 +26,11 @@ nonisolated struct ModelLocator: Sendable {
         return snapshot(of: companion.repo, preferring: companion.revision) { Self.hasFiles(companion.requiredFiles, in: $0) }
     }
 
+    /// A helper model's folder (Describe Image's describer), when it is complete.
+    func location(of helper: ModelFamily.Companion) -> URL? {
+        snapshot(of: helper.repo, preferring: helper.revision) { Self.hasFiles(helper.requiredFiles, in: $0) }
+    }
+
     /// The complete snapshot of the commit the catalog checked, or else the newest complete one
     /// (downloaded before the catalog named a commit, or by another tool).
     private func snapshot(of repo: String, preferring revision: String?, where isComplete: (URL) -> Bool) -> URL? {

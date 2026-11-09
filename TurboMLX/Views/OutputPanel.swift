@@ -522,6 +522,10 @@ struct HistoryItemMenu: View {
         if item.kind == .image, app.upscaler != nil {
             Button("Upscale…") { app.upscale(item, undoManager: undoManager) }
         }
+        // Describe Image: a prompt that describes the picture takes the prompt's place, for the models that take one.
+        if item.kind == .image || item.kind == .video, app.selectedModel?.family.takesPrompt == true {
+            Button(item.kind == .image ? "Describe Image" : "Describe First Frame") { app.describe(item, undoManager: undoManager) }
+        }
         if !item.prompt.isEmpty {
             Button("Copy Prompt") {
                 NSPasteboard.general.clearContents()

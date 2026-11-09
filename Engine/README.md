@@ -2,7 +2,7 @@
 
 The engine of Turbo MLX: the catalog's families (the image models, LTX-2 for video, the SeedVR2
 upscaler, Idol, which makes a 3D object of a picture, MiniMax-Music3, which makes songs, and MOSS-SoundEffect,
-which makes sound effects) on
+which makes sound effects), and Qwen2.5-VL, which writes a prompt from a picture (Describe Image), on
 [MLX Swift](https://github.com/ml-explore/mlx-swift), behind a JSON-lines protocol (below) that
 the app speaks to it; the Python engine the app used to ship, `Reference/turbo_worker.py`, speaks
 it too for the image families (see `docs/native-engine.md` for the why and the plan).
@@ -31,7 +31,9 @@ Sources/TurboEngineCore/      protocol, mflux checkpoint loading, PNG output, th
   Families/QwenImage/         Qwen-Image 2512: Qwen2.5-VL text encoder, the dual-stream
                               transformer, the causal 3D decoder, classifier-free guidance; and
                               Qwen-Image-Edit 2511: the vision tower and the VAE encoder for the
-                              picture an image is edited from
+                              picture an image is edited from; and Describe Image's Qwen2.5-VL 7B,
+                              the same modules with the head, a key–value cache, the multimodal
+                              rotary positions and greedy decoding
   Families/Ming/              Ming-Image: the Ling MoE encoder, the Qwen2 connector and heads,
                               the S3-DiT in bf16, the RGBA decoder
   Families/SenseNova/         SenseNova-U1.5: the two Qwen3 stacks (the prompt's, read once into a
@@ -75,6 +77,7 @@ Reference/idol_reference.py   idol-sdk's code on the MLX pack's weights, for Ido
 Reference/music3_reference.py  mlx-audio on the MLX pack, stage by stage, and the official prompt
                               functions on a corpus, for MiniMax-Music3's checks
 Reference/moss_image_reference.py  OpenMOSS's pipeline on a checkpoint, for MOSS-Image's
+Reference/qwen25vl_reference.py  mlx-vlm on the describer's pack, picture by picture, for Describe Image's checks
 Fixtures/make_moss_soundeffect_fixture.py  MOSS-SoundEffect's prompt corpus, Qwen3's float32 states and the
                               schedule from PyPI code, with the goldens of OpenMOSS's code (see below)
 Licenses/                     the licenses of the projects the ports follow (mflux, ltx-2-mlx,
@@ -83,7 +86,8 @@ Licenses/                     the licenses of the projects the ports follow (mfl
                               rule's kernel, Pillow for its resizes, tokenizers for the tokenizer,
                               mlx-audio, minimax-music3-mlx and diffusers for MiniMax-Music3,
                               MiniMax-Music3's own licence, OpenMOSS's MOSS-TTS and ftfy for
-                              MOSS-SoundEffect), which the app's acknowledgements reproduce
+                              MOSS-SoundEffect, mlx-vlm for Describe Image), which the app's acknowledgements
+                              reproduce
 ```
 
 SeedVR2's text embedding ships with the engine, in its resource bundle
@@ -607,6 +611,37 @@ pass over the 1500 latents), the decode 1.1 s for 10 s and 2.5 s for 30 s, readi
 The three sounds (a door creaking open, typing, rain with thunder) look as described in their spectrograms: the
 creak's pulses, the keys' even clicks, the rain's broadband hiss under two low rumbles.
 
+## Checking Describe Image against mlx-vlm
+
+Describe Image's reference is mlx-vlm's port of Qwen2.5-VL (`mlx_vlm/models/qwen2_5_vl`, the release on PyPI as
+0.7.12: its image processor, its chat template and `generate_step` at temperature 0) on the pack the app downloads
+(`mlx-community/Qwen2.5-VL-7B-Instruct-4bit` at fdcc572e). `Reference/qwen25vl_reference.py` reads each picture at the
+describer's 256 to 1280 tokens and records the pixel values, the prompt's ids, the vision tower's tokens, the first
+step's logits and the tokens written, then the vision tokens and the logits again with the model in float32;
+`verify` checks the pixels and the ids exactly, judges the vision tokens and the first logits by their distance from
+float32 against mlx-vlm's own, and counts the tokens written as the reference's. Pillow 13 orders its two resize
+passes by how much each side shrinks (`PILResample.resizePillow13`). mlx-vlm wants MLX 0.32.4; the check is closest
+with the MLX of the engine's mlx-swift (0.32.3, which carries MLX 0.32.2) put in its place:
+
+```bash
+uv venv build/vlm-venv && uv pip install --python build/vlm-venv/bin/python mlx-vlm==0.7.12
+uv pip install --python build/vlm-venv/bin/python --no-deps mlx==0.32.2 mlx-metal==0.32.2
+build/vlm-venv/bin/python -I Engine/Reference/qwen25vl_reference.py <snapshot> build/fixtures/qwen25-vl <picture>...
+build/bin/turbo-engine verify build/fixtures/qwen25-vl
+```
+
+On 9 November 2026 (an M5 Ultra), with eight PNGs (photos, a watercolour, a poster with text, a 3D render, close-ups,
+from 512 × 512 to 1344 × 768): the pixel values and the prompt's ids identical; the vision tokens as far from float32
+as mlx-vlm's (1.1–8.8% RMS, both); the first logits 0.6–3.7% from float32 against mlx-vlm's 0.8–3.7% (0.7 to 1.6
+times its distance: the language model's norms are Qwen-Image's, which round once where mlx-vlm's fused norm rounds
+twice) and the same first token; then 971 of the 1,085 tokens written as the reference's, six texts of eight word for
+word, the two others parting where the two candidates' logits are the same in float16. In float32 the port lands
+0.06–0.4% from mlx-vlm's float32 run, vision tokens and logits alike. With PyPI's MLX 0.32.4 the reference's float16 is
+nearer float32 (its logits 0.3–1.6% away) and the texts still agree, seven of eight. Through the protocol a
+description took 1 to 2.5 s (loading the pack from the file cache 0.3 s, the picture and the prompt 0.1–0.5 s,
+writing 140 tokens a second; the first after the engine starts compiles its kernels, a few seconds more), peaking at
+6.5–7.1 GB; mlx-vlm writes 180 tokens a second.
+
 ## Checking the tokenizers
 
 The engine tokenizes on its own (`Tokenizer/`), with no library: each family's prompt pipeline
@@ -658,7 +693,7 @@ what to run after an mlx-swift update, before the peaks in `MemoryEstimate.swift
 ## Protocol
 
 Commands on stdin, one JSON object per line: `generate` (id, model, params), `load` (model),
-`cancel` (id), `unload`, `shutdown`; `params` may carry `precision` ("bf16"), `preview`
+`describe` (id, model, image), `cancel` (id), `unload`, `shutdown`; `params` may carry `precision` ("bf16"), `preview`
 (true), `loras` (`[{"path": …, "scale": 1}]`) and, for LTX-2, `quality` (true: the full pipeline,
 `steps` then its first stage's and `guidance` the video's CFG), described under Families and in
 Checking LTX-2 against ltx-2-mlx. Idol (`family: "idol"`) reads the picture (`images` or `image`), `num_gaussians`
@@ -677,6 +712,12 @@ MOSS-SoundEffect (`family: "moss-soundeffect"`) reads the description as `prompt
 all-zero states) and `seed`, and refuses anything else by name before loading; it reports `encoding`, `denoising`
 (with its `total`), `decoding` and `saving`, writes a 16-bit mono WAV at 48 kHz, and its `done` gives `duration`,
 `sample_rate`, `frames` (the kept latent frames, 50 a second) and the timings `encode`, `denoise`, `decode` and `save`.
+`describe` writes a prompt describing the picture at `image` with Qwen2.5-VL (`model`: family `qwen2.5-vl`, the pack's
+path), after whatever command came before it: it reports `loading`, `encoding` (the picture and the prompt read) and
+`writing`, sends the description so far in `text` events (id, text) as it grows, and its `done` gives the `text`, the
+`tokens` written and the timings `load`, `read` and `write`; `cancel` stops it between two tokens. The describer is
+loaded for the description and let go after it; the image model stays loaded unless the two would not fit in the GPU's
+working set, when it goes first (`unloaded`).
 Events on stdout: `ready`, `phase`, `progress`, `preview` (id,
 step, path: a small PNG of the image as it forms, written again at each), `done` (path, seed, size,
 seconds, peak_memory, timings per phase), `failed`, `cancelled`, `model_loaded`, `load_failed` (a

@@ -9,6 +9,8 @@ public struct Command: Decodable {
     public let id: String?
     public let model: ModelSpec?
     public let params: GenerationParams?
+    /// `describe`: the picture whose description is asked for (the model is the describer's pack).
+    public let image: String?
 }
 
 /// Which model to run, as the app describes it.
