@@ -19,10 +19,12 @@ struct HistoryStrip: View {
 
     var body: some View {
         @Bindable var app = app
+        let arranged = app.arrangedHistory
+        let filter = app.historyFilter
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
                 Text("History").font(.headline)
-                Text("\(app.history.items.count)")
+                Text(filter.isActive ? "\(arranged.count) of \(app.history.items.count)" : "\(app.history.items.count)")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                 Menu {
@@ -42,6 +44,21 @@ struct HistoryStrip: View {
                 .padding(.leading, 6)
                 .help("By date, the newest on the right, or in your own order: drag the images and clips where you want them")
                 Spacer()
+                // Still there once a filtered history is emptied, so the filter can be turned off. On
+                // the right, so they stay put while the count beside History changes with the filter.
+                if !app.history.items.isEmpty || filter.isActive {
+                    SearchField(text: $app.historyFilter.search, prompt: "Search",
+                                help: "Find items by their prompt, negative prompt, lyrics, LoRA or model. Escape clears it.")
+                        .frame(width: 160)
+                    Toggle(isOn: $app.historyFilter.favoritesOnly) {
+                        Label("Favorites Only", systemImage: filter.favoritesOnly ? "star.fill" : "star")
+                    }
+                    .toggleStyle(.button)
+                    .buttonStyle(.borderless)
+                    .labelStyle(.iconOnly)
+                    .help(filter.favoritesOnly ? "Show the whole history" : "Show only your favorites")
+                    .padding(.trailing, 6)
+                }
                 Menu {
                     Button("Show Folder in Finder") {
                         NSWorkspace.shared.open(HistoryStore.directory)
@@ -68,9 +85,18 @@ struct HistoryStrip: View {
                 ScrollViewReader { proxy in
                     ScrollView(.horizontal) {
                         LazyHStack(spacing: 8) {
-                            ForEach(app.arrangedHistory) { item in
+                            ForEach(arranged) { item in
                                 HistoryThumbnail(item: item, height: thumbnailHeight, isSelected: app.isSelected(item))
                                     .id(item.id)
+                            }
+                            if arranged.isEmpty, filter.isActive, !app.history.items.isEmpty {
+                                Text(filter.search.isEmpty ? "No favorites yet: star an item from its menu, or with ⌘D."
+                                     : filter.favoritesOnly ? "None of your favorites match “\(filter.search)”."
+                                     : "Nothing in the history matches “\(filter.search)”.")
+                                    .font(.callout)
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(1)
+                                    .frame(height: thumbnailHeight)
                             }
                             // The running job next to the images it will join, then the queue.
                             ForEach(app.pendingJobs) { job in
@@ -107,6 +133,15 @@ struct HistoryStrip: View {
                         guard new > old else { return }
                         withAnimation(.snappy) { position.scrollTo(edge: .trailing) }
                     }
+                    // A new search, or Favorites Only: to the item on show if the strip has it (so it is
+                    // in view among the others once the search is cleared), to the newest otherwise.
+                    .onChange(of: filter) {
+                        if let id = app.displayedItem?.id, app.arrangedHistory.contains(where: { $0.id == id }) {
+                            proxy.scrollTo(id, anchor: .center)
+                        } else {
+                            position.scrollTo(edge: .trailing)
+                        }
+                    }
                 }
                 if !isEmpty {
                     NewTile(height: thumbnailHeight)
@@ -128,6 +163,48 @@ struct HistoryStrip: View {
             }
         } message: {
             Text("The images go to the Trash, so you can still recover them from Finder.")
+        }
+    }
+}
+
+/// AppKit's search field, small: SwiftUI has one only in a toolbar. Its magnifying glass, the button
+/// that clears it, and Escape, which clears it too.
+private struct SearchField: NSViewRepresentable {
+    @Binding var text: String
+    let prompt: String
+    let help: String
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let field = NSSearchField()
+        field.controlSize = .small
+        field.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        field.placeholderString = prompt
+        field.setAccessibilityLabel(prompt)
+        field.delegate = context.coordinator
+        return field
+    }
+
+    func updateNSView(_ field: NSSearchField, context: Context) {
+        context.coordinator.text = $text
+        if field.stringValue != text { field.stringValue = text }
+        field.toolTip = help
+    }
+
+    /// Every key filters at once, and so do Escape and the clear button: the field tells of each
+    /// change as it happens, where its action comes a moment later and an update of the strip in
+    /// between would put the older text back.
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        var text: Binding<String>
+
+        init(text: Binding<String>) {
+            self.text = text
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSSearchField else { return }
+            text.wrappedValue = field.stringValue
         }
     }
 }
@@ -198,6 +275,17 @@ private struct HistoryThumbnail: View {
                         .background(.black.opacity(0.5), in: Circle())
                         .foregroundStyle(.white)
                         .padding(5)
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if item.isFavorite {
+                    Image(systemName: "star.fill")
+                        .font(.caption2)
+                        .padding(4)
+                        .background(.black.opacity(0.5), in: Circle())
+                        .foregroundStyle(.white)
+                        .padding(5)
+                        .accessibilityLabel("Favorite")
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 6))

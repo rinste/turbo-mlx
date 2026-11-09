@@ -216,6 +216,13 @@ final class HistoryStore {
         save()
     }
 
+    /// Stars an item, or takes its star away.
+    func toggleFavorite(_ id: HistoryItem.ID) {
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+        items[index].favorite = items[index].isFavorite ? nil : true
+        save()
+    }
+
     /// Moves the images to the Trash, so a deletion can still be undone from Finder.
     func remove(_ ids: Set<HistoryItem.ID>) {
         for item in items where ids.contains(item.id) {

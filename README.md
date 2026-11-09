@@ -86,6 +86,11 @@ models want more, see the table) and room on the disk for the models you pick.
 - **The history**, a strip along the bottom: oldest on the left, newest on the right, or in your
   own order (drag a picture where you want it; the menu next to *History* switches between the
   two). Waiting generations queue up after it.
+- **Favorites and search.** Star the ones you want to find again, from their menu, with the star
+  next to the prompt or ⌘D; a small star marks them in the strip. The search field above the
+  strip, on the right, keeps the items whose prompt, negative prompt, lyrics, LoRA or model has the words
+  you type (Escape clears it), and the star beside it shows only your favorites. ← → then step
+  through what is left.
 - **Going back to an earlier one:** click it (or use ← →) to see it again. Its prompt, model and
   settings return to the left column, with a new seed, so you can make variations; ⌘Z restores
   what you had there before.
@@ -99,6 +104,7 @@ models want more, see the table) and room on the disk for the models you pick.
 |---|---|
 | Generate | ⌘↩ |
 | See the previous or next item | ← → or ⌘[ ⌘] |
+| Add to or remove from the favorites | ⌘D |
 | Pause or play a clip | Space, or click it |
 | Zoom | pinch, mouse wheel, ⌘-scroll, ⌘+ ⌘−, the − % + controls |
 | Zoom in on a point and back | double-click |

@@ -48,6 +48,9 @@ nonisolated struct HistoryItem: Identifiable, Hashable, Codable, Sendable {
     var peakMemory: Int64?
     /// Seconds per phase (load, encode, denoise, decode, save); older items have none.
     var timings: [String: Double]?
+    /// True once starred; absent otherwise, as in items saved before there were favorites, so the index
+    /// reads as before and older versions, which skip a field they do not know, still open it.
+    var favorite: Bool?
 
     var prompt: String { request.prompt }
     /// The prompt, or what an upscale did.
@@ -59,6 +62,7 @@ nonisolated struct HistoryItem: Identifiable, Hashable, Codable, Sendable {
     /// What menus and tooltips call it: the kind's name, "sound" for a sound effect.
     var noun: String { isSoundEffect ? "sound" : kind.noun }
     var title: String { isSoundEffect ? "Sound" : kind.title }
+    var isFavorite: Bool { favorite == true }
 }
 
 /// How the strip arranges the history, left to right: by date, oldest first, or in the order the
@@ -74,6 +78,29 @@ nonisolated enum HistoryOrder: String, CaseIterable, Identifiable, Sendable {
         case .date: "By Date"
         case .custom: "Custom Order"
         }
+    }
+}
+
+/// What the strip shows of the history: with a search, the items that have each of its words in their
+/// prompt, negative prompt, lyrics, LoRAs or model name, whatever the case and the accents; with
+/// `favoritesOnly`, the starred ones. Neither is saved: a search is for the moment, a star for good,
+/// and a strip that opened on part of the history would hide the newest generations.
+nonisolated struct HistoryFilter: Equatable, Sendable {
+    var search = ""
+    var favoritesOnly = false
+
+    var isActive: Bool { favoritesOnly || !words.isEmpty }
+
+    private var words: [Substring] { search.split(whereSeparator: \.isWhitespace) }
+
+    func admits(_ item: HistoryItem) -> Bool {
+        if favoritesOnly, !item.isFavorite { return false }
+        let words = words
+        guard !words.isEmpty else { return true }
+        let request = item.request
+        let texts = [request.prompt, request.negativePrompt, request.lyrics, item.modelName].compactMap { $0 }
+            + (request.loras ?? []).map(\.name)
+        return words.allSatisfy { word in texts.contains { $0.localizedStandardContains(word) } }
     }
 }
 
