@@ -215,7 +215,7 @@ final class AppModel {
         guard !started else { return }
         started = true
         history.load()
-        history.pruneReferences(keeping: [settings.referenceImage, settings.lastFrameImage].compactMap { $0 })
+        history.pruneReferences(keeping: [settings.referenceImage, settings.lastFrameImage].compactMap { $0 } + settings.moreReferenceImages)
         loraLibrary.refresh()
         // The models folder and local model folders before the engine, which inherits the access
         // they open.
@@ -558,9 +558,10 @@ final class AppModel {
         let isSound = model.family.media == .audio
         let upscales = model.family.isUpscaler
         let quality = settings.fullPipeline(for: model)
-        // A reference image whose file is gone (a history folder emptied by hand) is dropped.
-        let reference = settings.referenceImage.flatMap { name in
-            FileManager.default.fileExists(atPath: HistoryStore.referenceURL(name).path) ? name : nil
+        // The reference images the model reads; one whose file is gone (a history folder emptied by
+        // hand) is dropped.
+        let references = settings.referenceImages(for: model.family).filter { name in
+            FileManager.default.fileExists(atPath: HistoryStore.referenceURL(name).path)
         }
         let lastFrame = settings.lastFrameImage.flatMap { name in
             FileManager.default.fileExists(atPath: HistoryStore.referenceURL(name).path) ? name : nil
@@ -581,7 +582,8 @@ final class AppModel {
                 frames: isVideo ? settings.videoFrames : nil,
                 fps: isVideo ? settings.videoFrameRate : nil,
                 autoDuration: isVideo && settings.autoDuration(for: model.family) ? true : nil,
-                referenceImage: model.family.takesReferenceImage ? reference : nil,
+                referenceImage: references.first,
+                moreReferenceImages: references.count > 1 ? Array(references.dropFirst()) : nil,
                 lastFrameImage: model.family.takesLastFrame ? lastFrame : nil,
                 upscale: upscales ? settings.upscale : nil,
                 softness: upscales ? settings.softness : nil,
@@ -967,11 +969,14 @@ final class AppModel {
             updated.videoSeconds = min(max((Double(frames - 1) / Double(fps)).rounded(), GenerationSettings.videoDurations.lowerBound),
                                        GenerationSettings.videoDurations.upperBound)
         }
-        // A model that takes a reference image gets the generation's, or none; the others leave it.
+        // A model that takes a reference image gets the generation's (all of them), or none; the
+        // others leave it.
         if model?.family.takesReferenceImage == true {
-            updated.referenceImage = request.referenceImage.flatMap { name in
-                FileManager.default.fileExists(atPath: HistoryStore.referenceURL(name).path) ? name : nil
+            let references = request.referenceImages.filter { name in
+                FileManager.default.fileExists(atPath: HistoryStore.referenceURL(name).path)
             }
+            updated.referenceImage = references.first
+            updated.moreReferenceImages = Array(references.dropFirst())
         }
         if model?.family.takesLastFrame == true {
             updated.lastFrameImage = request.lastFrameImage.flatMap { name in

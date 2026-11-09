@@ -436,7 +436,10 @@ private struct ItemInfoBar: View {
                                      help: "\(frames) frames at \(fps) fps")
                     }
                     if item.request.upscale == nil {
-                        if item.request.referenceImage != nil {
+                        let pictures = item.request.referenceImages.count
+                        if pictures > 1 {
+                            MetadataChip(systemImage: "photo.stack", text: "From \(pictures) images", help: "Made from \(pictures) reference images")
+                        } else if pictures == 1 {
                             MetadataChip(systemImage: "photo", text: "From an image",
                                          help: item.kind == .video ? "The clip started from a reference image" : "Made from a reference image")
                         }
