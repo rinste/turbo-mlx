@@ -163,16 +163,29 @@ final class AppModel {
     /// The history item under the pointer in the strip, which a drag there moves.
     @ObservationIgnored var pointedHistoryItem: HistoryItem.ID?
 
-    /// The history left to right, as the strip shows it and ⌘[ ⌘] walk it.
+    /// The search and Favorites Only in the strip's header.
+    var historyFilter = HistoryFilter()
+
+    /// The history left to right, as the strip shows it and ⌘[ ⌘] walk it: what the filter lets through.
     var arrangedHistory: [HistoryItem] {
-        history.arranged(historyOrder)
+        let arranged = history.arranged(historyOrder)
+        guard historyFilter.isActive else { return arranged }
+        return arranged.filter(historyFilter.admits)
     }
 
     /// A drag in the strip: `id` goes where `target` is, and the strip keeps the custom order from
-    /// then on (a first drag starts it from the order by date).
+    /// then on (a first drag starts it from the order by date). The move is made in the whole
+    /// history, filtered or not: the item lands right next to `target`, as the strip shows it, and
+    /// the items a search or Favorites Only hides keep their places. A custom order of the shown
+    /// items alone would have sent the hidden ones after them all, by date, so dragging stays on.
     func moveHistoryItem(_ id: HistoryItem.ID, to target: HistoryItem.ID) {
-        history.move(id, to: target, in: arrangedHistory)
+        history.move(id, to: target, in: history.arranged(historyOrder))
         historyOrder = .custom
+    }
+
+    /// Stars the item or takes its star away: its menu, the star under the viewer, ⌘D.
+    func toggleFavorite(_ item: HistoryItem) {
+        history.toggleFavorite(item.id)
     }
 
     init() {
@@ -881,7 +894,14 @@ final class AppModel {
         // The draft sits after them all: left of it is the last one, right of it nothing.
         if viewer == .draft, offset < 0 { return }
         let shown = displayedJob.map { ViewerSelection.job($0.id) } ?? displayedItem.map { .item($0.id) }
-        let current = viewer == .draft ? entries.count : shown.flatMap { entries.firstIndex(of: $0) } ?? entries.count
+        var current = viewer == .draft ? entries.count : shown.flatMap { entries.firstIndex(of: $0) } ?? entries.count
+        // An item the filter hides, still on show (picked before the search): a step goes to the
+        // nearest one the strip shows on that side, and none past the ends.
+        if let item = displayedItem, !entries.contains(.item(item.id)) {
+            let before = history.arranged(historyOrder).prefix { $0.id != item.id }.filter(historyFilter.admits).count
+            current = offset > 0 ? before : before - 1
+            guard entries.indices.contains(current - offset) else { return }
+        }
         switch entries[min(max(current - offset, 0), entries.count - 1)] {
         case .item(let id):
             if let item = history.item(withID: id) { select(item, undoManager: undoManager) }
@@ -894,21 +914,25 @@ final class AppModel {
 
     /// Moves items to the Trash. The one on show gives way to its neighbor in the strip: the one on
     /// its right, which slides into its place, or else the one on its left. The controls on the left
-    /// stay as they are.
+    /// stay as they are. One the filter hides gives way to the nearest one the strip shows.
     func delete(_ items: [HistoryItem]) {
         let ids = Set(items.map(\.id))
-        let arranged = arrangedHistory
+        let arranged = history.arranged(historyOrder)
+        let filter = historyFilter
         if let shown = displayedItem, ids.contains(shown.id),
            let index = arranged.firstIndex(where: { $0.id == shown.id }) {
-            let right = arranged[(index + 1)...].first { !ids.contains($0.id) }
-            let left = arranged[..<index].last { !ids.contains($0.id) }
+            let right = arranged[(index + 1)...].first { !ids.contains($0.id) && filter.admits($0) }
+            let left = arranged[..<index].last { !ids.contains($0.id) && filter.admits($0) }
             viewer = (right ?? left).map { .item($0.id) } ?? .live
         }
         history.remove(ids)
     }
 
+    /// Everything goes, what the filter hides included (the dialog counts it all), and the filter
+    /// with it: there is nothing left to search.
     func clearHistory() {
         viewer = .live
+        historyFilter = HistoryFilter()
         history.removeAll()
     }
 

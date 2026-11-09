@@ -114,6 +114,12 @@ private struct GenerationCommands: Commands {
                 if let item { NSWorkspace.shared.activateFileViewerSelecting([model.url(for: item)]) }
             }
             .disabled(item == nil)
+            // Safari's and Preview's shortcut for a bookmark.
+            Button(item?.isFavorite == true ? "Remove from Favorites" : "Add to Favorites") {
+                if let item { model.toggleFavorite(item) }
+            }
+            .keyboardShortcut("d", modifiers: .command)
+            .disabled(item == nil)
 
             Divider()
 

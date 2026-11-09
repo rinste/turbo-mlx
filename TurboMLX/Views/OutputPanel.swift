@@ -42,6 +42,8 @@ struct OutputPanel: View {
         // Space plays or pauses a clip or a song, and does nothing else: no Quick Look on an image,
         // and no beep for a key nobody took.
         .onKeyPress(.space) {
+            // A space typed in the history's search field is the field's.
+            if NSApp.keyWindow?.firstResponder is NSText { return .ignored }
             if app.displayedItem?.kind == .video { clip.togglePlayback() }
             if app.displayedItem?.kind == .audio { song.toggle() }
             return .handled
@@ -382,7 +384,24 @@ private struct ItemInfoBar: View {
     /// The prompt's scroll bar goes in the bar's margin instead of over the text.
     private static let scrollBarMargin: CGFloat = 12
 
+    /// The star on the right, level with the prompt's first line, past the prompt's scroll bar.
     var body: some View {
+        HStack(alignment: .top, spacing: Self.scrollBarMargin + 4) {
+            details
+            Button { app.toggleFavorite(item) } label: {
+                Image(systemName: item.isFavorite ? "star.fill" : "star")
+                    .foregroundStyle(item.isFavorite ? AnyShapeStyle(Color.active) : AnyShapeStyle(.secondary))
+            }
+            .buttonStyle(.borderless)
+            .help(item.isFavorite ? "Remove the \(item.noun) from your favorites (⌘D)" : "Add the \(item.noun) to your favorites (⌘D)")
+            .accessibilityLabel(item.isFavorite ? "Remove from Favorites" : "Add to Favorites")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.background)
+    }
+
+    private var details: some View {
         VStack(alignment: .leading, spacing: 8) {
             HeightLimit(maxHeight: Self.promptHeight) {
                 ScrollView {
@@ -464,9 +483,6 @@ private struct ItemInfoBar: View {
                 }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.background)
     }
 
     /// "Generation time" plus, when the engine reported them, the seconds of each phase.
@@ -534,6 +550,7 @@ struct HistoryItemMenu: View {
         Button(Self.openTitle(for: url)) { NSWorkspace.shared.open(url) }
         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([app.url(for: item)]) }
         Divider()
+        Button(item.isFavorite ? "Remove from Favorites" : "Add to Favorites") { app.toggleFavorite(item) }
         Button("Move to Trash", role: .destructive) { app.delete([item]) }
     }
 
