@@ -471,10 +471,12 @@ final class AppModel {
         if model.family.takesPrompt, settings.trimmedPrompt.isEmpty { return .emptyPrompt }
         if model.family.isSong, settings.songLyrics.isEmpty { return .emptyLyrics }
         if model.family.isUpscaler, let size = settings.upscaledSize, size.megapixels > Upscale.maxMegapixels { return .upscaleTooLarge }
-        switch loraState(for: model) {
-        case .missing(let choice): return .loraMissing(choice.name)
-        case .mismatch(let choice, let base): return .loraMismatch(choice.name, base: base.displayName)
-        case .none, .ready: break
+        for choice in settings.loras(for: model.family) {
+            switch loraState(of: choice, for: model) {
+            case .missing(let choice): return .loraMissing(choice.name)
+            case .mismatch(let choice, let base): return .loraMismatch(choice.name, base: base.displayName)
+            case .none, .ready: break
+            }
         }
         return memoryBlocker(for: model)
     }
@@ -487,7 +489,7 @@ final class AppModel {
         settings.blocks[0].text = text.isEmpty ? word : "\(word), \(text)"
     }
 
-    /// The LoRA chosen for a model, as the library has it.
+    /// A LoRA chosen for a model (none: the row without one), as the library has it.
     enum LoRAState: Equatable {
         case none
         case ready(LoRAChoice, LoRALibrary.Entry)
@@ -496,12 +498,14 @@ final class AppModel {
     }
 
     private func loraGigabytes(for model: ModelDescriptor) -> Double {
-        guard case .ready(_, let entry) = loraState(for: model) else { return 0 }
-        return Double(entry.bytes) / Double(1 << 30)
+        settings.loras(for: model.family).reduce(0) { total, choice in
+            guard case .ready(_, let entry) = loraState(of: choice, for: model) else { return total }
+            return total + Double(entry.bytes) / Double(1 << 30)
+        }
     }
 
-    func loraState(for model: ModelDescriptor) -> LoRAState {
-        guard let choice = settings.lora(for: model.family) else { return .none }
+    func loraState(of choice: LoRAChoice?, for model: ModelDescriptor) -> LoRAState {
+        guard let choice else { return .none }
         guard let entry = loraLibrary.entry(choice.file) else { return .missing(choice) }
         if let base = entry.info?.base, base.fits(model) == false { return .mismatch(choice, base) }
         return .ready(choice, entry)
@@ -516,7 +520,7 @@ final class AppModel {
             : model.family.media == .audio ? Int(settings.soundSeconds * 50) : nil
         guard let peak = MemoryEstimate.peak(model: model, size: size, frames: frames, lowMemory: settings.lowMemory)
         else { return nil }
-        // A LoRA's matrices stay in memory beside the model's, as large as its file.
+        // The LoRAs' matrices stay in memory beside the model's, each as large as its file.
         let needed = peak + loraGigabytes(for: model)
         guard needed > MemoryEstimate.available() else { return nil }
         let fitsAtAll = { (candidate: ModelDescriptor) in
@@ -565,6 +569,7 @@ final class AppModel {
         let lastFrame = settings.lastFrameImage.flatMap { name in
             FileManager.default.fileExists(atPath: HistoryStore.referenceURL(name).path) ? name : nil
         }
+        let loras = settings.loras(for: model.family)
         for seed in settings.nextSeeds() {
             // An upscale and a 3D object have no prompt: the picture (and the factor, the detail) say it all.
             let takesPrompt = model.family.takesPrompt
@@ -586,7 +591,7 @@ final class AppModel {
                 upscale: upscales ? settings.upscale : nil,
                 softness: upscales ? settings.softness : nil,
                 halfPrecision: model.family.supportsHalfPrecision && settings.halfPrecision ? true : nil,
-                loras: settings.lora(for: model.family).map { [$0] },
+                loras: loras.isEmpty ? nil : loras,
                 quality: quality ? true : nil
             )
             if isObject {
@@ -991,9 +996,9 @@ final class AppModel {
         if model?.family.supportsHalfPrecision == true {
             updated.halfPrecision = request.halfPrecision ?? false
         }
-        // And the LoRA: the generation's, or none, for a family that takes them.
+        // And the LoRAs: the generation's, or none, for a family that takes them.
         if let family = model?.family, family.takesLoRAs {
-            updated.setLoRA(request.loras?.first, for: family)
+            updated.setLoRAs(request.loras ?? [], for: family)
         }
         return (updated, model?.id ?? selectedModelID)
     }

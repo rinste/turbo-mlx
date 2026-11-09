@@ -4,6 +4,11 @@ import Foundation
 /// strongly it applies.
 nonisolated struct LoRAChoice: Codable, Hashable, Sendable {
     static let scaleRange = 0.0...2.0
+    /// The most a model takes at once. The engine sets no limit (each LoRA adds its own small
+    /// matrices to the layers it adapts) and the memory check counts every file, but their effects
+    /// add up, so past a few the picture tends to fall apart, and their rows would crowd the bar
+    /// under the column, which does not scroll.
+    static let maxCount = 4
 
     /// The file's name in the library folder.
     var file: String
