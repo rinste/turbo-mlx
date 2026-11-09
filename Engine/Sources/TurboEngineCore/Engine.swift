@@ -130,13 +130,19 @@ public final class Engine {
             }
             model.promptsEncoded()
 
-            let request = FamilyRequest(
+            var request = FamilyRequest(
                 prompt: params.prompt, negativePrompt: negativePrompt, seed: params.seed, width: params.width, height: params.height,
                 steps: params.steps, guidance: params.guidance, flattenAlpha: params.flattenAlpha ?? false,
                 frames: params.frames, fps: params.fps, imagePaths: params.imagePaths,
                 upscale: params.upscale, softness: params.softness,
                 halfPrecision: params.precision == "bf16"
             )
+            // Only the families whose loop can start from a picture take a strength.
+            if model is ImageToImageFamily {
+                request.imageStrength = params.imageStrength.flatMap { $0 > 0 && !params.imagePaths.isEmpty ? $0 : nil }
+            }
+            // The steps the loop runs: an image that starts from a picture skips the first ones.
+            let denoisingSteps = params.steps - ImageToImage.startStep(steps: params.steps, strength: request.imageStrength)
             if let video = model as? VideoFamilyModel {
                 var request = request
                 request.autoDuration = params.autoDuration ?? false
@@ -149,7 +155,7 @@ public final class Engine {
                 switch phase {
                 case .denoising:
                     mark("denoise_start")
-                    emitter.emit("phase", ["id": id, "phase": "denoising", "total": params.steps])
+                    emitter.emit("phase", ["id": id, "phase": "denoising", "total": denoisingSteps])
                 case .decoding:
                     mark("denoise_end")
                     emitter.emit("phase", ["id": id, "phase": "decoding"])
@@ -195,6 +201,7 @@ public final class Engine {
                 metadata["loras"] = loras.map { ["name": $0.name, "scale": $0.scale] as [String: Any] }
             }
             if request.halfPrecision { metadata["precision"] = "bf16" }
+            if let strength = request.imageStrength { metadata["image_strength"] = strength }
             try ImageOutput.writePNG(image.pixels, to: output, source: source, metadata: metadata)
             mark("save_end")
 

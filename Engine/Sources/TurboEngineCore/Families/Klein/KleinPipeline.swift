@@ -137,7 +137,7 @@ public enum KleinReference {
 }
 
 /// FLUX.2 Klein: the three modules, the prompt cache, and the sampling loop.
-public final class KleinModel: PreviewingFamilyModel, LoRAAdaptable {
+public final class KleinModel: PreviewingFamilyModel, LoRAAdaptable, ImageToImageFamily {
     /// The negative prompt mflux encodes for a base checkpoint's classifier-free guidance.
     static let negativePrompt = " "
 
@@ -260,7 +260,7 @@ public final class KleinModel: PreviewingFamilyModel, LoRAAdaptable {
         return try generate(
             prompt: request.prompt, negativePrompt: request.negativePrompt, seed: request.seed, width: request.width,
             height: request.height, steps: request.steps, guidance: guidance, referencePaths: request.imagePaths,
-            phase: phase, progress: progress, preview: preview, isCancelled: isCancelled
+            imageStrength: request.imageStrength, phase: phase, progress: progress, preview: preview, isCancelled: isCancelled
         )
     }
 
@@ -270,10 +270,12 @@ public final class KleinModel: PreviewingFamilyModel, LoRAAdaptable {
     /// base checkpoints do, or against `negativePrompt` when there is one. With `referencePaths`,
     /// the image is edited from those pictures, as `Flux2KleinEdit` does: their tokens follow the
     /// image's in every pass, one picture after the other (each in its own proportions, at its own
-    /// t: 10, 20…), and only the image's come out.
+    /// t: 10, 20…), and only the image's come out. With an `imageStrength` as well, the image starts
+    /// from the first picture instead, as `Flux2Klein`'s img2img does (`ImageToImage`): no
+    /// tokens follow the image's, and the loop skips its first steps.
     public func generate(
         prompt: String, negativePrompt: String? = nil, seed: Int, width: Int, height: Int, steps: Int, guidance: Double = 1,
-        referencePaths: [String] = [],
+        referencePaths: [String] = [], imageStrength: Double? = nil,
         phase: (GenerationPhase) -> Void,
         progress: (Int, Int) -> Void,
         preview: (Preview) -> Void = { _ in },
@@ -282,15 +284,20 @@ public final class KleinModel: PreviewingFamilyModel, LoRAAdaptable {
         let width = 16 * (width / 16)
         let height = 16 * (height / 16)
         guard width >= 16, height >= 16 else { throw GenerationError.sizeTooSmall }
+        let start = referencePaths.isEmpty ? 0 : ImageToImage.startStep(steps: steps, strength: imageStrength)
 
         phase(.encoding)
         let encoded = try encodePrompt(prompt)
         let negative = guidance > 1 ? try encodePrompt(negativePrompt ?? Self.negativePrompt) : nil
-        let references = try referencePaths.enumerated().map { index, path in
+        let references = try (start > 0 ? [] : referencePaths).enumerated().map { index, path in
             referenceTokens(pixels: try KleinReference.pixels(path: path), index: index)
         }
         let reference = references.isEmpty ? nil
             : (tokens: concatenated(references.map(\.tokens), axis: 1), ids: concatenated(references.map(\.ids), axis: 1))
+        // `_prepare_img2img_latents`: the picture resized to the image's size, encoded, patchified
+        // and normalized like an edit's, packed as the noise is.
+        let picture = start > 0
+            ? vae.encodePacked(try ImageToImage.pixels(path: referencePaths[0], width: width, height: height)).tokens : nil
         if isCancelled() { throw GenerationError.cancelled }
 
         phase(.denoising)
@@ -299,7 +306,9 @@ public final class KleinModel: PreviewingFamilyModel, LoRAAdaptable {
         let schedule = FlowMatchSchedule(steps: steps, imageSeqLen: imageTokens)
         let ids = reference.map { concatenated([initial.ids, $0.ids], axis: 1) } ?? initial.ids
         var latents = initial.latents
-        for t in 0 ..< steps {
+        if let picture { latents = ImageToImage.noised(clean: picture, noise: latents, sigma: schedule.sigmas[start]) }
+        let runSteps = steps - start
+        for t in start ..< steps {
             let input = reference.map { concatenated([latents, $0.tokens], axis: 1) } ?? latents
             var noise = transformer(latents: input, prompt: encoded.embeds, timestep: schedule.timesteps[t], imageIds: ids, textIds: encoded.ids)
             if let negative {
@@ -307,18 +316,21 @@ public final class KleinModel: PreviewingFamilyModel, LoRAAdaptable {
                 noise = negativeNoise + Float(guidance) * (noise - negativeNoise)
             }
             if reference != nil { noise = noise[0..., 0 ..< imageTokens, 0...] }
-            let glimpse = LatentPreview.shows(step: t + 1, of: steps)
+            let glimpse = LatentPreview.shows(step: t - start + 1, of: runSteps)
                 ? LatentPreview.predicted(latents: latents, noise: noise, sigma: schedule.sigmas[t]) : nil
             latents = Self.step(latents: latents, noise: noise, schedule: schedule, index: t)
             eval(latents)
-            progress(t + 1, steps)
+            progress(t - start + 1, runSteps)
             if let glimpse {
-                preview(Preview(pixels: previewPixels(latents: glimpse, latentHeight: initial.latentHeight, latentWidth: initial.latentWidth), step: t + 1))
+                preview(Preview(pixels: previewPixels(latents: glimpse, latentHeight: initial.latentHeight, latentWidth: initial.latentWidth), step: t - start + 1))
             }
             if isCancelled() { throw GenerationError.cancelled }
         }
 
         phase(.decoding)
+        // An image that started from a picture leaves float32 latents (mflux's mix promotes them),
+        // decoded in 16 bits like a text-to-image's so the decoder peaks as it does for those.
+        if picture != nil { latents = latents.asType(initial.latents.dtype) }
         let pixels = decode(latents: latents, latentHeight: initial.latentHeight, latentWidth: initial.latentWidth)
         eval(pixels)
         return GeneratedImage(pixels: pixels)

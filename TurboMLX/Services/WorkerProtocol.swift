@@ -124,6 +124,7 @@ nonisolated enum WorkerCommand: Sendable {
         if request.autoDuration == true { params["auto_duration"] = true }
         if let upscale = request.upscale { params["upscale"] = upscale }
         if let softness = request.softness { params["softness"] = softness }
+        if let strength = request.imageStrength { params["image_strength"] = strength }
         if request.halfPrecision == true { params["precision"] = "bf16" }
         if preview { params["preview"] = true }
         if request.quality == true { params["quality"] = true }

@@ -4,7 +4,7 @@ import MLXNN
 
 /// Z-Image Turbo: the Qwen3 encoder, the S3-DiT and the decoder, with the prompt cache and the
 /// sampling loop of mflux's `ZImage.generate_image` (guidance off, the linear schedule).
-public final class ZImageModel: PreviewingFamilyModel, LoRAAdaptable {
+public final class ZImageModel: PreviewingFamilyModel, LoRAAdaptable, ImageToImageFamily {
     public let config: ZImageConfig
     public let modelPath: URL
     public let textEncoder: Qwen3TextEncoder
@@ -18,6 +18,10 @@ public final class ZImageModel: PreviewingFamilyModel, LoRAAdaptable {
     private var promptCache: [String: MLXArray] = [:]
     public let loras = LoRAAdapters(table: .zImage)
     public var adaptedModule: Module? { transformer }
+    /// The VAE's encoder, loaded the first time an image starts from a picture.
+    private var pictureEncoder: ZImageEncoder?
+    /// The last picture encoded, so the images of a batch encode it once.
+    private var startingPicture: (key: String, latents: MLXArray)?
 
     /// Loads the checkpoint at `modelPath` (mflux format). Weights stay lazy until first use.
     public init(modelPath: URL, config: ZImageConfig, loadTokenizer: Bool = true) throws {
@@ -92,28 +96,70 @@ public final class ZImageModel: PreviewingFamilyModel, LoRAAdaptable {
         let capFeats = try encodePrompt(request.prompt)
         if isCancelled() { throw GenerationError.cancelled }
 
+        // Image to image: the picture's latents, mixed with the noise at the sigma of the step the
+        // loop starts from (mflux's `Img2Img`).
+        let start = request.imagePath == nil ? 0 : ImageToImage.startStep(steps: request.steps, strength: request.imageStrength)
+        let picture = start > 0 ? try startingLatents(path: request.imagePath!, width: width, height: height) : nil
+        if isCancelled() { throw GenerationError.cancelled }
+
         phase(.denoising)
         // The reference lets its float32 timestep embedding promote the stream to float32; the
         // 16-bit option keeps it in the weights' precision, as Ming-Image's S3-DiT always does.
         transformer.setKeepsWeightsPrecision(request.halfPrecision)
         let schedule = LinearSchedule(steps: request.steps, width: width, height: height, shift: config.shift)
         var latents = Self.initialLatents(width: width, height: height, seed: request.seed)
-        for t in 0 ..< request.steps {
+        if let picture { latents = ImageToImage.noised(clean: picture, noise: latents, sigma: schedule.sigmas[start]) }
+        let steps = request.steps - start
+        for t in start ..< request.steps {
             let sigma = schedule.sigmas[t]
             let noise = transformer(latents: latents, timestep: MLXArray([1 - sigma]), capFeats: capFeats)
-            let glimpse = LatentPreview.shows(step: t + 1, of: request.steps)
+            let glimpse = LatentPreview.shows(step: t - start + 1, of: steps)
                 ? LatentPreview.predicted(latents: latents, noise: noise, sigma: sigma) : nil
             latents = schedule.step(latents: latents, noise: noise, index: t)
             eval(latents)
-            progress(t + 1, request.steps)
-            if let glimpse { preview(Preview(pixels: previewPixels(latents: glimpse), step: t + 1)) }
+            progress(t - start + 1, steps)
+            if let glimpse { preview(Preview(pixels: previewPixels(latents: glimpse), step: t - start + 1)) }
             if isCancelled() { throw GenerationError.cancelled }
         }
 
         phase(.decoding)
+        // An image that started from a picture leaves float32 latents (mflux's mix promotes them),
+        // which mflux decodes as they are; in 16 bits, like a text-to-image's, the decoder peaks as
+        // it does for those (at 1024 px without Save memory, 11.7 GB with the encoder's instead of 15.9).
+        if picture != nil { latents = latents.asType(modelPrecision) }
         let pixels = try decode(latents: latents, isCancelled: isCancelled)
         eval(pixels)
         return GeneratedImage(pixels: pixels)
+    }
+
+    /// The picture at `path` as the loop's clean latents, [16, 1, H/8, W/8] like the noise
+    /// (`ZImageLatentCreator.pack_latents`): resized to the image's size, encoded, kept for the
+    /// next image of the batch. The encoder's weights are read from the checkpoint the first time.
+    public func startingLatents(path: String, width: Int, height: Int) throws -> MLXArray {
+        let key = "\(path)|\(width)x\(height)"
+        if let startingPicture, startingPicture.key == key { return startingPicture.latents }
+        let latents = try startingLatents(pixels: try ImageToImage.pixels(path: path, width: width, height: height))
+        startingPicture = (key, latents)
+        return latents
+    }
+
+    /// A picture [1, H, W, 3] in [-1, 1] encoded as the loop's clean latents [16, 1, H/8, W/8], in
+    /// tiles with Save memory as mflux's low-RAM mode encodes it. The encoder's weights are read from
+    /// the checkpoint the first time.
+    public func startingLatents(pixels: MLXArray) throws -> MLXArray {
+        if pictureEncoder == nil {
+            let encoder = ZImageEncoder(blockOutChannels: config.vaeBlockOutChannels)
+            var checkpoint = Checkpoint(root: modelPath)
+            try WeightLoading.apply(ZImageEncoder.weights(try checkpoint.loadComponent("vae")), to: encoder)
+            pictureEncoder = encoder
+        }
+        let encoder = pictureEncoder!
+        let grid = lowRam ? try VAETiling.encode(pixels, spatialScale: ZImageVAE.spatialScale, encode: { encoder.encode($0) })
+            : encoder.encode(pixels)
+        // [1, h, w, 16] channels-last → [16, 1, h, w].
+        let latents = grid.transposed(3, 0, 1, 2)
+        eval(latents)
+        return latents
     }
 
     /// A small image of what `latents` ([16, 1, h, w], a step's prediction) hold: the grid pooled

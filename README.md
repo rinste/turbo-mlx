@@ -18,6 +18,7 @@ prompts and pictures never leave it.
 
 - **Create images** from a description: photos, posters, graphic design, text inside the picture.
 - **Edit a picture** by saying what to change ("make it winter"): the rest stays as it was.
+- **Start from a picture**: a new image that keeps its layout and colors, as far from it as you like.
 - **Make short videos with sound**, from a description or starting from a picture.
 - **Upscale** a picture 2, 3 or 4 times, with sharper detail.
 
@@ -51,6 +52,12 @@ models want more, see the table) and room on the disk for the models you pick.
   says; video models use it as the first frame of the clip, and LTX also takes a last frame: give
   it both and the prompt says how the clip gets from one to the other. Qwen-Image Edit always
   needs one.
+- **Image to image.** Z-Image Turbo and Qwen-Image take a *Starting Image* (FLUX.2 Klein too, with
+  *Start from It* instead of *Edit It*): the new image grows out of the picture's layout and
+  colors, and the prompt says what it becomes. *Change* sets how far it may move away, as the
+  denoising strength of other apps: at 75% it keeps the composition, at 30% it only touches the
+  details, and the steps it keeps are skipped, so it is also faster. The picture is stretched to
+  the format; *Use Its Proportions* gives the format the picture's.
 - **Videos.** Choose the duration and the frame rate, or let LTX-2.5 pick the length the prompt
   describes. *Fast* runs the distilled model (8 steps, a few minutes for 5 seconds); *Quality*
   runs the full model with guidance and a *Negative Prompt* (30 steps of four passes each, about
@@ -278,6 +285,18 @@ images.
 - **Qwen-Image Edit** reads the picture's tokens next to the image's in both passes of every step:
   a 672 × 880 edit in 20 steps took 12.4 minutes with mflux and about 15 with the native engine
   (measured while the Mac was busy building), whose image matched mflux's to 68 dB.
+- **Image to image** (Z-Image, Qwen-Image, FLUX.2 Klein) is mflux's `--image-strength`: the picture,
+  resized with Lanczos to the image's size and encoded by the model's VAE (Z-Image's encoder, ported
+  for it, loads the first time a picture is encoded; with *Save memory*, in 512-pixel tiles, as
+  mflux's low-RAM mode encodes it), is mixed with the seed's noise at the sigma of the step the loop
+  starts from, `max(1, ⌊steps × (1 − Change)⌋)`. Against mflux 0.23 on MLX 0.32.2, on the same
+  picture and seed (stretched from 640 × 480 to 512 × 512, or in its proportions at 768 × 576):
+  Z-Image 38.3 dB at 60% Change and 47.6 dB at 30% (its text-to-image 30.9 dB on this Mac),
+  Qwen-Image 43.9 dB at 50%, FLUX.2 Klein 34.9 dB at 75% and 40.8 dB at 50% (its text-to-image
+  34.2 dB); in tiles, Z-Image 51.8 dB at 1536 × 1152 and Qwen-Image 48.8 dB at 1024 × 1024. On the
+  fixture the encoder is mflux's to the bit. The result is decoded from 16 bits, as a text-to-image's
+  (mflux decodes the float32 latents its mix leaves), so it peaks as one does, plus the encoder's
+  activations without *Save memory*: Z-Image at 2048 px 8.9 GB with it, 30.2 GB without (an M5 Ultra).
 - **SenseNova-U1.5** is measured against SenseTime's own PyTorch code, run on the same weights:
   1024 × 1024 in 28–31 s, 512 × 512 in 7 s, 2048 × 2048 in 2½ minutes, with images that match the
   reference's to 37 dB at 512 px and 29 dB at 1024 px (a model this sensitive drifts as far from

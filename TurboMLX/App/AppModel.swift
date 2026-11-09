@@ -589,6 +589,8 @@ final class AppModel {
                 loras: settings.lora(for: model.family).map { [$0] },
                 quality: quality ? true : nil
             )
+            // Image to image: what the image keeps of the picture it starts from.
+            if request.referenceImage != nil { request.imageStrength = settings.imageStrength(for: model.family) }
             if isObject {
                 request.numGaussians = settings.gaussians
                 request.objectMode = settings.objectMode.rawValue
@@ -972,6 +974,12 @@ final class AppModel {
             updated.referenceImage = request.referenceImage.flatMap { name in
                 FileManager.default.fileExists(atPath: HistoryStore.referenceURL(name).path) ? name : nil
             }
+        }
+        // An image that started from a picture: how much it was let change; FLUX.2 Klein's picture,
+        // whether it was started from or edited.
+        if let family = model?.family, family.startsFromImage, request.referenceImage != nil {
+            if let strength = request.imageStrength { updated.imageChange = ((1 - strength) * 100).rounded() / 100 }
+            if family.editsReference { updated.startsFromReference = request.imageStrength != nil }
         }
         if model?.family.takesLastFrame == true {
             updated.lastFrameImage = request.lastFrameImage.flatMap { name in

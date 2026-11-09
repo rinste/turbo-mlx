@@ -71,6 +71,65 @@ public enum VAETiling {
         return output / maximum(counts, MLXArray(Float(1e-6)))
     }
 
+    /// mflux's `VAETiler.encode_image_tiled`, which its low-RAM mode turns on for the encoders that
+    /// show no seams: a picture [1, H, W, 3] encoded in 512-pixel tiles that overlap by 64 pixels
+    /// (8 latent pixels), the overlaps blended with cosine ramps in latent space, so image to image
+    /// never holds a large picture's whole activations (Z-Image at 2048 px: 22.7 GB at once). `encode`
+    /// turns a tile into its latents [1, h, w, C]; the result is [1, H/8, W/8, C] in float32.
+    public static func encode(
+        _ image: MLXArray, spatialScale scale: Int = 8, encode: (MLXArray) throws -> MLXArray
+    ) throws -> MLXArray {
+        let (height, width) = (image.shape[1], image.shape[2])
+        guard height > tileSize || width > tileSize else { return try encode(image) }
+        let latentTile = max(1, tileSize / scale)
+        let overlap = max(0, min(64 / scale, latentTile - 1))
+        let stride = max(1, latentTile - overlap)
+        let (latentHeight, latentWidth) = ((height + scale - 1) / scale, (width + scale - 1) / scale)
+        let ramp = cosRamp(overlap)
+
+        var output: MLXArray?
+        var counts: MLXArray?
+        for y in Swift.stride(from: 0, to: latentHeight, by: stride) {
+            let yEnd = min(y + latentTile, latentHeight)
+            for x in Swift.stride(from: 0, to: latentWidth, by: stride) {
+                let xEnd = min(x + latentTile, latentWidth)
+                // Slivers at the end no wider than the overlap are already covered.
+                if (y > 0 && yEnd - y <= overlap) || (x > 0 && xEnd - x <= overlap) { continue }
+
+                let pixels = image[0..., (y * scale) ..< min(yEnd * scale, height), (x * scale) ..< min(xEnd * scale, width), 0...]
+                var tile = try encode(pixels).asType(.float32)
+                let tileHeight = min(yEnd - y, tile.shape[1], latentHeight - y)
+                let tileWidth = min(xEnd - x, tile.shape[2], latentWidth - x)
+                tile = tile[0..., 0 ..< tileHeight, 0 ..< tileWidth, 0...]
+                if output == nil {
+                    output = MLXArray.zeros([1, latentHeight, latentWidth, tile.shape[3]], dtype: .float32)
+                    counts = MLXArray.zeros([1, latentHeight, latentWidth, 1], dtype: .float32)
+                }
+
+                let ovH = max(0, min(overlap, tileHeight - 1))
+                let ovW = max(0, min(overlap, tileWidth - 1))
+                var wh = [Float](repeating: 1, count: tileHeight)
+                var ww = [Float](repeating: 1, count: tileWidth)
+                if ovH > 0 {
+                    if y > 0 { for i in 0 ..< ovH { wh[i] = ramp[i] } }
+                    if yEnd < latentHeight { for i in 0 ..< ovH { wh[tileHeight - ovH + i] = 1 - ramp[i] } }
+                }
+                if ovW > 0 {
+                    if x > 0 { for i in 0 ..< ovW { ww[i] = ramp[i] } }
+                    if xEnd < latentWidth { for i in 0 ..< ovW { ww[tileWidth - ovW + i] = 1 - ramp[i] } }
+                }
+                let weights = MLXArray(wh, [1, tileHeight, 1, 1]) * MLXArray(ww, [1, 1, tileWidth, 1])
+                let rows = y ..< (y + tileHeight)
+                let columns = x ..< (x + tileWidth)
+                output![0..., rows, columns, 0...] = output![0..., rows, columns, 0...] + tile * weights
+                counts![0..., rows, columns, 0...] = counts![0..., rows, columns, 0...] + weights
+                eval(output!, counts!)
+            }
+        }
+        guard let output, let counts else { throw GenerationError.sizeTooSmall }
+        return output / maximum(counts, MLXArray(Float(1e-6)))
+    }
+
     /// `0.5 − 0.5·cos(π·t)` for `n` points from 0 to 1, as numpy's linspace spaces them.
     static func cosRamp(_ n: Int) -> [Float] {
         guard n > 0 else { return [] }

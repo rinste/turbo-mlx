@@ -6,7 +6,7 @@ import MLXNN
 /// cache and the loop of mflux's `QwenImage.generate_image` (true classifier-free guidance, the
 /// linear schedule). The 7B encoder is kept out of memory while the 20B transformer works in
 /// low-RAM mode, and vice versa: each side reloads lazily when it is next needed.
-public final class QwenImageModel: PreviewingFamilyModel, LoRAAdaptable {
+public final class QwenImageModel: PreviewingFamilyModel, LoRAAdaptable, ImageToImageFamily {
     public let config: QwenImageConfig
     public let modelPath: URL
     public private(set) var bits: Int?
@@ -25,6 +25,11 @@ public final class QwenImageModel: PreviewingFamilyModel, LoRAAdaptable {
     private var promptCache: [String: MLXArray] = [:]
     /// Qwen's own negative prompt, encoded once.
     private var negativeEmbeds: MLXArray?
+    /// The VAE with its encoder, built the first time an image starts from a picture (its decoder's
+    /// weights stay unread); released after each picture with Save memory.
+    private var pictureEncoder: QwenImageVAE?
+    /// The last picture encoded, so the images of a batch encode it once.
+    private var startingPicture: (key: String, latents: MLXArray)?
 
     /// Loads the checkpoint at `modelPath` (mflux format). Weights stay lazy until first use.
     public init(modelPath: URL, config: QwenImageConfig, loadTokenizer: Bool = true) throws {
@@ -140,6 +145,10 @@ public final class QwenImageModel: PreviewingFamilyModel, LoRAAdaptable {
         if let negativePrompt = request.negativePrompt { try encode(negativePrompt) }
         let negativeEntry = request.negativePrompt.map { promptCache[$0] } ?? negativeEmbeds
         guard let prompt = promptCache[request.prompt], let negative = negativeEntry else { throw GenerationError.cancelled }
+        // Image to image: the picture's latents, mixed with the noise at the sigma of the step the
+        // loop starts from (mflux's `Img2Img`).
+        let start = request.imagePath == nil ? 0 : ImageToImage.startStep(steps: request.steps, strength: request.imageStrength)
+        let picture = start > 0 ? try startingLatents(path: request.imagePath!, width: width, height: height) : nil
         if isCancelled() { throw GenerationError.cancelled }
 
         phase(.denoising)
@@ -148,10 +157,12 @@ public final class QwenImageModel: PreviewingFamilyModel, LoRAAdaptable {
         let schedule = LinearSchedule(steps: request.steps, width: width, height: height, shift: config.shift)
         let guidance = Float(request.guidance)
         var latents = Self.initialLatents(width: width, height: height, seed: request.seed)
+        if let picture { latents = ImageToImage.noised(clean: picture, noise: latents, sigma: schedule.sigmas[start]) }
         // The reference keeps the latents, and with them the stream, in float32; the 16-bit option
         // starts them in bf16, which the transformer follows (the decode stays in float32).
         if request.halfPrecision { latents = latents.asType(.bfloat16) }
-        for t in 0 ..< request.steps {
+        let steps = request.steps - start
+        for t in start ..< request.steps {
             let sigma = schedule.sigmas[t]
             var noise = transformer(latents: latents, prompt: prompt, timestep: sigma, latentHeight: latentHeight, latentWidth: latentWidth)
             // At guidance 1 the unconditional pass would cancel out exactly: skip it.
@@ -159,13 +170,13 @@ public final class QwenImageModel: PreviewingFamilyModel, LoRAAdaptable {
                 let negativeNoise = transformer(latents: latents, prompt: negative, timestep: sigma, latentHeight: latentHeight, latentWidth: latentWidth)
                 noise = Self.guidedNoise(noise, negative: negativeNoise, guidance: guidance)
             }
-            let glimpse = LatentPreview.shows(step: t + 1, of: request.steps)
+            let glimpse = LatentPreview.shows(step: t - start + 1, of: steps)
                 ? LatentPreview.predicted(latents: latents, noise: noise, sigma: sigma) : nil
             latents = schedule.step(latents: latents, noise: noise, index: t)
             eval(latents)
-            progress(t + 1, request.steps)
+            progress(t - start + 1, steps)
             if let glimpse {
-                preview(Preview(pixels: Self.previewPixels(latents: glimpse, latentHeight: latentHeight, latentWidth: latentWidth, vae: vae), step: t + 1))
+                preview(Preview(pixels: Self.previewPixels(latents: glimpse, latentHeight: latentHeight, latentWidth: latentWidth, vae: vae), step: t - start + 1))
             }
             if isCancelled() { throw GenerationError.cancelled }
         }
@@ -175,6 +186,32 @@ public final class QwenImageModel: PreviewingFamilyModel, LoRAAdaptable {
         let pixels = try decode(latents: latents.asType(.float32), latentHeight: latentHeight, latentWidth: latentWidth, vae: vae, isCancelled: isCancelled)
         eval(pixels)
         return GeneratedImage(pixels: pixels)
+    }
+
+    /// The picture at `path` as the loop's clean latents, packed [1, (H/16)·(W/16), 64] like the noise
+    /// (`QwenLatentCreator.pack_latents`): resized to the image's size, encoded and normalized (in
+    /// tiles with Save memory, as mflux's low-RAM mode encodes it), kept for the next image of the batch.
+    public func startingLatents(path: String, width: Int, height: Int) throws -> MLXArray {
+        let key = "\(path)|\(width)x\(height)"
+        if let startingPicture, startingPicture.key == key { return startingPicture.latents }
+        if pictureEncoder == nil {
+            let vae = QwenImageVAE(outChannels: 3, baseDim: config.vaeBaseDim, normalization: .meanStd, withEncoder: true)
+            try WeightLoading.apply(QwenImageVAE.weights(try checkpoint.loadComponent("vae")), to: vae,
+                                    ignoring: QwenImageVAE.ignoresKeyWithEncoder)
+            pictureEncoder = vae
+        }
+        let vae = pictureEncoder!
+        let pixels = try ImageToImage.pixels(path: path, width: width, height: height)
+        let latents = QwenImageVAE.pack(lowRam
+            ? try VAETiling.encode(pixels, spatialScale: QwenImageVAE.spatialScale, encode: { vae.encode($0) })
+            : vae.encode(pixels))
+        eval(latents)
+        startingPicture = (key, latents)
+        if lowRam {
+            pictureEncoder = nil
+            Memory.clearCache()
+        }
+        return latents
     }
 
     /// A small image of what packed latents [1, h·w, 64] (a step's prediction) hold: the grid
