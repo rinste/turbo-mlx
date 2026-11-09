@@ -140,6 +140,9 @@ nonisolated enum WorkerCommand: Sendable {
             let url = HistoryStore.referenceURL(reference)
             if FileManager.default.fileExists(atPath: url.path) { params["image"] = url.path }
         }
+        // Several pictures go in order as "images", which the engine takes over "image".
+        let pictures = request.referenceImages.map(HistoryStore.referenceURL).filter { FileManager.default.fileExists(atPath: $0.path) }
+        if pictures.count > 1 { params["images"] = pictures.map(\.path) }
         if let lastFrame = request.lastFrameImage {
             let url = HistoryStore.referenceURL(lastFrame)
             if FileManager.default.fileExists(atPath: url.path) { params["last_image"] = url.path }

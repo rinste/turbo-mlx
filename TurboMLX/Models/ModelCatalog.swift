@@ -61,6 +61,21 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
         isLTX || self == .flux2Klein || self == .flux3Klein || self == .qwenImageEdit || self == .senseNova || isUpscaler || self == .idol
     }
 
+    /// How many reference images the model reads, in order: the engine's `images`, each picture's
+    /// tokens after the image's. FLUX 3 takes ten, `Flux3References.maxReferences` (BFL's pipeline);
+    /// FLUX.2 Klein has no limit in the engine or mflux, and four is what BFL's specifications give
+    /// [klein] 4B and 9B; Qwen-Image Edit has none either, and Qwen's card (from Edit 2509 on, which
+    /// first read several) finds it at its best with one to three. The others read one picture
+    /// (LTX's last frame is a picture of its own).
+    var maxReferenceImages: Int {
+        switch self {
+        case .flux3Klein: 10
+        case .flux2Klein: 4
+        case .qwenImageEdit: 3
+        default: 1
+        }
+    }
+
     /// A second image, the frame a clip ends on (LTX), with or without the first.
     var takesLastFrame: Bool { isLTX }
 

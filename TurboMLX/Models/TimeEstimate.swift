@@ -22,7 +22,7 @@ enum TimeEstimate {
 
     static func plan(model: ModelDescriptor, request: GenerationRequest, history: [HistoryItem], models: [ModelDescriptor]) -> Plan {
         let work = Work(model: model, size: request.size, steps: request.steps, guidance: request.guidance, frames: request.frames,
-                        reference: request.referenceImage, lastFrame: request.lastFrameImage != nil, quality: request.quality == true,
+                        references: request.referenceImages, lastFrame: request.lastFrameImage != nil, quality: request.quality == true,
                         gaussians: request.numGaussians, songSeconds: request.duration)
         let byID = Dictionary(models.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let (rates, _) = rates(for: model, work: work, lowMemory: request.lowMemory, halfPrecision: request.halfPrecision ?? false,
@@ -36,11 +36,11 @@ enum TimeEstimate {
 
     /// `count` generations with these settings, after loading the model if it is not in memory.
     static func estimate(
-        model: ModelDescriptor, size: PixelSize, steps: Int, guidance: Double, frames: Int?, reference: String?, lastFrame: Bool = false,
+        model: ModelDescriptor, size: PixelSize, steps: Int, guidance: Double, frames: Int?, references: [String], lastFrame: Bool = false,
         lowMemory: Bool, halfPrecision: Bool, quality: Bool = false, gaussians: Int? = nil, songSeconds: Double? = nil, count: Int,
         isLoaded: Bool, history: [HistoryItem], models: [ModelDescriptor]
     ) -> Result {
-        let work = Work(model: model, size: size, steps: steps, guidance: guidance, frames: frames, reference: reference,
+        let work = Work(model: model, size: size, steps: steps, guidance: guidance, frames: frames, references: references,
                         lastFrame: lastFrame, quality: quality, gaussians: gaussians, songSeconds: songSeconds)
         let byID = Dictionary(models.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let (rates, isFromHistory) = rates(for: model, work: work, lowMemory: lowMemory, halfPrecision: halfPrecision,
@@ -62,7 +62,7 @@ enum TimeEstimate {
 
         var denoise: Double { stepUnits.reduce(0, +) }
 
-        init(model: ModelDescriptor, size: PixelSize, steps: Int, guidance: Double, frames: Int?, reference: String?,
+        init(model: ModelDescriptor, size: PixelSize, steps: Int, guidance: Double, frames: Int?, references: [String],
              lastFrame: Bool = false, quality: Bool = false, gaussians: Int? = nil, songSeconds: Double? = nil) {
             let pixels = Double(size.width * size.height)
             cfg = model.supportsGuidance && guidance > 1
@@ -102,12 +102,14 @@ enum TimeEstimate {
                 stepUnits = [pixels / 256 / 1000]
                 decode = pixels / 1_000_000
             } else {
-                // 16 × 16 pixels per token; FLUX.2 Klein reads a reference image's tokens in every pass
-                // too, and Qwen-Image Edit its picture's, encoded at about the image's size.
+                // 16 × 16 pixels per token; FLUX.2 Klein reads its reference images' tokens in every
+                // pass too, FLUX 3 a single picture whole and several as Klein does, and Qwen-Image
+                // Edit each picture's, encoded at about the image's size.
                 let referenceTokens = switch model.family {
-                case .flux2Klein: Double(TimeEstimate.referenceTokens(reference))
-                case .flux3Klein: Double(TimeEstimate.flux3ReferenceTokens(reference))
-                case .qwenImageEdit: pixels / 256
+                case .flux2Klein: Double(references.map { TimeEstimate.referenceTokens($0) }.reduce(0, +))
+                case .flux3Klein where references.count > 1: Double(references.map { TimeEstimate.referenceTokens($0) }.reduce(0, +))
+                case .flux3Klein: Double(TimeEstimate.flux3ReferenceTokens(references.first))
+                case .qwenImageEdit: pixels / 256 * Double(max(references.count, 1))
                 default: 0.0
                 }
                 stepUnits = Array(repeating: (cfg ? 2 : 1) * Self.attended(pixels / 256 + referenceTokens) / 1000, count: max(steps, 0))
@@ -200,7 +202,7 @@ enum TimeEstimate {
             let request = item.request
             guard let timings = item.timings, let denoise = timings["denoise"], denoise > 0 else { return nil }
             work = Work(model: model, size: request.size, steps: request.steps, guidance: request.guidance, frames: request.frames,
-                        reference: request.referenceImage, lastFrame: request.lastFrameImage != nil, quality: request.quality == true,
+                        references: request.referenceImages, lastFrame: request.lastFrameImage != nil, quality: request.quality == true,
                         gaussians: request.numGaussians, songSeconds: request.duration)
             guard work.denoise > 0, work.decode > 0 else { return nil }
             self.denoise = denoise
@@ -267,7 +269,8 @@ enum TimeEstimate {
 
     /// The tokens a reference image adds to each of FLUX.2 Klein's passes, as the engine encodes it
     /// (`KleinReference`): in its own proportions at most about a megapixel, sides cut to multiples of
-    /// 16, a token per 16 × 16 pixels. Read from the file's header once per picture.
+    /// 16, a token per 16 × 16 pixels. FLUX 3 reads each of several pictures the same way
+    /// (`Flux3References.prepareMultiReference`). Read from the file's header once per picture.
     static func referenceTokens(_ name: String?) -> Int {
         guard let name else { return 0 }
         if let known = referenceTokenCounts[name] { return known }

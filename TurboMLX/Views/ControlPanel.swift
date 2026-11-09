@@ -1138,9 +1138,11 @@ private struct Reordering {
 // MARK: - Reference image
 
 /// The image a clip starts from, or an image is made from: dropped from Finder or from the history
-/// strip, chosen with the open panel, or picked among the generated images. A clip takes it as its
-/// first frame and the prompt says what happens next, and LTX a second one as its last frame;
-/// FLUX.2 Klein and Qwen-Image Edit change it as the prompt says.
+/// strip, chosen with the open panel, pasted, or picked among the generated images. A clip takes it
+/// as its first frame and the prompt says what happens next, and LTX a second one as its last frame;
+/// FLUX.2 Klein and Qwen-Image Edit change it as the prompt says. The models that read several
+/// pictures (`ModelFamily.maxReferenceImages`) show an empty slot under the last one, up to their
+/// limit; the prompt tells the pictures apart by their order.
 private struct ReferenceImageSection: View {
     @Environment(AppModel.self) private var app
     @Binding var settings: GenerationSettings
@@ -1149,6 +1151,8 @@ private struct ReferenceImageSection: View {
     private var isVideo: Bool { app.selectedModel?.family.media == .video }
     private var isUpscaler: Bool { app.selectedModel?.family.isUpscaler == true }
     private var takesLastFrame: Bool { app.selectedModel?.family.takesLastFrame == true }
+    /// How many pictures the model reads: one for most.
+    private var limit: Int { app.selectedModel?.family.maxReferenceImages ?? 1 }
 
     private var caption: String {
         if isVideo, takesLastFrame {
@@ -1156,6 +1160,12 @@ private struct ReferenceImageSection: View {
         }
         if isVideo { return "Optional. It is fitted to the clip’s size, cropped from the middle." }
         if isUpscaler { return "Needed. It keeps its proportions; a picture larger than 2048 pixels is reduced to that first." }
+        if limit > 1, app.selectedModel?.family.requiresReferenceImage == true {
+            return "Needed: the picture to edit, and up to \(limit - 1) more if you like. Each keeps its own proportions, at about the new image’s size, and the prompt can name them by their order: “the first picture”, “the second”. The new image takes the format below."
+        }
+        if limit > 1 {
+            return "Optional, up to \(limit) pictures. Each keeps its own proportions, at most about a megapixel, and the prompt can name them by their order: “the first picture”, “the second”. The new image takes the format below."
+        }
         if app.selectedModel?.family.requiresReferenceImage == true {
             return "Needed: the picture to edit. It keeps its own proportions, at about the new image’s size; the new image takes the format below."
         }
@@ -1167,7 +1177,19 @@ private struct ReferenceImageSection: View {
 
     var body: some View {
         Section {
-            ReferenceSlot(name: $settings.referenceImage, prompt: prompt, panelMessage: panelMessage, failure: $failure)
+            ReferenceSlot(name: first, prompt: prompt, panelMessage: panelMessage, failure: $failure)
+            if limit > 1, settings.referenceImage != nil {
+                // The pictures after the first that the model reads, then an empty slot for one more.
+                let more = Array(settings.moreReferenceImages.prefix(limit - 1))
+                ForEach(Array(more.enumerated()), id: \.element) { index, _ in
+                    ReferenceSlot(name: extra(index), prompt: "The prompt can call this one the \(Self.ordinal(index + 2)) picture.",
+                                  panelMessage: "Choose the \(Self.ordinal(index + 2)) picture", failure: $failure, compact: true)
+                }
+                if more.count < limit - 1 {
+                    ReferenceSlot(name: another, prompt: "Drop a \(Self.ordinal(more.count + 2)) picture here, or pick one.",
+                                  panelMessage: "Choose the \(Self.ordinal(more.count + 2)) picture", failure: $failure, compact: true)
+                }
+            }
             if takesLastFrame {
                 ReferenceSlot(
                     name: $settings.lastFrameImage,
@@ -1176,7 +1198,7 @@ private struct ReferenceImageSection: View {
                 )
             }
         } header: {
-            Text(isUpscaler ? "Picture to Upscale" : takesLastFrame ? "First and Last Frames" : "Reference Image")
+            Text(isUpscaler ? "Picture to Upscale" : takesLastFrame ? "First and Last Frames" : limit > 1 ? "Reference Images" : "Reference Image")
         } footer: {
             if let failure {
                 Text(failure).font(.caption).foregroundStyle(.red)
@@ -1188,8 +1210,55 @@ private struct ReferenceImageSection: View {
         }
     }
 
+    /// The first picture. Removed, the next one takes its place; on a model that reads one picture
+    /// the others, which it does not show, go with it.
+    private var first: Binding<String?> {
+        Binding {
+            settings.referenceImage
+        } set: { name in
+            // One write: through the binding, each separate one would start from the same old
+            // settings and only the last would stay.
+            var updated = settings
+            if name == nil, limit > 1, !updated.moreReferenceImages.isEmpty {
+                updated.referenceImage = updated.moreReferenceImages.removeFirst()
+            } else {
+                updated.referenceImage = name
+                if name == nil { updated.moreReferenceImages = [] }
+            }
+            settings = updated
+        }
+    }
+
+    /// The `index`-th picture after the first. Removed, the ones after it move up.
+    private func extra(_ index: Int) -> Binding<String?> {
+        Binding {
+            settings.moreReferenceImages.indices.contains(index) ? settings.moreReferenceImages[index] : nil
+        } set: { name in
+            guard settings.moreReferenceImages.indices.contains(index) else { return }
+            if let name { settings.moreReferenceImages[index] = name } else { settings.moreReferenceImages.remove(at: index) }
+        }
+    }
+
+    /// The empty slot after the last picture: what is given there comes after the others.
+    private var another: Binding<String?> {
+        Binding {
+            nil
+        } set: { name in
+            if let name { settings.moreReferenceImages.append(name) }
+        }
+    }
+
+    /// How the prompt can name the `number`-th picture: "first", "second"… (FLUX 3 reads ten).
+    private static func ordinal(_ number: Int) -> String {
+        let names = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"]
+        return names.indices.contains(number - 1) ? names[number - 1] : "\(number)th"
+    }
+
     private var prompt: String {
-        switch (settings.referenceImage == nil, isVideo, isUpscaler) {
+        if limit > 1, settings.referenceImage != nil, !settings.moreReferenceImages.isEmpty {
+            return "The prompt can call this one the first picture."
+        }
+        return switch (settings.referenceImage == nil, isVideo, isUpscaler) {
         case (true, true, _): "Drop an image here, or pick one: the clip starts from it."
         case (true, _, true): "Drop an image here, or pick one: it comes out larger, with sharper detail."
         case (true, _, _): "Drop an image here, or pick one: the prompt says what to change in it."
@@ -1205,20 +1274,32 @@ private struct ReferenceImageSection: View {
 }
 
 /// One reference image of the section: its thumbnail or an empty well to drop on, and the buttons
-/// to choose, pick from the history or remove it. `name` is a file in the references folder.
+/// to choose, pick from the history, paste or remove it. `name` is a file in the references folder.
+/// ⌘V pastes here while the slot has the focus (a click on it gives it) or the pointer is over it,
+/// unless a text is being edited: the prompt keeps its own paste. The slots after the first are
+/// `compact`, with a smaller thumbnail.
 private struct ReferenceSlot: View {
     @Environment(AppModel.self) private var app
     @Binding var name: String?
     let prompt: String
     let panelMessage: String
     @Binding var failure: String?
+    var compact = false
     @State private var isTargeted = false
     @State private var showsHistory = false
+    /// Whether the pasteboard holds a picture, looked at again when the app comes to the front and
+    /// when the pointer comes over the slot: the pasteboard tells no one when it changes.
+    @State private var canPaste = false
+    @State private var pasteMonitor: Any?
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
+            // A click on the picture or the well gives the slot the focus, for ⌘V.
             preview
-            VStack(alignment: .leading, spacing: 8) {
+                .contentShape(RoundedRectangle(cornerRadius: 6))
+                .onTapGesture { isFocused = true }
+            VStack(alignment: .leading, spacing: compact ? 6 : 8) {
                 Text(prompt)
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -1235,10 +1316,16 @@ private struct ReferenceSlot: View {
                                 use(app.url(for: item))
                             }
                         }
+                    // Paste in an empty slot, Remove in a full one, which ⌘V still replaces: the
+                    // row stays as narrow as the column.
                     if name != nil {
                         Button("Remove", role: .destructive) {
                             withAnimation(.snappy) { name = nil }
                         }
+                    } else {
+                        Button("Paste") { paste() }
+                            .help("Paste an image you copied, or an image file copied in Finder (⌘V)")
+                            .disabled(!canPaste)
                     }
                 }
                 .controlSize(.small)
@@ -1248,8 +1335,25 @@ private struct ReferenceSlot: View {
         .padding(.vertical, 2)
         .contentShape(Rectangle())
         .onDrop(of: [.fileURL, .image, .movie], isTargeted: $isTargeted) { providers in accept(providers) }
+        .focusable()
+        .focused($isFocused)
+        .focusEffectDisabled()
+        .onPasteCommand(of: [.fileURL, .image]) { _ in paste() }
+        .onHover { inside in
+            if inside {
+                canPaste = NSPasteboard.general.hasPicture
+                startPasteMonitor()
+            } else {
+                stopPasteMonitor()
+            }
+        }
+        .onAppear { canPaste = NSPasteboard.general.hasPicture }
+        .onDisappear { stopPasteMonitor() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            canPaste = NSPasteboard.general.hasPicture
+        }
         .overlay {
-            if isTargeted {
+            if isTargeted || isFocused {
                 RoundedRectangle(cornerRadius: 8)
                     .strokeBorder(Color.active, lineWidth: 2)
                     .padding(-6)
@@ -1260,23 +1364,56 @@ private struct ReferenceSlot: View {
     @ViewBuilder
     private var preview: some View {
         let shape = RoundedRectangle(cornerRadius: 6)
+        let size = compact ? CGSize(width: 64, height: 48) : CGSize(width: 96, height: 72)
         if let name {
             FileImage(url: HistoryStore.referenceURL(name), maxPixelSize: 320)
                 .aspectRatio(contentMode: .fill)
-                .frame(width: 96, height: 72)
+                .frame(width: size.width, height: size.height)
                 .clipShape(shape)
                 .overlay { shape.strokeBorder(Color.primary.opacity(0.12)) }
-                .help("Drop another image to replace it")
+                .help("Drop or paste another image to replace it")
         } else {
             shape
                 .strokeBorder(.tertiary, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
-                .frame(width: 96, height: 72)
+                .frame(width: size.width, height: size.height)
                 .overlay {
                     Image(systemName: "photo.badge.plus")
-                        .font(.title2)
+                        .font(compact ? .title3 : .title2)
                         .foregroundStyle(.tertiary)
                 }
         }
+    }
+
+    /// The picture on the pasteboard, as a drop brings it: a file copied in Finder (an image, or a
+    /// clip for its first frame), else an image copied in an app.
+    private func paste() {
+        let pasteboard = NSPasteboard.general
+        if let url = pasteboard.pictureFile {
+            use(url)
+        } else if let type = pasteboard.pictureType, let data = pasteboard.data(forType: type) {
+            Task { await importing { try HistoryStore.importReference(data: data) } }
+        } else {
+            failure = "There is no image to paste: copy one first, or an image file in Finder."
+        }
+    }
+
+    /// ⌘V while the pointer is over the slot and the pasteboard holds a picture, which a focused
+    /// text field or editor keeps for itself.
+    private func startPasteMonitor() {
+        guard pasteMonitor == nil else { return }
+        pasteMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+                  event.charactersIgnoringModifiers == "v", !event.isARepeat,
+                  !(event.window?.firstResponder is NSText), NSPasteboard.general.hasPicture
+            else { return event }
+            paste()
+            return nil
+        }
+    }
+
+    private func stopPasteMonitor() {
+        if let pasteMonitor { NSEvent.removeMonitor(pasteMonitor) }
+        pasteMonitor = nil
     }
 
     private func choose() {
@@ -1335,6 +1472,26 @@ private struct ReferenceSlot: View {
         }
         return false
     }
+}
+
+private extension NSPasteboard {
+    /// A file copied in Finder that can be a reference: an image, or a clip for its first frame,
+    /// judged by its name's extension without opening it.
+    var pictureFile: URL? {
+        let urls = readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        return urls.first { url in
+            UTType(filenameExtension: url.pathExtension).map { $0.conforms(to: .image) || $0.conforms(to: .movie) } == true
+        }
+    }
+
+    /// The type of an image copied in an app (a screenshot, a picture in a browser). Finder puts a
+    /// copied file's icon here too, as an image: with a file, only the file counts.
+    var pictureType: PasteboardType? {
+        guard !canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) else { return nil }
+        return types?.first { UTType($0.rawValue)?.conforms(to: .image) == true }
+    }
+
+    var hasPicture: Bool { pictureFile != nil || pictureType != nil }
 }
 
 /// The generated images and clips (by their first frame), newest first, to pick a reference from.
@@ -2134,7 +2291,7 @@ private struct GenerateBar: View {
                        model.stepRange(quality: settings.fullPipeline(for: model)).upperBound),
             guidance: settings.guidance,
             frames: model.family.media == .video ? settings.videoFrames : nil,
-            reference: model.family.takesReferenceImage ? settings.referenceImage : nil,
+            references: settings.referenceImages(for: model.family),
             lastFrame: model.family.takesLastFrame && settings.lastFrameImage != nil,
             lowMemory: settings.lowMemory,
             halfPrecision: model.family.supportsHalfPrecision && settings.halfPrecision,
