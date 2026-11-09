@@ -119,9 +119,9 @@ private struct ModelSelection: View {
             }
 
             if let model = app.selectedModel {
-                // The LoRA goes with the model, right under its picker.
+                // The LoRAs go with the model, right under its picker.
                 if model.family.takesLoRAs {
-                    LoRARow(model: model)
+                    LoRARows(model: model)
                 }
                 // A line limit, not fixedSize: this bar does not scroll, and a text sized for any
                 // width asks for one character per line when the window measures its minimum
@@ -499,10 +499,12 @@ private struct ModelMenu: View {
 
 // MARK: - LoRA
 
-/// The LoRA the model generates with, under it: one of the LoRAs added before or a file added now
-/// (picked, or dropped on the row), and how strongly it applies; under them the words its training
-/// captions used, which a click puts in the prompt.
-private struct LoRARow: View {
+/// The LoRAs the model generates with, under it, a row each (or one row, None, without any): one of
+/// the LoRAs added before or a file added now (picked, or dropped on the rows, which puts it after
+/// the others), and how strongly it applies; under each, the words its training captions used,
+/// which a click puts in the prompt. A single LoRA's row is the same as before several could be
+/// stacked.
+private struct LoRARows: View {
     @Environment(AppModel.self) private var app
     let model: ModelDescriptor
     /// What adding a file came to, until the next choice.
@@ -511,29 +513,15 @@ private struct LoRARow: View {
     @State private var isTargeted = false
 
     var body: some View {
-        let state = app.loraState(for: model)
+        let choices = app.settings.loras(for: model.family)
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                // As wide as "Model:" above, so the two pickers start together.
-                ZStack(alignment: .leading) {
-                    Text("Model:").hidden()
-                    Text("LoRA:")
-                }
-                LoRAMenu(model: model, add: chooseFile, choose: { message = nil })
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                if let choice = app.settings.lora(for: model.family) {
-                    Slider(value: scale(of: choice), in: LoRAChoice.scaleRange)
-                        .controlSize(.small)
-                        .frame(width: 96)
-                        .help("How strongly the LoRA applies: 1 as it was trained, less to tone it down, more to push it further.")
-                        .accessibilityLabel("LoRA strength")
-                    Text(choice.scale, format: .number.precision(.fractionLength(2)))
-                        .font(.callout.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .frame(width: 34, alignment: .trailing)
+            if choices.isEmpty {
+                row(nil, isFirst: true, isLast: true, removable: false)
+            } else {
+                ForEach(choices, id: \.file) { choice in
+                    row(choice, isFirst: choice == choices.first, isLast: choice == choices.last, removable: choices.count > 1)
                 }
             }
-            caption(state)
         }
         .padding(isTargeted ? 4 : 0)
         .background {
@@ -543,7 +531,7 @@ private struct LoRARow: View {
             guard let provider = providers.first, provider.canLoadObject(ofClass: URL.self) else { return false }
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
                 guard let url else { return }
-                Task { @MainActor in await add(url) }
+                Task { @MainActor in await add(url, replacing: nil) }
             }
             return true
         }
@@ -553,12 +541,50 @@ private struct LoRARow: View {
         }
     }
 
+    /// A LoRA's row and its caption; the label only on the first. One LoRA is taken off with None in
+    /// its menu, as before; with several, each row also has a button for it.
     @ViewBuilder
-    private func caption(_ state: AppModel.LoRAState) -> some View {
+    private func row(_ choice: LoRAChoice?, isFirst: Bool, isLast: Bool, removable: Bool) -> some View {
+        HStack(spacing: 8) {
+            // As wide as "Model:" above, so the two pickers start together.
+            ZStack(alignment: .leading) {
+                Text("Model:").hidden()
+                if isFirst { Text("LoRA:") }
+            }
+            LoRAMenu(model: model, current: choice, add: chooseFile, use: use)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if let choice {
+                Slider(value: scale(of: choice), in: LoRAChoice.scaleRange)
+                    .controlSize(.small)
+                    .frame(width: 96)
+                    .help("How strongly the LoRA applies: 1 as it was trained, less to tone it down, more to push it further.")
+                    .accessibilityLabel("LoRA strength")
+                Text(choice.scale, format: .number.precision(.fractionLength(2)))
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 34, alignment: .trailing)
+                if removable {
+                    Button {
+                        use(nil, replacing: choice)
+                    } label: {
+                        Image(systemName: "xmark.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .help("Remove this LoRA")
+                }
+            }
+        }
+        caption(app.loraState(of: choice, for: model), isLast: isLast)
+    }
+
+    /// What the LoRA's file says, or under the last row what adding a file came to.
+    @ViewBuilder
+    private func caption(_ state: AppModel.LoRAState, isLast: Bool) -> some View {
         Group {
-            if isAdding {
+            if isLast, isAdding {
                 Text("Adding the LoRA…").foregroundStyle(.secondary)
-            } else if let message {
+            } else if isLast, let message {
                 Text(message).foregroundStyle(.secondary)
             } else {
                 switch state {
@@ -585,24 +611,41 @@ private struct LoRARow: View {
         Binding {
             choice.scale
         } set: { value in
-            var updated = choice
-            updated.scale = (value * 20).rounded() / 20
-            app.settings.setLoRA(updated, for: model.family)
+            var choices = app.settings.loras(for: model.family)
+            guard let index = choices.firstIndex(where: { $0.file == choice.file }) else { return }
+            choices[index].scale = (value * 20).rounded() / 20
+            app.settings.setLoRAs(choices, for: model.family)
         }
     }
 
-    private func chooseFile() {
+    /// Puts a LoRA of the library in place of `choice`, at its strength, or without one after the
+    /// others; no file takes `choice` off.
+    private func use(_ file: String?, replacing choice: LoRAChoice?) {
+        message = nil
+        var choices = app.settings.loras(for: model.family)
+        let index = choices.firstIndex { $0.file == choice?.file }
+        if let file {
+            let chosen = LoRAChoice(file: file, scale: choice?.scale ?? 1)
+            if let index { choices[index] = chosen } else { choices.append(chosen) }
+        } else if let index {
+            choices.remove(at: index)
+        }
+        app.settings.setLoRAs(choices, for: model.family)
+    }
+
+    private func chooseFile(replacing choice: LoRAChoice?) {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [UTType(filenameExtension: "safetensors") ?? .data]
         panel.allowsMultipleSelection = false
         panel.message = "Choose a LoRA for \(model.family.displayName) (a .safetensors file)"
         panel.prompt = "Add"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        Task { await add(url) }
+        Task { await add(url, replacing: choice) }
     }
 
-    /// Adds the file to the LoRAs and, when it is for this model, chooses it.
-    private func add(_ url: URL) async {
+    /// Adds the file to the LoRAs and, when it is for this model, puts it in place of `choice` or
+    /// without one after the others: once, and no more than a model takes.
+    private func add(_ url: URL, replacing choice: LoRAChoice?) async {
         let name = url.deletingPathExtension().lastPathComponent
         do {
             // A LoRA for a model the app does not run is not worth a copy.
@@ -618,37 +661,51 @@ private struct LoRARow: View {
                 message = "Added to your LoRAs. It’s for \(base.displayName): choose that model to use it."
                 return
             }
-            message = nil
-            let scale = app.settings.lora(for: model.family)?.scale ?? 1
-            app.settings.setLoRA(LoRAChoice(file: entry.file, scale: scale), for: model.family)
+            let choices = app.settings.loras(for: model.family)
+            if entry.file != choice?.file, choices.contains(where: { $0.file == entry.file }) {
+                message = "\(entry.name) is already one of this model’s LoRAs."
+                return
+            }
+            if choice == nil, choices.count >= LoRAChoice.maxCount {
+                message = "Added to your LoRAs. Up to \(LoRAChoice.maxCount) apply at once: remove one to use it."
+                return
+            }
+            use(entry.file, replacing: choice)
         } catch {
             message = "Couldn’t add \(name): \(error.localizedDescription)"
         }
     }
 }
 
-/// The LoRA picker: None, the LoRAs this model can use, those for other models (shown, not
-/// chosen), then adding a file and the folder they are kept in.
+/// A LoRA's picker: None, the LoRAs this model can use (one already in another row can't be
+/// chosen twice), those for other models (shown, not chosen), then adding a file, another LoRA
+/// after the others, and the folder they are kept in.
 private struct LoRAMenu: View {
     @Environment(AppModel.self) private var app
     let model: ModelDescriptor
-    let add: () -> Void
-    let choose: () -> Void
+    /// The row's LoRA; nil in the row without one.
+    let current: LoRAChoice?
+    /// Opens a file to put in place of a LoRA, or (nil) after the others.
+    let add: (_ replacing: LoRAChoice?) -> Void
+    /// Puts a LoRA of the library (nil: none) in place of a LoRA, or (nil) after the others.
+    let use: (_ file: String?, _ replacing: LoRAChoice?) -> Void
     @State private var toTrash: LoRALibrary.Entry?
 
     var body: some View {
-        let current = app.settings.lora(for: model.family)
+        let chosen = app.settings.loras(for: model.family)
         let entries = app.loraLibrary.entries
         let usable = entries.filter { $0.info?.base.fits(model) != false }
         let others = entries.filter { $0.info?.base.fits(model) == false }
+        let unused = usable.filter { entry in !chosen.contains { $0.file == entry.file } }
         Menu {
-            Toggle("None", isOn: Binding(get: { current == nil }, set: { if $0 { select(nil) } }))
+            Toggle("None", isOn: Binding(get: { current == nil }, set: { if $0 { use(nil, current) } }))
             if !usable.isEmpty {
                 Divider()
                 ForEach(usable) { entry in
-                    Toggle(isOn: Binding(get: { current?.file == entry.file }, set: { if $0 { select(entry) } })) {
+                    Toggle(isOn: Binding(get: { current?.file == entry.file }, set: { if $0 { use(entry.file, current) } })) {
                         Text(entry.name)
                     }
+                    .disabled(entry.file != current?.file && chosen.contains { $0.file == entry.file })
                 }
             }
             if !others.isEmpty {
@@ -659,7 +716,16 @@ private struct LoRAMenu: View {
                 }
             }
             Divider()
-            Button("Add LoRA File…", action: add)
+            Button("Add LoRA File…") { add(current) }
+            if current != nil, chosen.count < LoRAChoice.maxCount {
+                Menu("Add Another LoRA") {
+                    ForEach(unused) { entry in
+                        Button(entry.name) { use(entry.file, nil) }
+                    }
+                    if !unused.isEmpty { Divider() }
+                    Button("Add LoRA File…") { add(nil) }
+                }
+            }
             Button("Show LoRAs in Finder") {
                 try? FileManager.default.createDirectory(at: LoRALibrary.directory, withIntermediateDirectories: true)
                 if let entry = current.flatMap({ app.loraLibrary.entry($0.file) }) {
@@ -685,8 +751,8 @@ private struct LoRAMenu: View {
             Button("Move to Trash", role: .destructive) {
                 if let entry = toTrash {
                     try? app.loraLibrary.remove(entry.file)
-                    for family in ModelFamily.allCases where app.settings.lora(for: family)?.file == entry.file {
-                        app.settings.setLoRA(nil, for: family)
+                    for family in ModelFamily.allCases where app.settings.loras(for: family).contains(where: { $0.file == entry.file }) {
+                        app.settings.setLoRAs(app.settings.loras(for: family).filter { $0.file != entry.file }, for: family)
                     }
                 }
                 toTrash = nil
@@ -694,12 +760,6 @@ private struct LoRAMenu: View {
         } message: {
             Text("Images made with it keep it in their settings, but can't be made again until it is added back.")
         }
-    }
-
-    private func select(_ entry: LoRALibrary.Entry?) {
-        choose()
-        let scale = app.settings.lora(for: model.family)?.scale ?? 1
-        app.settings.setLoRA(entry.map { LoRAChoice(file: $0.file, scale: scale) }, for: model.family)
     }
 }
 

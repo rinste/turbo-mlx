@@ -159,9 +159,12 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     var songSeconds = 60.0
     /// A sound effect's length (the prompt describes the sound).
     var soundSeconds = 10.0
-    /// The LoRA chosen for each family that takes them (`ModelFamily.takesLoRAs`), by its raw
-    /// value: a LoRA fits one family, so each keeps its own.
+    /// The LoRAs chosen for each family that takes them (`ModelFamily.takesLoRAs`), by its raw
+    /// value: a LoRA fits one family, so each keeps its own. The first is in `loras`, where the
+    /// versions that took one LoRA per model look for it (they still read these settings), the
+    /// others after it in `moreLoRAs`; `loras(for:)` gives them all, in the order they were added.
     var loras: [String: LoRAChoice] = [:]
+    var moreLoRAs: [String: [LoRAChoice]] = [:]
 
     var size: PixelSize {
         usesCustomSize
@@ -210,12 +213,14 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         videoQuality && model.family.isLTX
     }
 
-    func lora(for family: ModelFamily) -> LoRAChoice? {
-        family.takesLoRAs ? loras[family.rawValue] : nil
+    func loras(for family: ModelFamily) -> [LoRAChoice] {
+        guard family.takesLoRAs, let first = loras[family.rawValue] else { return [] }
+        return [first] + (moreLoRAs[family.rawValue] ?? [])
     }
 
-    mutating func setLoRA(_ choice: LoRAChoice?, for family: ModelFamily) {
-        loras[family.rawValue] = choice
+    mutating func setLoRAs(_ choices: [LoRAChoice], for family: ModelFamily) {
+        loras[family.rawValue] = choices.first
+        moreLoRAs[family.rawValue] = choices.count > 1 ? Array(choices.dropFirst()) : nil
     }
 
     /// The prompt sent to the model: the blocks joined in order, already trimmed.
@@ -245,7 +250,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         case blocks, negativePrompt, aspect, resolution, usesCustomSize, customWidth, customHeight, steps, guidance,
              randomSeed, seed, batchCount, transparentBackground, lowMemory,
              videoResolution, videoSeconds, videoFrameRate, videoAutoDuration, referenceImage, lastFrameImage, upscale, softness,
-             halfPrecision, livePreview, loras, videoQuality, gaussians, objectMode, lyrics, instrumental, songSeconds, soundSeconds
+             halfPrecision, livePreview, loras, moreLoRAs, videoQuality, gaussians, objectMode, lyrics, instrumental, songSeconds, soundSeconds
     }
 
     /// Settings saved before the prompt had blocks kept a single string.
@@ -285,6 +290,8 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
         halfPrecision = try values.decodeIfPresent(Bool.self, forKey: .halfPrecision) ?? halfPrecision
         livePreview = try values.decodeIfPresent(Bool.self, forKey: .livePreview) ?? livePreview
         loras = try values.decodeIfPresent([String: LoRAChoice].self, forKey: .loras) ?? loras
+        // Absent from settings saved before a model could take several LoRAs: each has one.
+        moreLoRAs = try values.decodeIfPresent([String: [LoRAChoice]].self, forKey: .moreLoRAs) ?? moreLoRAs
         videoQuality = try values.decodeIfPresent(Bool.self, forKey: .videoQuality) ?? videoQuality
         gaussians = try values.decodeIfPresent(Int.self, forKey: .gaussians) ?? gaussians
         objectMode = try values.decodeIfPresent(ObjectMode.self, forKey: .objectMode) ?? objectMode
