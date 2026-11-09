@@ -625,6 +625,23 @@ enum ModelCatalog {
         ),
     ]
 
+    // Qwen2.5-VL 7B Instruct (Alibaba, Apache 2.0), which Describe Image runs to write a prompt from a picture: a helper
+    // downloaded the first time a picture is described, not a model to generate with. mlx-community's pack made with
+    // mlx-vlm (the language model in 4 bits, the vision tower in float16), run as mlx-vlm 0.7.12 runs it, the picture at
+    // 256 to 1280 tokens, the words chosen greedily, and checked against it on eight pictures (on the MLX of mlx-swift):
+    // 971 of the 1,085 tokens written as mlx-vlm's, six of the eight texts identical, the two others parting at exact
+    // ties. Measured on an M5 Ultra (9 November 2026): a description in 1 to 2.5 s (loading 0.3 s, reading the picture
+    // up to 0.5 s, writing 140 tokens a second), peaking at 6.9 GB. The 3B model would be lighter, but its licence is for
+    // research only.
+    static let describer = ModelFamily.Companion(
+        repo: "mlx-community/Qwen2.5-VL-7B-Instruct-4bit", revision: "fdcc572e8b05ba9daeaf71be8c9e4267c826ff9b",
+        patterns: ["README.md", "config.json", "model.safetensors.index.json", "model-*.safetensors", "tokenizer.json"],
+        requiredFiles: ["config.json", "model.safetensors.index.json", "model-00001-of-00002.safetensors",
+                        "model-00002-of-00002.safetensors", "tokenizer.json"],
+        name: "Qwen2.5-VL 7B", license: "Apache 2.0"
+    )
+    static let describerBytes: Int64 = 5_649_033_529
+
     /// FLUX.2 Klein entries of mflux's registry, for custom checkpoints whose name is ambiguous.
     static let kleinVariants: [(key: String, label: String)] = [
         ("flux2-klein-4b", "4B distilled"),

@@ -105,6 +105,7 @@ private struct ModelsSettings: View {
                         Text(subtitle(for: model))
                     }
                 }
+                DescriberRow()
             }
             ModelsFolderSection()
             HuggingFaceTokenSection()
@@ -123,6 +124,56 @@ private struct ModelsSettings: View {
         }
         let size = model.sizeBytes.map { " · \(Format.bytes($0))" } ?? ""
         return "\(state)\(size) · \(model.id)"
+    }
+}
+
+/// Describe Image's describer, among the models: downloaded on first use, and moved to the Trash as they are.
+private struct DescriberRow: View {
+    @Environment(AppModel.self) private var app
+    @State private var confirmsTrash = false
+
+    private var describer: ModelFamily.Companion { ModelCatalog.describer }
+
+    var body: some View {
+        LabeledContent {
+            HStack(spacing: 8) {
+                if let progress = app.downloads.progress(of: describer) {
+                    ProgressView(value: progress.fraction ?? 0)
+                        .frame(width: 80)
+                    Button("Cancel") { app.cancelDescriberDownload() }
+                } else if let location = app.describerLocation {
+                    Button("Show") { NSWorkspace.shared.activateFileViewerSelecting([location]) }
+                } else {
+                    Button("Download") { app.downloadDescriber(then: nil) }
+                }
+                if app.describerBytesOnDisk > 0 {
+                    Button {
+                        confirmsTrash = true
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(app.downloads.progress(of: describer) != nil || app.describing != nil)
+                    .help("Move the downloaded files to the Trash")
+                }
+            }
+        } label: {
+            Text("\(describer.name), for Describe Image")
+            Text("\(state) · \(Format.bytes(ModelCatalog.describerBytes)) · \(describer.repo)")
+        }
+        .confirmationDialog("Move \(describer.name) to the Trash?", isPresented: $confirmsTrash) {
+            Button("Move to Trash", role: .destructive) { app.trashDescriber() }
+        } message: {
+            Text("Its \(Format.bytes(app.describerBytesOnDisk)) go to the Trash: empty it to free the space. Describe Image downloads it again the next time it is used. Other apps that use the Hugging Face cache, such as mlx-vlm, lose it too.")
+        }
+    }
+
+    private var state: String {
+        if app.describerLocation != nil { return "Downloaded" }
+        if app.describerBytesOnDisk > 0, app.downloads.progress(of: describer) == nil {
+            return "Partly downloaded (\(Format.bytes(app.describerBytesOnDisk)))"
+        }
+        return "Not downloaded"
     }
 }
 
@@ -313,6 +364,9 @@ private struct AboutSettings: View {
                     LabeledContent("\(companion.name), LTX-2.3’s text encoder") {
                         license(companion.license, URL(string: "https://ai.google.dev/gemma/terms"))
                     }
+                }
+                LabeledContent("\(ModelCatalog.describer.name), which describes pictures") {
+                    license(ModelCatalog.describer.license, URL(string: "https://huggingface.co/\(ModelCatalog.describer.repo)"))
                 }
             } header: {
                 Text("Models")

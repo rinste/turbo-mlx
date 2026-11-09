@@ -47,6 +47,12 @@ final class Server {
                     continue
                 }
                 engine.generate(id: id, spec: model, params: params)
+            case "describe":
+                guard let id = command.id, let model = command.model, let image = command.image else {
+                    emitter.log("[turbo] describe needs id, model and image")
+                    continue
+                }
+                engine.describe(id: id, spec: model, imagePath: image)
             case "load":
                 if let model = command.model { engine.load(model) }
             case "unload":

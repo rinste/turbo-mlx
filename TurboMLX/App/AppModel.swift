@@ -140,6 +140,29 @@ final class AppModel {
     private(set) var activeJob: GenerationJob?
     var viewer = ViewerSelection.live
     var alert: AppAlert?
+
+    /// A picture being described into the prompt (Describe Image).
+    struct Description: Equatable {
+        let id = UUID()
+        let picture: URL
+        /// Sent to the engine (an engine that starts again has lost it).
+        var sent = false
+        /// The engine's phase: nil while it finishes what it was doing, then "loading", "encoding", "writing".
+        var phase: String?
+        /// The prompt block the text goes into, once the first words have come.
+        var block: PromptBlock.ID?
+    }
+
+    private(set) var describing: Description?
+    /// Where the describer is on disk, when it is downloaded (`ModelCatalog.describer`).
+    private(set) var describerLocation: URL?
+    /// A picture to describe once the user agrees to download the describer: the question shows while it is set.
+    var describerOffer: URL?
+    /// The picture to describe once the describer's download has finished.
+    private(set) var describeAfterDownload: URL?
+    /// The undo manager of the view that asked for the description, where ⌘Z finds the prompt it replaced.
+    @ObservationIgnored private weak var describeUndoManager: UndoManager?
+
     /// Model to generate with as soon as its download completes ("Download and Generate").
     private(set) var generateAfterDownload: String?
     @ObservationIgnored private var started = false
@@ -201,6 +224,9 @@ final class AppModel {
 
         backend.onReady = { [weak self] in
             self?.preloadRequested = nil
+            // A description sent to the engine before it started again is lost; one waiting for it goes now.
+            if self?.describing?.sent == true { self?.describing = nil }
+            self?.sendDescription()
             self?.pump()
             self?.preloadIfUseful()
         }
@@ -208,6 +234,7 @@ final class AppModel {
         backend.onCrash = { [weak self] in self?.backendCrashed($0) }
         downloads.onFinish = { [weak self] in self?.downloadFinished($0) }
         downloads.onQualityFinish = { [weak self] in self?.qualityDownloadFinished($0) }
+        downloads.onHelperFinish = { [weak self] _ in self?.describerDownloadFinished() }
         refreshInstalled()
     }
 
@@ -274,6 +301,8 @@ final class AppModel {
                 bytes[repo] = locator.bytesOnDisk(of: repo)
             }
         }
+        bytes[ModelCatalog.describer.repo] = locator.bytesOnDisk(of: ModelCatalog.describer.repo)
+        describerLocation = locator.location(of: ModelCatalog.describer)
         installed = found
         bytesOnDisk = bytes
         qualityInstalled = Set(found.compactMap { id, url in
@@ -711,6 +740,10 @@ final class AppModel {
             preloadRequested = nil
             return
         }
+        if let describing, event.id == describing.id.uuidString {
+            handleDescription(event)
+            return
+        }
         guard let job = activeJob, event.id == nil || event.id == job.id.uuidString else { return }
         if let total = event.total, (event.event == "progress" && job.phase != .composing) || event.phase == "denoising" {
             job.reportedTotal = Int(total)
@@ -808,6 +841,10 @@ final class AppModel {
     }
 
     private func backendCrashed(_ message: String) {
+        if describing != nil {
+            describing = nil
+            if !isBusy { alert = AppAlert(title: "The engine stopped", message: message, offersLog: true) }
+        }
         guard isBusy else { return }
         activeJob = nil
         queue.removeAll()
@@ -1091,4 +1128,144 @@ final class AppModel {
 
     func url(for item: HistoryItem) -> URL { history.url(for: item) }
     func posterURL(for item: HistoryItem) -> URL { history.posterURL(for: item) }
+
+    // MARK: Describe Image
+
+    /// Writes a prompt that describes the picture at `url` in place of the prompt, as A1111's Interrogate and
+    /// InvokeAI's Image to Prompt do: one block, its text coming in as the describer writes it, in the draft; ⌘Z brings
+    /// back what it replaced. When the describer is not on the Mac yet, the user is asked to download it first. A
+    /// generation under way goes on: the engine describes the picture after it, and a generation started meanwhile
+    /// waits the second or two a description takes.
+    func describe(_ url: URL, undoManager: UndoManager? = nil) {
+        describeUndoManager = undoManager
+        guard describerLocation != nil else {
+            if downloads.progress(of: ModelCatalog.describer) != nil {
+                describeAfterDownload = url
+            } else {
+                describerOffer = url
+            }
+            return
+        }
+        cancelDescription()
+        describing = Description(picture: url)
+        sendDescription()
+    }
+
+    /// A generated image, or a clip's first frame.
+    func describe(_ item: HistoryItem, undoManager: UndoManager? = nil) {
+        describe(item.kind == .image ? url(for: item) : posterURL(for: item), undoManager: undoManager)
+    }
+
+    /// Sends the description waiting for the engine, starting the engine if it is not running.
+    private func sendDescription() {
+        guard var current = describing, !current.sent else { return }
+        switch backend.status {
+        case .ready:
+            break
+        case .starting, .checking:
+            return // onReady sends it
+        case .stopped, .failed:
+            backend.ensureWorker()
+            return
+        }
+        guard let location = describerLocation else {
+            describing = nil
+            return
+        }
+        do {
+            try backend.send(.describe(id: current.id, describerPath: location.path, image: current.picture))
+            current.sent = true
+            describing = current
+        } catch {
+            describing = nil
+            alert = AppAlert(title: "Couldn’t describe the picture", message: error.localizedDescription, offersLog: true)
+        }
+    }
+
+    /// Stops the description; what it wrote stays in the prompt, for ⌘Z to take back.
+    func cancelDescription() {
+        guard let describing else { return }
+        self.describing = nil
+        if describing.sent { try? backend.send(.cancel(jobID: describing.id)) }
+    }
+
+    private func handleDescription(_ event: WorkerEvent) {
+        switch event.event {
+        case "phase":
+            describing?.phase = event.phase
+        case "text":
+            if let text = event.text { writeDescription(text) }
+        case "done":
+            if let text = event.text { writeDescription(text) }
+            describing = nil
+        case "cancelled":
+            describing = nil
+        case "failed":
+            describing = nil
+            alert = AppAlert(title: "Couldn’t describe the picture", message: event.message ?? "Unknown error", offersLog: true)
+        default:
+            break
+        }
+    }
+
+    /// The description so far, in the prompt. The first words replace the prompt with a block of their own, in the
+    /// draft, as one change that ⌘Z takes back; the next ones go into that block, as long as it is there: when other
+    /// settings took its place (an item of the history, ⌘Z), the description stops.
+    private func writeDescription(_ text: String) {
+        guard var current = describing, !text.isEmpty else { return }
+        guard let block = current.block else {
+            let block = PromptBlock(name: "", text: text)
+            current.block = block.id
+            describing = current
+            var new = settings
+            new.blocks = [block]
+            replaceControls(with: new, modelID: selectedModelID, viewer: .draft, source: .draft, actionName: "Describe Image",
+                            undoManager: describeUndoManager)
+            return
+        }
+        guard controlsSource == .draft, let index = settings.blocks.firstIndex(where: { $0.id == block }) else {
+            cancelDescription()
+            return
+        }
+        settings.blocks[index].text = text
+    }
+
+    /// The user agreed to download the describer: it downloads, then describes `picture`.
+    func downloadDescriber(then picture: URL?) {
+        describeAfterDownload = picture
+        describerOffer = nil
+        downloads.start(helper: ModelCatalog.describer, bytes: ModelCatalog.describerBytes, locator: locator)
+    }
+
+    func cancelDescriberDownload() {
+        describeAfterDownload = nil
+        downloads.cancel(helper: ModelCatalog.describer)
+        // What arrived stays, to resume from or to move to the Trash.
+        refreshInstalled()
+    }
+
+    private func describerDownloadFinished() {
+        refreshInstalled()
+        let picture = describeAfterDownload
+        describeAfterDownload = nil
+        if let failure = downloads.failure(of: ModelCatalog.describer) {
+            alert = AppAlert(title: "Couldn’t download \(ModelCatalog.describer.name)", message: failure, offersLog: true)
+        } else if let picture {
+            describe(picture, undoManager: describeUndoManager)
+        }
+    }
+
+    /// What the describer takes in the Hugging Face cache, partial downloads included.
+    var describerBytesOnDisk: Int64 { bytesOnDisk[ModelCatalog.describer.repo, default: 0] }
+
+    /// Moves the describer to the Trash (Settings → Models): the next description downloads it again.
+    func trashDescriber() {
+        guard downloads.progress(of: ModelCatalog.describer) == nil, describing == nil else { return }
+        do {
+            try FileManager.default.trashItem(at: locator.repoFolder(ModelCatalog.describer.repo), resultingItemURL: nil)
+        } catch {
+            alert = AppAlert(title: "Couldn’t move \(ModelCatalog.describer.name) to the Trash", message: error.localizedDescription)
+        }
+        refreshInstalled()
+    }
 }

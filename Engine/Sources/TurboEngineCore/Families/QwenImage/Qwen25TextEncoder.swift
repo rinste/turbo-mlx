@@ -31,8 +31,10 @@ final class Qwen25Attention: Module {
         super.init()
     }
 
-    /// `mask` is additive, [B, 1, S, S] float32; `cos`/`sin` are [B, S, headDim] float32.
-    func callAsFunction(_ x: MLXArray, mask: MLXArray, cos: MLXArray, sin: MLXArray) -> MLXArray {
+    /// `mask` is additive, [B, 1, S, S] float32 (nil: every key seen); `cos`/`sin` are [B, S, headDim]
+    /// float32. With a `cache` (Describe Image's text, written token by token), the keys and values
+    /// join those before them.
+    func callAsFunction(_ x: MLXArray, mask: MLXArray?, cos: MLXArray, sin: MLXArray, cache: Music3KVCache? = nil) -> MLXArray {
         let (batch, length) = (x.shape[0], x.shape[1])
         var q = qProj(x).reshaped([batch, length, heads, headDim]).transposed(0, 2, 1, 3)
         var k = kProj(x).reshaped([batch, length, kvHeads, headDim]).transposed(0, 2, 1, 3)
@@ -46,13 +48,17 @@ final class Qwen25Attention: Module {
         q = (q32 * cosB + Self.rotateHalf(q32) * sinB).asType(q.dtype)
         k = (k32 * cosB + Self.rotateHalf(k32) * sinB).asType(k.dtype)
 
-        if kvHeads != heads {
+        if let cache {
+            // MLX's attention reads the grouped keys and values as they are: repeating them, as the
+            // encoder does after mflux, would copy the whole cache seven times at every token.
+            (k, v) = cache.update(keys: k, values: v)
+        } else if kvHeads != heads {
             let repeats = heads / kvHeads
             k = repeated(k, count: repeats, axis: 1)
             v = repeated(v, count: repeats, axis: 1)
         }
         let attended = MLXFast.scaledDotProductAttention(
-            queries: q, keys: k, values: v, scale: scale, mask: mask.asType(q.dtype)
+            queries: q, keys: k, values: v, scale: scale, mask: mask?.asType(q.dtype)
         )
         return oProj(attended.transposed(0, 2, 1, 3).reshaped([batch, length, heads * headDim]))
     }
@@ -77,8 +83,8 @@ final class Qwen25DecoderLayer: Module {
         super.init()
     }
 
-    func callAsFunction(_ x: MLXArray, mask: MLXArray, cos: MLXArray, sin: MLXArray) -> MLXArray {
-        var h = x + selfAttn(inputLayerNorm(x), mask: mask, cos: cos, sin: sin)
+    func callAsFunction(_ x: MLXArray, mask: MLXArray?, cos: MLXArray, sin: MLXArray, cache: Music3KVCache? = nil) -> MLXArray {
+        var h = x + selfAttn(inputLayerNorm(x), mask: mask, cos: cos, sin: sin, cache: cache)
         h = h + mlp(postAttentionLayerNorm(h))
         return h
     }

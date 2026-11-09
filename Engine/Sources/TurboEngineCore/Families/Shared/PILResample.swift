@@ -56,6 +56,17 @@ enum PILResample {
         return source
     }
 
+    /// The same resize in the order Pillow 13 runs its passes (python-pillow/Pillow#9549): the vertical one first when
+    /// the height shrinks by more than twice as much as the width, the horizontal one first otherwise, as `resize`
+    /// always does after the Pillow mflux runs on. Each pass rounds to 8 bits, so the order shows at sharp edges.
+    static func resizePillow13(_ rgb: [UInt8], width: Int, height: Int, toWidth: Int, toHeight: Int, filter: Filter) -> [UInt8] {
+        guard height - toHeight > 0, height - toHeight > (width - toWidth) * 2 else {
+            return resize(rgb, width: width, height: height, toWidth: toWidth, toHeight: toHeight, filter: filter)
+        }
+        let rows = resize(rgb, width: width, height: height, toWidth: width, toHeight: toHeight, filter: filter)
+        return resize(rows, width: width, height: toHeight, toWidth: toWidth, toHeight: toHeight, filter: filter)
+    }
+
     /// The same resize for bytes of any number of channels (4 for Pillow's premultiplied `RGBa`, which is how it
     /// resizes an `RGBA` picture: `Idol`'s preparation), every channel filtered alike.
     static func resize(_ bytes: [UInt8], channels: Int, width: Int, height: Int, toWidth: Int, toHeight: Int, filter: Filter) -> [UInt8] {

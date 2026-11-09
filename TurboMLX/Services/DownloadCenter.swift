@@ -25,6 +25,8 @@ final class DownloadCenter {
     var onFinish: ((ModelDescriptor) -> Void)?
     /// The same for a model's Quality files (`startQuality`).
     var onQualityFinish: ((ModelDescriptor) -> Void)?
+    /// The same for a helper model (`start(helper:)`).
+    var onHelperFinish: ((ModelFamily.Companion) -> Void)?
 
     private var tasks: [String: Task<Void, Never>] = [:]
     private var samples: [String: (date: Date, bytes: Int64)] = [:]
@@ -224,5 +226,52 @@ final class DownloadCenter {
         active[key] = nil
         samples[key] = nil
         awake.isOn = !tasks.isEmpty
+    }
+
+    // MARK: Helper models
+
+    func progress(of helper: ModelFamily.Companion) -> Progress? { active[helper.repo] }
+    func failure(of helper: ModelFamily.Companion) -> String? { failures[helper.repo] }
+
+    /// Downloads a model the app runs beside the catalog's (Describe Image's describer), under its repository's name,
+    /// at the commit it was checked with.
+    func start(helper: ModelFamily.Companion, bytes: Int64, locator: ModelLocator) {
+        let key = helper.repo
+        guard tasks[key] == nil else { return }
+        failures[key] = nil
+        active[key] = Progress(total: bytes)
+        let hubCache = locator.hubCache
+        let downloader = HubDownloader(repo: helper.repo, hubCache: hubCache, revision: helper.revision)
+        tasks[key] = Task { [weak self] in
+            do {
+                let listing = try await downloader.list(matching: helper.patterns)
+                self?.update(key: key, total: listing.totalBytes)
+                try Self.checkSpace(for: downloader.bytesMissing(from: listing), in: hubCache)
+                _ = try await downloader.download(listing) { [weak self] bytes in
+                    Task { @MainActor [weak self] in self?.update(key: key, bytes: bytes) }
+                }
+            } catch {
+                if !Task.isCancelled { self?.failures[key] = error.localizedDescription }
+            }
+            self?.finished(helper: helper)
+        }
+        awake.isOn = true
+    }
+
+    func cancel(helper: ModelFamily.Companion) {
+        guard let task = tasks.removeValue(forKey: helper.repo) else { return }
+        task.cancel()
+        active[helper.repo] = nil
+        samples[helper.repo] = nil
+        awake.isOn = !tasks.isEmpty
+    }
+
+    private func finished(helper: ModelFamily.Companion) {
+        guard tasks[helper.repo] != nil else { return }
+        tasks[helper.repo] = nil
+        active[helper.repo] = nil
+        samples[helper.repo] = nil
+        awake.isOn = !tasks.isEmpty
+        onHelperFinish?(helper)
     }
 }

@@ -53,12 +53,14 @@ enum Verify {
             case "idol": ok = try VerifyIdol.run(fixture: fixture, json: json, references: references)
             case "minimax-music3": ok = try VerifyMusic3.run(fixture: fixture, json: json, references: references)
             case "moss-soundeffect": ok = try VerifyMossSoundEffect.run(fixture: fixture, json: json, references: references)
+            case "qwen2.5-vl": ok = try VerifyDescriber.run(fixture: fixture, json: json, references: references)
             default:
                 print("fixture.json names an unknown family: \(family)"); return false
             }
             let reference = family == "ltx-2" ? "ltx-2-mlx" : family == "sensenova" ? "SenseTime's PyTorch code"
                 : family == "moss-image" ? "OpenMOSS's PyTorch pipeline" : family == "idol" ? "idol-sdk's PyTorch code" : family == "minimax-music3" ? "mlx-audio"
-                : family == "moss-soundeffect" ? "OpenMOSS's PyTorch code (its goldens) and transformers" : "mflux"
+                : family == "moss-soundeffect" ? "OpenMOSS's PyTorch code (its goldens) and transformers" : family == "qwen2.5-vl" ? "mlx-vlm"
+                : "mflux"
             print(ok ? "OK: the \(family) port matches \(reference) on this checkpoint" : "FAILED: see the stages above")
             return ok
         } catch {

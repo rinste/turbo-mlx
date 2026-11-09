@@ -176,9 +176,10 @@ public final class Qwen25VisionTower: Module {
     }
 
     /// `pixelValues` [N, C·T·P·P], the patches of the pictures `grids` describes one after the
-    /// other → [N / 4, outDim], one row per merged token in the same order.
-    public func callAsFunction(_ pixelValues: MLXArray, grids: [QwenVisionGrid]) -> MLXArray {
-        var hidden = patchEmbed(pixelValues.asType(.float32))
+    /// other → [N / 4, outDim], one row per merged token in the same order. The tower runs in
+    /// `dtype`: float32 as mflux feeds it, or the weights' own as mlx-vlm does (Describe Image).
+    public func callAsFunction(_ pixelValues: MLXArray, grids: [QwenVisionGrid], dtype: DType = .float32) -> MLXArray {
+        var hidden = patchEmbed(pixelValues.asType(dtype))
         let count = hidden.shape[0]
         let unit = vision.spatialMergeSize * vision.spatialMergeSize
         let groups = count / unit

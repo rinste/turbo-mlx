@@ -461,6 +461,76 @@ public final class Engine {
         return request
     }
 
+    // MARK: Describe Image
+
+    /// What a description takes at most, the describer's weights (5.7 GB) included: it peaked at 6.5 to 7.1 GB, the
+    /// picture's 256 to 1280 tokens and the text's 300 at most.
+    static let describerPeak = 7 << 30
+
+    /// A text-to-image prompt describing the picture at `imagePath`, by Qwen2.5-VL from the pack `spec` names
+    /// (`Qwen25VLDescriber`). Phases `loading` (the describer), `encoding` (the picture and the prompt read) and
+    /// `writing`; `text` events with the description so far as it grows; `done` with the `text`, the `tokens` written,
+    /// the seconds, the peak and the timings `load`, `read` and `write`; `failed` or `cancelled` otherwise. Commands
+    /// run one at a time, so a description asked for during a generation waits for it, and the next generation waits
+    /// for the description. The describer is loaded for each one and released after it. The image model stays loaded
+    /// beside it, unless the two would not fit in the GPU's working set: then it goes first (`unloaded`), and the next
+    /// generation loads it again.
+    public func describe(id: String, spec: ModelSpec, imagePath: String) {
+        let started = Date()
+        let wired = WiredAllowance.begin()
+        defer {
+            wired?.end()
+            forget(id)
+            Memory.clearCache()
+        }
+        do {
+            Memory.peakMemory = 0
+            if isCancelled(id) { throw GenerationError.cancelled }
+            guard spec.family == Qwen25VLDescriber.family else { throw EngineError.unsupportedFamily(spec.family) }
+            let picture = try Qwen25VLPicture(path: imagePath)
+            Memory.clearCache()
+            if loaded != nil, let budget = GPU.maxRecommendedWorkingSetBytes(), Memory.activeMemory + Self.describerPeak > budget {
+                emitter.log("[turbo] the image model makes way for the describer")
+                unload()
+            }
+            emitter.emit("phase", ["id": id, "phase": "loading"])
+            let describer = try Qwen25VLDescriber(folder: URL(fileURLWithPath: spec.path))
+            let read = Date()
+            if isCancelled(id) { throw GenerationError.cancelled }
+            emitter.emit("phase", ["id": id, "phase": "encoding"])
+            var write: Date?
+            let description = try describer.describe(
+                picture,
+                writing: { [self] in
+                    write = Date()
+                    emitter.emit("phase", ["id": id, "phase": "writing"])
+                },
+                text: { [self] text in emitter.emit("text", ["id": id, "text": text]) },
+                isCancelled: { [self] in isCancelled(id) }
+            )
+            let finished = Date()
+            let writing = write ?? finished
+            let timings = [
+                "load": read.timeIntervalSince(started), "read": writing.timeIntervalSince(read), "write": finished.timeIntervalSince(writing),
+            ].mapValues { ($0 * 100).rounded() / 100 }
+            emitter.log("[turbo] described " + timings.map { "\($0.key) \(String(format: "%.1f", $0.value))s" }.sorted().joined(separator: " · ")
+                        + " · \(description.pictureTokens) picture tokens, \(description.tokens.count) written")
+            emitter.emit("done", [
+                "id": id,
+                "text": description.text,
+                "tokens": description.tokens.count,
+                "seconds": (finished.timeIntervalSince(started) * 100).rounded() / 100,
+                "peak_memory": Memory.peakMemory,
+                "timings": timings,
+            ])
+        } catch GenerationError.cancelled {
+            emitter.emit("cancelled", ["id": id])
+        } catch {
+            emitter.log("[turbo] \(error)")
+            emitter.emit("failed", ["id": id, "message": error.localizedDescription])
+        }
+    }
+
     // MARK: LoRAs
 
     /// Puts the request's LoRAs on the model (and takes off those it no longer has). A family that

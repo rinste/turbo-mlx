@@ -26,5 +26,16 @@ struct ContentView: View {
         } message: { alert in
             Text(alert.message)
         }
+        // Describe Image's first picture: the describer is a download of its own.
+        .confirmationDialog(
+            "Download \(ModelCatalog.describer.name) to describe pictures?",
+            isPresented: Binding(get: { app.describerOffer != nil }, set: { if !$0 { app.describerOffer = nil } }),
+            presenting: app.describerOffer
+        ) { picture in
+            Button("Download and Describe") { app.downloadDescriber(then: picture) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("Describing pictures uses \(ModelCatalog.describer.name), a \(Format.bytes(ModelCatalog.describerBytes)) download from Hugging Face (\(ModelCatalog.describer.license) license). It is downloaded once and stays on this Mac; Settings → Models can move it to the Trash.")
+        }
     }
 }
