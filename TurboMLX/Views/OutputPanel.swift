@@ -350,19 +350,30 @@ private struct ImageStage: View {
 
     @State private var zoom = ImageZoom()
     @State private var isHovering = false
+    /// Shows the picture the image was made from left of a divider. It goes off with the stage:
+    /// each image has a new one, and a live generation or the draft takes its place.
+    @State private var isComparing = false
 
     var body: some View {
+        let original = self.original
         ZoomableImage(
             url: app.url(for: item),
             size: item.size,
             showsCheckerboard: item.request.transparentBackground,
             zoom: zoom,
+            original: isComparing ? original : nil,
             onMouseDown: onClick
         )
         .contextMenu { HistoryItemMenu(item: item) }
+        .overlay(alignment: .top) {
+            if isComparing, original != nil {
+                ComparisonLabels()
+                    .padding(12)
+            }
+        }
         .overlay(alignment: .bottomTrailing) {
-            let showsControls = isHovering || zoom.isZoomedIn
-            ZoomControls(zoom: zoom)
+            let showsControls = isHovering || zoom.isZoomedIn || isComparing
+            ZoomControls(zoom: zoom, comparison: original == nil ? nil : $isComparing)
                 .padding(12)
                 .opacity(showsControls ? 1 : 0)
                 .allowsHitTesting(showsControls)
@@ -370,6 +381,15 @@ private struct ImageStage: View {
         }
         .onHover { isHovering = $0 }
         .focusedSceneValue(\.imageZoom, zoom)
+        .focusedSceneValue(\.imageComparison, original == nil ? nil : $isComparing)
+    }
+
+    /// The picture an edit or an upscale was made from, while its file is still in the references
+    /// folder; nil for an image made from a prompt alone.
+    private var original: URL? {
+        guard item.kind == .image, let name = item.request.referenceImage else { return nil }
+        let url = HistoryStore.referenceURL(name)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 }
 

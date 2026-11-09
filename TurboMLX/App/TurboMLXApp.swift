@@ -129,9 +129,11 @@ private struct GenerationCommands: Commands {
     }
 }
 
-/// View menu, with Preview's shortcuts.
+/// View menu, with Preview's shortcuts, and the comparison of an image with the picture it was
+/// made from.
 private struct ZoomCommands: Commands {
     @FocusedValue(\.imageZoom) private var zoom
+    @FocusedBinding(\.imageComparison) private var isComparing
 
     var body: some Commands {
         CommandGroup(after: .toolbar) {
@@ -147,6 +149,13 @@ private struct ZoomCommands: Commands {
             Button("Zoom Out") { zoom?.zoomOut() }
                 .keyboardShortcut("-")
                 .disabled(zoom?.isZoomedIn != true)
+
+            Divider()
+
+            // An edit or an upscale, with the picture it came from.
+            Toggle("Compare with Original", isOn: Binding(get: { isComparing == true }, set: { isComparing = $0 }))
+                .keyboardShortcut("c", modifiers: [.command, .option])
+                .disabled(isComparing == nil)
         }
     }
 }
