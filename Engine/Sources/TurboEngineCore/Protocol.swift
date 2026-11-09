@@ -54,6 +54,10 @@ public struct GenerationParams: Decodable {
     /// The pictures an image is edited from, in order, for the families that read several (FLUX.2
     /// Klein, Qwen-Image Edit); taken over `image` when there are any.
     public let images: [String]?
+    /// Image to image (Z-Image, Qwen-Image, FLUX.2 Klein): how much of `image` the result keeps, as
+    /// mflux's `--image-strength` (0–1). The image then starts from the picture instead of being
+    /// edited from it (`ImageToImage`). Absent or 0, the family's own use of the picture, if any.
+    public let imageStrength: Double?
     /// Upscalers (SeedVR2): the factor the picture's shorter side is scaled by, and how much it is
     /// softened first (0–1).
     public let upscale: Double?

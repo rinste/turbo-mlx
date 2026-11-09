@@ -26,6 +26,10 @@ public struct FamilyRequest {
     public var imagePath: String? { imagePaths.first }
     /// LTX: the picture a clip ends on (its last frame), with or without `imagePath` to start from.
     public var lastImagePath: String?
+    /// Image to image (Z-Image, Qwen-Image, FLUX.2 Klein): how much of `imagePath` the image keeps,
+    /// mflux's `image_strength`; the loop starts from the picture rather than from noise alone
+    /// (`ImageToImage`). Nil, an image from the prompt alone, or Klein's edit of the pictures.
+    public var imageStrength: Double?
     /// Upscalers: the factor the picture's shorter side is scaled by, the softening before (0–1).
     public var upscale: Double?
     public var softness: Double?

@@ -56,9 +56,22 @@ nonisolated enum ModelFamily: String, Codable, Hashable, Sendable, CaseIterable 
     var sizeMultiple: Int { self == .senseNova ? 32 : 16 }
 
     /// A reference image: the first frame of a clip (LTX-2), the picture an image is edited from
-    /// as the prompt says (FLUX.2 Klein, FLUX 3, Qwen-Image Edit, SenseNova), the picture an upscaler enlarges.
+    /// as the prompt says (FLUX.2 Klein, FLUX 3, Qwen-Image Edit, SenseNova) or starts from (Z-Image,
+    /// Qwen-Image, FLUX.2 Klein), the picture an upscaler enlarges.
     var takesReferenceImage: Bool {
-        isLTX || self == .flux2Klein || self == .flux3Klein || self == .qwenImageEdit || self == .senseNova || isUpscaler || self == .idol
+        isLTX || editsReference || startsFromImage || isUpscaler || self == .idol
+    }
+
+    /// The families that edit the reference picture as the prompt says, reading it next to the image.
+    var editsReference: Bool {
+        self == .flux2Klein || self == .flux3Klein || self == .qwenImageEdit || self == .senseNova
+    }
+
+    /// Image to image, as mflux runs it for these families (`--image-strength`): the image starts from
+    /// the reference picture mixed with noise, and the first steps are skipped (`ImageToImage` in the
+    /// engine). FLUX.2 Klein can also edit the picture, which stays its default.
+    var startsFromImage: Bool {
+        self == .zImageTurbo || self == .qwenImage || self == .flux2Klein
     }
 
     /// A second image, the frame a clip ends on (LTX), with or without the first.

@@ -66,6 +66,25 @@ enum VerifyZImage {
         let decoded = model.vae.decode(grid)
         eval(decoded)
         ok = Verify.report("vae decode", got: decoded, want: try reference("decoded").transposed(0, 2, 3, 1)) && ok
+
+        // 6. Image to image: the VAE's encoder on a picture, the start mixed from it and the seed's
+        // noise, and the loop from that step. A fixture made before the encoder was in it has none.
+        guard references["encoded"] != nil else {
+            print("  (no image-to-image references: make the fixture again to check the encoder)")
+            return ok
+        }
+        let clean = try model.startingLatents(pixels: try reference("image").transposed(0, 2, 3, 1))
+        ok = Verify.report("vae encode", got: clean, want: try reference("encoded").transposed(1, 0, 2, 3)) && ok
+        let strength = (json["image_strength"] as? NSNumber)?.doubleValue ?? 0.5
+        let start = ImageToImage.startStep(steps: steps, strength: strength)
+        var started = ImageToImage.noised(clean: clean, noise: try reference("latents"), sigma: schedule.sigmas[start])
+        ok = Verify.report("image-to-image start", got: started, want: try reference("img2img_latents")) && ok
+        for t in start ..< steps {
+            let predicted = model.transformer(latents: started, timestep: MLXArray([1 - schedule.sigmas[t]]), capFeats: prompt)
+            started = schedule.step(latents: started, noise: predicted, index: t)
+            eval(started)
+        }
+        ok = Verify.report("image-to-image loop", got: started, want: try reference("img2img_final")) && ok
         return ok
     }
 }

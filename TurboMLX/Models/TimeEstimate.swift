@@ -21,8 +21,8 @@ enum TimeEstimate {
     }
 
     static func plan(model: ModelDescriptor, request: GenerationRequest, history: [HistoryItem], models: [ModelDescriptor]) -> Plan {
-        let work = Work(model: model, size: request.size, steps: request.steps, guidance: request.guidance, frames: request.frames,
-                        reference: request.referenceImage, lastFrame: request.lastFrameImage != nil, quality: request.quality == true,
+        let work = Work(model: model, size: request.size, steps: request.denoisingSteps, guidance: request.guidance, frames: request.frames,
+                        reference: request.editedPicture, lastFrame: request.lastFrameImage != nil, quality: request.quality == true,
                         gaussians: request.numGaussians, songSeconds: request.duration)
         let byID = Dictionary(models.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let (rates, _) = rates(for: model, work: work, lowMemory: request.lowMemory, halfPrecision: request.halfPrecision ?? false,
@@ -199,8 +199,8 @@ enum TimeEstimate {
         init?(_ item: HistoryItem, model: ModelDescriptor) {
             let request = item.request
             guard let timings = item.timings, let denoise = timings["denoise"], denoise > 0 else { return nil }
-            work = Work(model: model, size: request.size, steps: request.steps, guidance: request.guidance, frames: request.frames,
-                        reference: request.referenceImage, lastFrame: request.lastFrameImage != nil, quality: request.quality == true,
+            work = Work(model: model, size: request.size, steps: request.denoisingSteps, guidance: request.guidance, frames: request.frames,
+                        reference: request.editedPicture, lastFrame: request.lastFrameImage != nil, quality: request.quality == true,
                         gaussians: request.numGaussians, songSeconds: request.duration)
             guard work.denoise > 0, work.decode > 0 else { return nil }
             self.denoise = denoise

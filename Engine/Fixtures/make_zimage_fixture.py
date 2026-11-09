@@ -7,9 +7,10 @@ Run it with a Python that has mflux (Engine/Fixtures/requirements.txt):
   $PY Engine/Fixtures/make_zimage_fixture.py <out-dir>
 
 Everything is shrunk: the Qwen3 encoder to 4 layers of 128 (Z-Image reads its second-to-last
-hidden state), the S3-DiT to two layers of 256, the decoder to a few dozen channels per stage
-(mflux's own blocks, only narrower). The encoder half of the VAE is left out, as the engine never
-loads it.
+hidden state), the S3-DiT to two layers of 256, the VAE to a few dozen channels per stage (mflux's
+own blocks, only narrower). Its encoder serves image to image: the references include a picture
+encoded, mixed with the noise at the sigma of the step `IMAGE_STRENGTH` starts from, and the loop
+from there, as mflux's `Img2Img` runs it.
 """
 
 import json
@@ -22,6 +23,7 @@ from mlx.utils import tree_flatten, tree_unflatten
 
 from mflux.models.common.config.config import Config
 from mflux.models.common.config.model_config import ModelConfig
+from mflux.models.common.latent_creator.latent_creator import LatentCreator
 from mflux.models.common.vae.vae_util import VAEUtil
 from mflux.models.common.weights.saving.model_saver import ModelSaver
 from mflux.models.z_image.latent_creator import ZImageLatentCreator
@@ -32,9 +34,14 @@ from mflux.models.z_image.model.z_image_vae.decoder.conv_in import ConvIn
 from mflux.models.z_image.model.z_image_vae.decoder.conv_norm_out import ConvNormOut
 from mflux.models.z_image.model.z_image_vae.decoder.conv_out import ConvOut
 from mflux.models.z_image.model.z_image_vae.decoder.up_decoder_block import UpDecoderBlock
+from mflux.models.z_image.model.z_image_vae.encoder.conv_in import ConvIn as EncoderConvIn
+from mflux.models.z_image.model.z_image_vae.encoder.conv_norm_out import ConvNormOut as EncoderConvNormOut
+from mflux.models.z_image.model.z_image_vae.encoder.conv_out import ConvOut as EncoderConvOut
+from mflux.models.z_image.model.z_image_vae.encoder.down_encoder_block import DownEncoderBlock
 from mflux.models.z_image.model.z_image_vae.vae import VAE
 
 BITS = 4  # the catalog's 16 GB checkpoint is 4-bit (the 24 GB one, 8-bit, loads the same way)
+IMAGE_STRENGTH = 0.5  # image to image: the part of the picture kept, mflux's --image-strength
 
 CONFIG = {
     "family": "z-image-turbo",
@@ -84,8 +91,22 @@ def randomize(module: nn.Module, seed: int, scale: float, dtype=mx.bfloat16) -> 
 
 
 def small_vae(block_out_channels: list[int]) -> VAE:
-    """mflux's VAE with its decoder rebuilt from the same blocks at a fraction of the width."""
+    """mflux's VAE with its encoder and decoder rebuilt from the same blocks at a fraction of the width."""
     vae = VAE()
+    encoder = vae.encoder
+    encoder.conv_in = EncoderConvIn(in_channels=3, out_channels=block_out_channels[0])
+    encoder.down_blocks = [
+        DownEncoderBlock(
+            in_channels=block_out_channels[0] if i == 0 else block_out_channels[i - 1],
+            out_channels=block_out_channels[i],
+            num_layers=2,
+            add_downsample=i != len(block_out_channels) - 1,
+        )
+        for i in range(len(block_out_channels))
+    ]
+    encoder.mid_block = UNetMidBlock(channels=block_out_channels[-1])
+    encoder.conv_norm_out = EncoderConvNormOut(num_channels=block_out_channels[-1], num_groups=32)
+    encoder.conv_out = EncoderConvOut(in_channels=block_out_channels[-1], out_channels=32)
     channels = list(reversed(block_out_channels))
     decoder = vae.decoder
     decoder.conv_in = ConvIn(in_channels=16, out_channels=channels[0])
@@ -101,7 +122,6 @@ def small_vae(block_out_channels: list[int]) -> VAE:
     ]
     decoder.conv_norm_out = ConvNormOut(channels=block_out_channels[0])
     decoder.conv_out = ConvOut(in_channels=block_out_channels[0], out_channels=3)
-    vae.encoder = nn.Identity()  # never loaded by the engine; keeps the fixture small
     return vae
 
 
@@ -159,6 +179,22 @@ def main(out: Path) -> None:
     decoded = VAEUtil.decode(vae=vae, latent=unpacked, tiling_config=None)
     mx.eval(decoded)
 
+    # --- reference: image to image (`LatentCreator.create_for_txt2img_or_img2img` and the loop) -----------
+    # A picture as `encode_image` hands it over, [1, 3, H, W] float32 in [-1, 1]; its latents mixed with
+    # the same noise at the sigma of the step the strength starts from (`Config.init_time_step`).
+    image = mx.random.uniform(low=-1.0, high=1.0, shape=(1, 3, cfg["height"], cfg["width"]), key=mx.random.key(5))
+    encoded = VAEUtil.encode(vae=vae, image=image, tiling_config=None)
+    clean = ZImageLatentCreator.pack_latents(encoded, cfg["height"], cfg["width"])
+    start = max(1, int(cfg["steps"] * IMAGE_STRENGTH))
+    img2img_latents = LatentCreator.add_noise_by_interpolation(clean=clean, noise=latents, sigma=sigmas[start])
+    x = img2img_latents
+    for t in range(start, cfg["steps"]):
+        sigma_t = sigmas[t].reshape((1,))
+        pred = transformer(x=x, timestep=mx.ones_like(sigma_t) - sigma_t, sigmas=sigmas, cap_feats=cap_feats)
+        x = config.scheduler.step(noise=pred, timestep=t, latents=x)
+        mx.eval(x)
+    img2img_final = x
+
     # --- save the checkpoint the way mflux does (component folders, shards, metadata) ------------------
     for name, module in (("transformer", transformer), ("text_encoder", text_encoder), ("vae", vae)):
         ModelSaver._save_weights(str(out), BITS, module, name)
@@ -172,9 +208,13 @@ def main(out: Path) -> None:
         "sigmas": sigmas,
         "final_latents": final_latents,
         "decoded": decoded,
+        "image": image,
+        "encoded": encoded,
+        "img2img_latents": img2img_latents,
+        "img2img_final": img2img_final,
     })
     with open(out / "fixture.json", "w") as f:
-        json.dump({**cfg, "bits": BITS}, f, indent=2)
+        json.dump({**cfg, "bits": BITS, "image_strength": IMAGE_STRENGTH}, f, indent=2)
     total = sum(p.stat().st_size for p in out.rglob("*") if p.is_file())
     print(f"fixture written to {out} ({total / 1e6:.1f} MB)")
     print("sigmas:", [round(float(s), 5) for s in sigmas.tolist()])
