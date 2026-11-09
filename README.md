@@ -82,6 +82,9 @@ models want more, see the table) and room on the disk for the models you pick.
 - **The picture or the clip**, with its prompt and details underneath. A clip plays in a loop
   while the app is in front; click it or press Space to pause. Transparent images sit on a
   checkerboard.
+- **Before and after.** An edited or upscaled picture can be compared with the one it came from:
+  click the split square by the zoom controls (⌥⌘C) and drag the line across it, the original on
+  its left. Zoomed in, the line stays where it is while the picture moves under it.
 - **While it generates:** progress, time left and, with *Live preview*, the image taking shape.
 - **The history**, a strip along the bottom: oldest on the left, newest on the right, or in your
   own order (drag a picture where you want it; the menu next to *History* switches between the
@@ -104,6 +107,7 @@ models want more, see the table) and room on the disk for the models you pick.
 | Zoom in on a point and back | double-click |
 | Actual size / fit to the window | ⌘0 / ⌘9 |
 | Move around a zoomed picture | drag, two-finger scroll (⌥-wheel with a mouse) |
+| Compare an edit or an upscale with its original | ⌥⌘C, then drag the line |
 | Undo a change to the settings | ⌘Z |
 | Settings / Engine Log | ⌘, / ⌥⌘L |
 
