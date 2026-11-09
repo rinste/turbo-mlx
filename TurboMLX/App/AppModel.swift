@@ -864,6 +864,67 @@ final class AppModel {
                         source: .item, actionName: "Load Settings", undoManager: undoManager)
     }
 
+    /// Puts the prompt and settings a picture file says it was made with (`ImageSettings`) in the
+    /// controls, as a click in the history does, for the next generation: with its model when Turbo
+    /// MLX made it with one of the list, on the current model otherwise. The steps and the guidance
+    /// stay within what that model takes; a guidance it has no use for, or a LoRA no longer among the
+    /// user's, is left out; a still's size is not a clip's. ⌘Z brings back what they replaced.
+    func useSettings(from url: URL, undoManager: UndoManager? = nil) {
+        guard let found = ImageSettings.read(url) else {
+            alert = AppAlert(
+                title: "This picture doesn’t say how it was made",
+                message: "Turbo MLX reads the prompt and settings saved in its own pictures, and in the PNGs of AUTOMATIC1111, Forge, SD.Next, InvokeAI and ComfyUI. \(url.lastPathComponent) has none of them."
+            )
+            return
+        }
+        // A picture made here on a model of the list also says which LoRAs, precision and mode it had.
+        let named = found.modelID.flatMap { id in models.first { $0.id == id } }
+        guard let model = named ?? selectedModel else { return }
+        let current = settings
+        let ours = named != nil
+        let quality = ours ? found.quality && model.family.isLTX : current.fullPipeline(for: model)
+        // What the picture does not say stays as it is, or, on another model, starts from its defaults.
+        let sameModel = model.id == selectedModelID
+        let steps = found.steps ?? (sameModel ? current.steps : model.defaultSteps(quality: quality))
+        let ownGuidance = sameModel ? current.guidance : model.defaultGuidance(quality: quality)
+        let guidance = model.supportsGuidance(quality: quality)
+            ? found.guidance.map { min(max($0, GenerationSettings.guidanceRange.lowerBound), GenerationSettings.guidanceRange.upperBound) } ?? ownGuidance
+            : ownGuidance
+        let multiple = model.family.sizeMultiple
+        let size = model.family.media == .image ? found.size.map { size in
+            PixelSize(width: PixelSize.snapped(Double(size.width), multiple: multiple),
+                      height: PixelSize.snapped(Double(size.height), multiple: multiple))
+        } : nil
+        loraLibrary.refresh()
+        let loras = ours
+            ? found.loras.compactMap { lora in
+                loraLibrary.entries.first { $0.name == lora.name }.map { entry in
+                    LoRAChoice(file: entry.file, scale: min(max(lora.scale, LoRAChoice.scaleRange.lowerBound), LoRAChoice.scaleRange.upperBound))
+                }
+            }
+            : current.lora(for: model.family).map { [$0] }
+        let range = model.stepRange(quality: quality)
+        // The reference images, the background and Save memory are not the picture's to say.
+        let request = GenerationRequest(
+            prompt: found.prompt,
+            negativePrompt: found.negativePrompt,
+            seed: found.seed ?? current.seed,
+            size: size ?? current.size(for: model.family),
+            steps: min(max(steps, range.lowerBound), range.upperBound),
+            guidance: guidance,
+            transparentBackground: current.transparentBackground,
+            lowMemory: current.lowMemory,
+            referenceImage: current.referenceImage,
+            lastFrameImage: current.lastFrameImage,
+            halfPrecision: ours ? found.halfPrecision : current.halfPrecision,
+            loras: loras,
+            quality: quality ? true : nil
+        )
+        let controls = controls(from: request, modelID: model.id, media: model.family.media)
+        replaceControls(with: controls.settings, modelID: controls.modelID, viewer: .draft, source: .draft,
+                        actionName: "Load Settings", undoManager: undoManager)
+    }
+
     func isSelected(_ item: HistoryItem) -> Bool {
         displayedItem?.id == item.id
     }

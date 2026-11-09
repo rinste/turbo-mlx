@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum WindowID {
     static let main = "main"
@@ -89,6 +90,10 @@ private struct GenerationCommands: Commands {
         }
         #endif
         CommandGroup(replacing: .newItem) {}
+        CommandGroup(after: .newItem) {
+            Button("Use Settings from Image…") { useSettingsFromImage() }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+        }
 
         CommandMenu("Generate") {
             Button(model.isBusy ? "Add to Queue" : "Generate") { model.generate() }
@@ -126,6 +131,18 @@ private struct GenerationCommands: Commands {
                 .keyboardShortcut("]", modifiers: .command)
                 .disabled(model.history.items.isEmpty && !model.isBusy)
         }
+    }
+
+    /// A picture made here, on another Mac or in another app, whose prompt and settings go to the
+    /// controls (`AppModel.useSettings(from:)`).
+    private func useSettingsFromImage() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose a picture to use the prompt and settings it was made with"
+        panel.prompt = "Use Settings"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        model.useSettings(from: url)
     }
 }
 
