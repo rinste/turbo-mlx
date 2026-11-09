@@ -44,6 +44,11 @@ models want more, see the table) and room on the disk for the models you pick.
   one text. Add more, rename them, resize them, drag them into another order. Under them, the
   models whose guidance can use one (Qwen-Image, Qwen-Image Edit, FLUX.2 Klein base) have a
   *Negative Prompt*: what to keep out of the picture.
+- **A picture’s settings.** Drop a picture on the prompt, or choose *File → Use Settings from
+  Image…*, to bring back the prompt and settings it was made with. One made with Turbo MLX, here or
+  on another Mac, brings its model too; one from AUTOMATIC1111, Forge, SD.Next, InvokeAI or ComfyUI
+  gives its prompt, negative prompt, steps, guidance, seed and size to the model you chose. ⌘Z
+  undoes it.
 - **Shape and size.** The aspect ratio and the resolution (a bigger picture takes longer) and,
   for the models that use it, *Guidance*: how closely the picture follows the prompt.
 - **A starting picture.** Models that can use one show a *Reference Image* box above the prompt:
@@ -104,6 +109,7 @@ models want more, see the table) and room on the disk for the models you pick.
 | Zoom in on a point and back | double-click |
 | Actual size / fit to the window | ⌘0 / ⌘9 |
 | Move around a zoomed picture | drag, two-finger scroll (⌥-wheel with a mouse) |
+| Use a picture’s prompt and settings | ⇧⌘O, or drop it on the prompt |
 | Undo a change to the settings | ⌘Z |
 | Settings / Engine Log | ⌘, / ⌥⌘L |
 

@@ -728,9 +728,13 @@ private struct TriggerWords: View {
 /// The prompt as blocks: each one a piece of the final text, renamable, removable, and put in
 /// order by dragging its handle (or with its arrows).
 private struct PromptSection: View {
+    @Environment(AppModel.self) private var app
+    @Environment(\.undoManager) private var undoManager
     @Binding var settings: GenerationSettings
     var focus: FocusState<PromptBlock.ID?>.Binding
     var title = "Prompt"
+    /// A picture is being dragged over the blocks.
+    @State private var isTargeted = false
 
     /// The block being dragged; back to nil when it's let go, or when the drag is cancelled.
     @GestureState(resetTransaction: Transaction(animation: .snappy)) private var drag: BlockDrag? = nil
@@ -771,6 +775,17 @@ private struct PromptSection: View {
                 }
             }
             .coordinateSpace(Self.space)
+            // A picture dropped on the blocks brings back the prompt and settings it was made with.
+            .overlay {
+                ImageSettingsDropTarget(isTargeted: $isTargeted) { app.useSettings(from: $0, undoManager: undoManager) }
+            }
+            .overlay {
+                if isTargeted {
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color.active, lineWidth: 2)
+                        .padding(-6)
+                }
+            }
         } header: {
             Text(title)
         } footer: {
@@ -842,6 +857,67 @@ private struct PromptSection: View {
                 blocks.insert(blocks.remove(at: reordering.source), at: reordering.destination)
                 withAnimation(.snappy) { settings.blocks = blocks }
             }
+    }
+}
+
+/// Where a picture dropped on the prompt lands. SwiftUI's drop targets lie under the text editors,
+/// whose text view takes a dropped file for itself and types its path: this view lies over them and
+/// asks for files only, so that text dragged onto a block still reaches the block. Clicks go through.
+private struct ImageSettingsDropTarget: NSViewRepresentable {
+    @Binding var isTargeted: Bool
+    let drop: (URL) -> Void
+
+    func makeNSView(context: Context) -> ImageDropView {
+        ImageDropView()
+    }
+
+    func updateNSView(_ view: ImageDropView, context: Context) {
+        view.targeted = { isTargeted = $0 }
+        view.drop = drop
+    }
+}
+
+private final class ImageDropView: NSView {
+    var targeted: (Bool) -> Void = { _ in }
+    var drop: (URL) -> Void = { _ in }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        registerForDraggedTypes([.fileURL])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    /// The first picture among the files dragged; any other file is turned away.
+    private func picture(in info: NSDraggingInfo) -> URL? {
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingFileURLsOnly: true,
+            .urlReadingContentsConformToTypes: [UTType.image.identifier],
+        ]
+        return info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: options)?.first as? URL
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard picture(in: sender) != nil else { return [] }
+        targeted(true)
+        return .copy
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        targeted(false)
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        targeted(false)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let url = picture(in: sender) else { return false }
+        // Once the drag is over: another model may take the prompt away, and this view with it.
+        Task { drop(url) }
+        return true
     }
 }
 
