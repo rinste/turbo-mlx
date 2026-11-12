@@ -27,6 +27,8 @@ nonisolated enum LoRABase: Hashable, Sendable {
     /// FLUX 3 Image Klein (one width, 3072).
     case flux3
     case qwenImage
+    /// MOSS-Image (OpenMOSS, Apache 2.0): the DMD 8-step distillation adapters and the library's.
+    case moss
     /// LTX-2.3 and LTX-2.5 (4096 wide); another width is LTX-Video 0.9 or another video model
     /// keyed the same way.
     case ltx(width: Int?)
@@ -40,6 +42,7 @@ nonisolated enum LoRABase: Hashable, Sendable {
         case .flux2(let width): width == 4096 ? "FLUX.2 Klein 9B" : width == 3072 ? "FLUX.2 Klein 4B" : "FLUX.2 Klein"
         case .flux3: "FLUX 3 Image Klein"
         case .qwenImage: "Qwen-Image"
+        case .moss: "MOSS-Image"
         case .ltx(let width): width == nil || width == 4096 ? "LTX-2" : "an older LTX-Video"
         case .flux1: "FLUX.1"
         case .stableDiffusion: "Stable Diffusion"
@@ -55,6 +58,7 @@ nonisolated enum LoRABase: Hashable, Sendable {
         case .flux3: model.family == .flux3Klein
         // Qwen-Image's editor has its transformer: a LoRA of one is a LoRA of the other.
         case .qwenImage: model.family == .qwenImage || model.family == .qwenImageEdit
+        case .moss: model.family == .mossImage
         // LTX-2.3's and LTX-2.5's transformers have the same layers: which one a LoRA was made
         // for shows in its results, not its shapes.
         case .ltx(let width): model.family.isLTX && (width == nil || width == 4096)
@@ -66,7 +70,7 @@ nonisolated enum LoRABase: Hashable, Sendable {
     /// Whether any model the app knows of could run it.
     var isSupported: Bool {
         switch self {
-        case .zImage, .flux2, .flux3, .qwenImage, .unknown: true
+        case .zImage, .flux2, .flux3, .qwenImage, .moss, .unknown: true
         case .ltx(let width): width == nil || width == 4096
         case .flux1, .stableDiffusion: false
         }
@@ -182,6 +186,15 @@ nonisolated struct LoRAFileInfo: Hashable, Sendable {
         // Underscored keys were turned into dots above, so names are matched loosely.
         let paths = Array(downs.keys)
         func any(_ test: (String) -> Bool) -> Bool { paths.contains(where: test) }
+        // MOSS-Image's single-stream DiT: the block's `proj` holds separate q/k/v/o and a
+        // SiTU-gated feed-forward. Everything is under `layers.{block}.proj.*`, which the
+        // Z-Image branch below would otherwise claim (Z-Image's layers use `attention.`,
+        // `feed_forward.` and `adaLN_modulation.`, never `proj.q/k/v/o` or `proj.ffn_up_gate`).
+        // Checked before that branch, so MOSS adapters (the 8-step DMD, the library's) select.
+        let mossProjections = [".proj.q", ".proj.k", ".proj.v", ".proj.o", ".proj.ffn_up_gate", ".proj.ffn_down"]
+        if any({ path in path.hasPrefix("layers.") && mossProjections.contains { path.contains($0) } }) {
+            return .moss
+        }
         if any({ $0.hasPrefix("layers.") || $0.hasPrefix("noise.refiner") || $0.hasPrefix("context.refiner") || $0.hasPrefix("noise_refiner") || $0.hasPrefix("context_refiner") }) {
             return .zImage
         }

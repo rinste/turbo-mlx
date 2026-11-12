@@ -198,4 +198,16 @@ extension LoRAMapping {
         Row("transformer_blocks.{block}.txt_mlp.net.0.proj", "transformer_blocks.{block}.txt_ff.mlp_in", .none),
         Row("transformer_blocks.{block}.txt_mlp.net.2", "transformer_blocks.{block}.txt_ff.mlp_out", .none),
     ]
+    /// MOSS-Image's single-stream DiT: the block's `proj` holds separate q/k/v/o and a
+    /// SiTU-gated feed-forward (`ffn_up_gate`/`ffn_down`). The published adapters key them
+    /// exactly as the module paths (`layers.{block}.proj.{q,k,v,o,ffn_up_gate,ffn_down}`),
+    /// so no renames are needed.
+    static let mossRows: [Row] = [
+        Row("layers.{block}.proj.ffn_down", "layers.{block}.proj.ffn_down", .none),
+        Row("layers.{block}.proj.ffn_up_gate", "layers.{block}.proj.ffn_up_gate", .none),
+        Row("layers.{block}.proj.k", "layers.{block}.proj.k", .none),
+        Row("layers.{block}.proj.o", "layers.{block}.proj.o", .none),
+        Row("layers.{block}.proj.q", "layers.{block}.proj.q", .none),
+        Row("layers.{block}.proj.v", "layers.{block}.proj.v", .none),
+    ]
 }

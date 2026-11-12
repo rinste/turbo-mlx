@@ -33,6 +33,7 @@ public struct LoRAMapping {
         case qwen = "Qwen-Image"
         case ltx = "LTX-2"
         case flux3 = "FLUX 3"
+        case moss = "MOSS-Image"
 
         var rows: [Row] {
             switch self {
@@ -41,6 +42,7 @@ public struct LoRAMapping {
             case .flux3: LoRAMapping.flux3Rows
             case .qwen: LoRAMapping.qwenRows + LoRAMapping.qwenExtraRows
             case .ltx: []
+            case .moss: LoRAMapping.mossRows
             }
         }
 
@@ -48,7 +50,7 @@ public struct LoRAMapping {
         var renames: [(String, String)] {
             switch self {
             case .ltx: LoRAMapping.ltxRenames
-            case .zImage, .flux2, .flux3, .qwen: []
+            case .zImage, .flux2, .flux3, .qwen, .moss: []
             }
         }
     }
