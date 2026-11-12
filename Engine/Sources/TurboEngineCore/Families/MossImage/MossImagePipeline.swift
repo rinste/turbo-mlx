@@ -7,7 +7,7 @@ import MLXNN
 /// block 22 skipped, as `MOSSImagePipeline` does by default. Reads the diffusers folders of
 /// OpenMOSS's repositories (and their byte-identical `mlx-community/MOSS-Image-*-bf16` mirrors),
 /// quantizing the transformer and the text encoder on loading when asked.
-public final class MossImageModel: PreviewingFamilyModel {
+public final class MossImageModel: PreviewingFamilyModel, LoRAAdaptable {
     public let config: MossImageConfig
     public let modelPath: URL
     public let vae: Flux2VAE
@@ -21,6 +21,11 @@ public final class MossImageModel: PreviewingFamilyModel {
     private let loadingBits: Int?
     private var prompter: Qwen3Prompter?
     private var promptCache: [String: MLXArray] = [:]
+    public let loras = LoRAAdapters(table: .moss)
+
+    /// The module the LoRAs go on — the resident transformer, nil if Save memory released it
+    /// (the protocol's "not loaded" state; the engine reapplies when it loads again).
+    public var adaptedModule: Module? { residentTransformer }
 
     /// Loads the checkpoint at `modelPath`. `quantize` (4, 6, 8) applies to the transformer's and the
     /// text encoder's linears and embeddings, in groups of 64; the weights otherwise keep the dtype
