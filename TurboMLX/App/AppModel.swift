@@ -65,6 +65,8 @@ final class AppModel {
     let loraLibrary = LoRALibrary()
     #if !SEALED
     let updater = AppUpdater()
+    /// Agents' way in, off until turned on in Settings.
+    let mcp = MCPServer()
     #endif
 
     private(set) var models: [ModelDescriptor]
@@ -224,9 +226,15 @@ final class AppModel {
         FolderAccess.restore()
         refreshInstalled()
         backend.ensureWorker()
+        #if !SEALED
+        mcp.attach(self)
+        #endif
     }
 
     func shutdown() {
+        #if !SEALED
+        mcp.stop()
+        #endif
         downloads.cancelAll()
         backend.stopWorker()
     }
@@ -460,23 +468,27 @@ final class AppModel {
 
     // MARK: Generation
 
-    var blocker: Blocker? {
-        guard let model = selectedModel else { return .noModel }
+    var blocker: Blocker? { blocker(for: selectedModel, with: settings) }
+
+    /// What keeps `settings` from being generated with `model`: the controls' own, or what an
+    /// agent asks for through the MCP server.
+    func blocker(for model: ModelDescriptor?, with settings: GenerationSettings) -> Blocker? {
+        guard let model else { return .noModel }
         if downloads.isDownloading(model) { return .modelDownloading }
         if !isInstalled(model) { return .modelNotDownloaded }
         if settings.fullPipeline(for: model), !hasQualityFiles(model) {
             return downloads.qualityProgress(model) != nil ? .qualityDownloading : .qualityNotDownloaded
         }
-        if model.family.requiresReferenceImage, !hasReferenceImage { return .missingReference }
+        if model.family.requiresReferenceImage, !hasReferenceImage(in: settings) { return .missingReference }
         if model.family.takesPrompt, settings.trimmedPrompt.isEmpty { return .emptyPrompt }
         if model.family.isSong, settings.songLyrics.isEmpty { return .emptyLyrics }
         if model.family.isUpscaler, let size = settings.upscaledSize, size.megapixels > Upscale.maxMegapixels { return .upscaleTooLarge }
-        switch loraState(for: model) {
+        switch loraState(for: model, with: settings) {
         case .missing(let choice): return .loraMissing(choice.name)
         case .mismatch(let choice, let base): return .loraMismatch(choice.name, base: base.displayName)
         case .none, .ready: break
         }
-        return memoryBlocker(for: model)
+        return memoryBlocker(for: model, with: settings)
     }
 
     /// Puts a word (a LoRA's trigger word) at the start of the prompt's first block.
@@ -495,12 +507,13 @@ final class AppModel {
         case mismatch(LoRAChoice, LoRABase)
     }
 
-    private func loraGigabytes(for model: ModelDescriptor) -> Double {
-        guard case .ready(_, let entry) = loraState(for: model) else { return 0 }
+    private func loraGigabytes(for model: ModelDescriptor, with settings: GenerationSettings) -> Double {
+        guard case .ready(_, let entry) = loraState(for: model, with: settings) else { return 0 }
         return Double(entry.bytes) / Double(1 << 30)
     }
 
-    func loraState(for model: ModelDescriptor) -> LoRAState {
+    func loraState(for model: ModelDescriptor, with settings: GenerationSettings? = nil) -> LoRAState {
+        let settings = settings ?? self.settings
         guard let choice = settings.lora(for: model.family) else { return .none }
         guard let entry = loraLibrary.entry(choice.file) else { return .missing(choice) }
         if let base = entry.info?.base, base.fits(model) == false { return .mismatch(choice, base) }
@@ -509,7 +522,7 @@ final class AppModel {
 
     /// A generation this Mac cannot hold: the engine would run out of memory and die with it, so
     /// it is refused, with the change that would make it fit.
-    private func memoryBlocker(for model: ModelDescriptor) -> Blocker? {
+    private func memoryBlocker(for model: ModelDescriptor, with settings: GenerationSettings) -> Blocker? {
         let size = settings.size(for: model.family)
         let frames = model.family.media == .video ? settings.videoFrames
             : model.family.isSong ? Int(settings.songSeconds * 25)
@@ -517,7 +530,7 @@ final class AppModel {
         guard let peak = MemoryEstimate.peak(model: model, size: size, frames: frames, lowMemory: settings.lowMemory)
         else { return nil }
         // A LoRA's matrices stay in memory beside the model's, as large as its file.
-        let needed = peak + loraGigabytes(for: model)
+        let needed = peak + loraGigabytes(for: model, with: settings)
         guard needed > MemoryEstimate.available() else { return nil }
         let fitsAtAll = { (candidate: ModelDescriptor) in
             MemoryEstimate.smallestPeak(model: candidate).map { $0 <= MemoryEstimate.available() } ?? false
@@ -539,7 +552,9 @@ final class AppModel {
     }
 
     /// The settings name a reference image whose file is still there.
-    var hasReferenceImage: Bool {
+    var hasReferenceImage: Bool { hasReferenceImage(in: settings) }
+
+    private func hasReferenceImage(in settings: GenerationSettings) -> Bool {
         settings.referenceImage.map { FileManager.default.fileExists(atPath: HistoryStore.referenceURL($0).path) } ?? false
     }
 
@@ -552,7 +567,17 @@ final class AppModel {
 
     func generate() {
         guard blocker == nil, let model = selectedModel else { return }
+        viewer = .live
+        enqueue(model, with: settings)
+    }
+
+    /// Queues what `settings` ask of `model` (one job a seed) and starts on it. The caller has
+    /// checked `blocker(for:with:)`. The controls are not read: the MCP server queues an agent's
+    /// request this way, next to what the window asks.
+    @discardableResult
+    func enqueue(_ model: ModelDescriptor, with settings: GenerationSettings) -> [GenerationJob] {
         preloadDeclined = false
+        var jobs: [GenerationJob] = []
         let isVideo = model.family.media == .video
         let isObject = model.family.media == .model3D
         let isSound = model.family.media == .audio
@@ -607,9 +632,10 @@ final class AppModel {
             let job = GenerationJob(model: model, request: request, outputURL: output)
             job.plan = TimeEstimate.plan(model: model, request: request, history: history.items, models: models)
             queue.append(job)
+            jobs.append(job)
         }
-        viewer = .live
         pump()
+        return jobs
     }
 
     /// What the "+" after the history starts from: the last generation queued, running or finished.
@@ -672,6 +698,7 @@ final class AppModel {
         }
         queue.removeFirst()
         guard let location = installed[job.model.id] else {
+            job.failure = "\(job.model.name) is no longer on disk."
             alert = AppAlert(title: "Model not found", message: "\(job.model.name) is no longer on disk.")
             pump()
             return
@@ -702,6 +729,7 @@ final class AppModel {
             ))
         } catch {
             activeJob = nil
+            job.failure = error.localizedDescription
             alert = AppAlert(title: "Couldn’t start generating", message: error.localizedDescription, offersLog: true)
         }
     }
@@ -750,7 +778,9 @@ final class AppModel {
             pump()
         case "failed":
             activeJob = nil
+            job.failure = event.message ?? "Unknown error"
             let dropped = queue.count
+            for queued in queue { queued.failure = "Cancelled: the generation before it failed." }
             queue.removeAll()
             alert = AppAlert(
                 title: "Generation failed",
@@ -809,6 +839,7 @@ final class AppModel {
 
     private func backendCrashed(_ message: String) {
         guard isBusy else { return }
+        for job in pendingJobs { job.failure = message }
         activeJob = nil
         queue.removeAll()
         queueChanged()
@@ -1009,7 +1040,7 @@ final class AppModel {
     }
 
     /// Settings for a first launch: the model's steps and guidance, Save memory below 64 GB.
-    private static func initialSettings(for model: ModelDescriptor?) -> GenerationSettings {
+    static func initialSettings(for model: ModelDescriptor?) -> GenerationSettings {
         var initial = GenerationSettings()
         // At 1024 px with everything resident Ming-Image peaks at ~35 GB and Qwen-Image at
         // ~43 GB (~15 and ~21 GB with Save memory): below 64 GB the full-speed mode would swap.

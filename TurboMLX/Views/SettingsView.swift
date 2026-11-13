@@ -6,6 +6,9 @@ struct SettingsView: View {
             Tab("Engine", systemImage: "cpu") { EngineSettings() }
             Tab("Models", systemImage: "square.stack.3d.up") { ModelsSettings() }
             Tab("History", systemImage: "clock.arrow.circlepath") { HistorySettings() }
+            #if !SEALED
+            Tab("Agents", systemImage: "point.3.connected.trianglepath.dotted") { AgentsSettings() }
+            #endif
             Tab("About", systemImage: "info.circle") { AboutSettings() }
         }
         .frame(width: 560, height: 440)
@@ -279,6 +282,85 @@ private struct HistorySettings: View {
         }
     }
 }
+
+#if !SEALED
+/// The MCP server: whether agents on this Mac may use the app, and what to give them to reach it.
+private struct AgentsSettings: View {
+    @Environment(AppModel.self) private var app
+    @State private var port = ""
+
+    var body: some View {
+        let server = app.mcp
+        Form {
+            Section {
+                Toggle("Let agents on this Mac use Turbo MLX", isOn: Binding(get: { server.isEnabled }, set: { server.isEnabled = $0 }))
+                LabeledContent("Status", value: statusText)
+                LabeledContent("Port") {
+                    TextField("Port", text: $port)
+                        .labelsHidden()
+                        .frame(width: 80)
+                        .multilineTextAlignment(.trailing)
+                        .onSubmit { applyPort() }
+                }
+            } footer: {
+                Text("An MCP server: agents such as Claude list the models, queue generations and get the files. What they queue runs after your own and shows in the history. Only programs on this Mac can reach it, and only with the token.")
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Connection") {
+                copyable("Address", server.address)
+                copyable("Token", server.token, shown: String(server.token.prefix(8)) + "…")
+                copyable("Claude Code", command, shown: "claude mcp add …")
+                HStack {
+                    Spacer()
+                    Button("New Token") { server.renewToken() }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { port = String(server.port) }
+    }
+
+    private var statusText: String {
+        switch app.mcp.status {
+        case .off: "Off"
+        case .starting: "Starting…"
+        case .listening: "Listening"
+        case .failed(let message): message
+        }
+    }
+
+    /// What adds the server to Claude Code, as an example of what an agent needs: the address,
+    /// and the token as a bearer.
+    private var command: String {
+        "claude mcp add --transport http turbo-mlx \(app.mcp.address) --header \"Authorization: Bearer \(app.mcp.token)\""
+    }
+
+    private func applyPort() {
+        guard let number = Int(port.trimmingCharacters(in: .whitespaces)), (1024...65535).contains(number) else {
+            port = String(app.mcp.port)
+            return
+        }
+        app.mcp.port = number
+    }
+
+    private func copyable(_ label: String, _ value: String, shown: String? = nil) -> some View {
+        LabeledContent(label) {
+            HStack {
+                Text(shown ?? value)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(value, forType: .string)
+                }
+            }
+        }
+    }
+}
+#endif
 
 private struct AboutSettings: View {
     @Environment(AppModel.self) private var app
