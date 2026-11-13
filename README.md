@@ -188,6 +188,31 @@ adds a few seconds to load it).
 Newer chips (M3, M4, M5) and Max or Ultra ones with more graphics cores are faster; a base M1 or
 M2 is slower. The estimate on the *Generate* button learns from your own Mac after a few images.
 
+## Agents (MCP)
+
+Agents such as Claude can use the app through the [Model Context Protocol](https://modelcontextprotocol.io):
+turn on *Settings → Agents → Let agents on this Mac use Turbo MLX*, and give the agent the address
+and the token shown there. For Claude Code, the same pane has the command to copy:
+
+```
+claude mcp add --transport http turbo-mlx http://127.0.0.1:8733/mcp --header "Authorization: Bearer <token>"
+```
+
+The agent gets four tools:
+
+| Tool | What it does |
+| --- | --- |
+| `list_models` | The models, what each makes and whether it is downloaded. |
+| `generate` | Queues a generation (`model`, `prompt`, and if wanted `width`, `height`, `steps`, `guidance`, `seed`, `negative_prompt`, `lyrics`, `duration`) and returns its job at once. |
+| `get_job` | Queued, running (with its step), done (with the file's path), failed or cancelled. `wait_seconds` waits for the end. |
+| `cancel_job` | Stops a job that is queued or running. |
+
+What an agent queues runs after your own generations and shows in the window and the history
+like them. The app must be open. The server is off until you turn it on, listens on this Mac
+only (127.0.0.1) and answers nothing without the token; *New Token* turns away the agents set up
+with the old one. Agents cannot download models, and cannot yet give a reference picture, a LoRA
+or the upscaler and 3D settings. The sealed build has no server.
+
 ## Privacy and updates
 
 Prompts, images and videos never leave the Mac. Besides downloading the models from Hugging
@@ -348,6 +373,10 @@ open -n --env TURBO_MLX_HOME='~/first-run' "path/to/Turbo MLX.app"
 SwiftUI ── JSON lines (stdin/stdout) ──▶ turbo-engine serve ──▶ MLX Swift (GPU)
 ```
 
+- **MCP server.** `TurboMLX/Services/MCP/`: a small HTTP/1.1 listener on Network.framework
+  (`HTTPListener`), JSON-RPC and the Streamable HTTP transport over it (`MCPServer`), and the tools
+  (`MCPTools`), which queue through `AppModel.enqueue(_:with:)`, the same way the Generate button
+  does. No dependency; left out of the sealed build, which may not listen (`#if !SEALED`).
 - **Engine.** `Engine/` is a Swift package that runs every family of the catalog (FLUX.2 Klein,
   FLUX 3 Image Klein from BFL's own checkpoint, MOSS-Image from OpenMOSS's (checked against its PyTorch pipeline), Z-Image Turbo, Qwen-Image 2512 and Qwen-Image-Edit 2511, Ming-Image from mflux's checkpoints,
   SenseNova-U1.5 from mlx-community's, LTX-2.3 and LTX-2.5 from dgrauet's, the SeedVR2 upscaler from its

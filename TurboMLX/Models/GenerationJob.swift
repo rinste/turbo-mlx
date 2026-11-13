@@ -51,6 +51,9 @@ final class GenerationJob: Identifiable {
     var reportedTotal: Int?
     var startedAt: Date?
     var isCancelling = false
+    /// Why it ended without a file, once it has: the engine's error, or the one that dropped it
+    /// from the queue. A job stopped by hand has none.
+    var failure: String?
     /// Its expected seconds step by step (TimeEstimate), set when it is queued.
     var plan: TimeEstimate.Plan?
     private(set) var denoiseStartedAt: Date?
