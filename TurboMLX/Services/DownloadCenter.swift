@@ -138,11 +138,23 @@ final class DownloadCenter {
     private static func checkSpace(for needed: Int64, in folder: URL) throws {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         guard needed > 0,
-              let free = (try? folder.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
-                  .volumeAvailableCapacityForImportantUsage,
+              let free = freeSpace(in: folder),
               free < needed + (2 << 30)
         else { return }
         throw Problem.notEnoughSpace(needed: needed, free: free)
+    }
+
+    /// Free bytes on the folder's volume, or nil when the volume does not say.
+    /// macOS only works out the "important usage" figure on APFS: on ExFAT and other
+    /// external formats it reads 0, so the plain figure stands in there.
+    private static func freeSpace(in folder: URL) -> Int64? {
+        let values = try? folder.resourceValues(forKeys: [
+            .volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey,
+        ])
+        if let important = values?.volumeAvailableCapacityForImportantUsage, important > 0 {
+            return important
+        }
+        return values?.volumeAvailableCapacity.map(Int64.init)
     }
 
     private func update(_ model: ModelDescriptor, total: Int64) { update(key: model.id, total: total) }
