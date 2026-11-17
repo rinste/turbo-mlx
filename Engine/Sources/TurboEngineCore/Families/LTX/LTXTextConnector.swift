@@ -155,14 +155,29 @@ final class LTXTextEmbeddingProjection: Module {
         super.init()
     }
 
+    /// The projection's input is 188,160 wide: one matmul over every token runs long enough for the GPU watchdog
+    /// (kIOGPUCommandBufferCallbackErrorImpactingInteractivity) to kill the command buffer, so the tokens go
+    /// through it in slices, each evaluated before the next.
+    static func chunked(_ x: MLXArray, through linear: Linear, tokens: Int = 64) -> MLXArray {
+        let length = x.shape[1]
+        var parts: [MLXArray] = []
+        var start = 0
+        while start < length {
+            let end = min(start + tokens, length)
+            let part = linear(x[0..., start ..< end, 0...])
+            eval(part)
+            parts.append(part)
+            start = end
+        }
+        return concatenated(parts, axis: 1)
+    }
+
     /// Each projection sees the features rescaled by √(its width / Gemma's).
     func callAsFunction(_ features: MLXArray) -> (video: MLXArray, audio: MLXArray) {
         let videoScale = Float((Double(videoAggregateEmbed.weight.shape[0]) / Double(embeddingDim)).squareRoot())
-        let video = videoAggregateEmbed(features * videoScale)
-        eval(video)
+        let video = Self.chunked(features * videoScale, through: videoAggregateEmbed)
         let audioScale = Float((Double(audioAggregateEmbed.weight.shape[0]) / Double(embeddingDim)).squareRoot())
-        let audio = audioAggregateEmbed(features * audioScale)
-        eval(audio)
+        let audio = Self.chunked(features * audioScale, through: audioAggregateEmbed)
         return (video, audio)
     }
 }
