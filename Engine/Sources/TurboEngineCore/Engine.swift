@@ -257,6 +257,7 @@ public final class Engine {
             isCancelled: { [self] in isCancelled(id) },
             audio: { samples, rate in sound = (samples, rate) },
             frames: { frames in
+                let frames = try VideoOutput.crop(frames: frames, width: params.videoWidth, height: params.videoHeight)
                 if writer == nil {
                     writer = try VideoOutput(url: output, width: frames.shape[2], height: frames.shape[1],
                                              fps: request.fps ?? 24, audio: sound.samples, sampleRate: sound.rate)
@@ -305,8 +306,8 @@ public final class Engine {
             "path": params.output,
             "poster": poster.path,
             "seed": params.seed,
-            "width": clip.width,
-            "height": clip.height,
+            "width": writer.width,
+            "height": writer.height,
             "frames": writer.frameCount,
             "fps": clip.fps,
             "seconds": (Date().timeIntervalSince(started) * 100).rounded() / 100,

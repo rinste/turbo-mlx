@@ -120,7 +120,7 @@ nonisolated enum MemoryEstimate {
     private static func clipPeak(model: ModelDescriptor, size: PixelSize, frames: Int, lowMemory: Bool, memory: Double) -> Double {
         let heavier = (model.id.contains("q8") ? (lowMemory ? 8.6 : 7.1) : 0)
             + (model.family == .ltx25 ? (lowMemory ? 1 : 3.1) : 0)
-        let megapixels = size.megapixels
+        let megapixels = size.ltxRenderSize.megapixels
         let latentFrames = Double((max(frames, 1) - 1) / 8 + 1)
         let fitted = lowMemory
             ? 11.63 + heavier + 14.2 * megapixels + 0.1575 * megapixels * latentFrames

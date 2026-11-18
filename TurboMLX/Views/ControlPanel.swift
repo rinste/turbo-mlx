@@ -1494,13 +1494,23 @@ private struct QualityFilesRow: View {
 
 // MARK: - Format
 
-/// The aspect ratio, then the resolution it is drawn at (a clip's, smaller); a custom size, set
-/// under Advanced, takes the place of both.
+/// Aspect ratio and resolution. Video also offers a custom size here.
 private struct FormatSection: View {
     @Binding var settings: GenerationSettings
     let family: ModelFamily
 
     private var video: Bool { family.media == .video }
+
+    private var videoResolution: Binding<Int?> {
+        Binding {
+            settings.usesCustomSize ? nil : settings.videoResolution
+        } set: { resolution in
+            var updated = settings
+            if let resolution { updated.videoResolution = resolution }
+            updated.usesCustomSize = resolution == nil
+            settings = updated
+        }
+    }
 
     var body: some View {
         Section("Format") {
@@ -1529,16 +1539,30 @@ private struct FormatSection: View {
                     .help("\(aspect.rawValue) · \(aspect.usage)")
                 }
             }
-            Picker("Resolution", selection: video ? $settings.videoResolution : $settings.resolution) {
-                ForEach(video ? GenerationSettings.videoResolutions : GenerationSettings.resolutions, id: \.self) { resolution in
-                    Text(verbatim: "\(resolution)").tag(resolution)
+            if video {
+                Picker("Resolution", selection: videoResolution) {
+                    ForEach(GenerationSettings.videoResolutions, id: \.self) { resolution in
+                        Text(verbatim: "\(resolution)").tag(Optional(resolution))
+                    }
+                    ForEach(GenerationSettings.hdVideoResolutions, id: \.self) { resolution in
+                        Text(resolution == 2160 ? "4K" : "\(resolution)p").tag(Optional(resolution))
+                    }
+                    Text("Custom size").tag(nil as Int?)
                 }
+                .pickerStyle(.menu)
+                SizeRows(settings: $settings, family: family)
+            } else {
+                Picker("Resolution", selection: $settings.resolution) {
+                    ForEach(GenerationSettings.resolutions, id: \.self) { resolution in
+                        Text(verbatim: "\(resolution)").tag(resolution)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .disabled(settings.usesCustomSize)
+                .help(settings.usesCustomSize
+                    ? "Custom size is on, under Advanced."
+                    : "The side of a square image of the same area, in pixels.")
             }
-            .pickerStyle(.segmented)
-            .disabled(settings.usesCustomSize)
-            .help(settings.usesCustomSize
-                ? "Custom size is on, under Advanced."
-                : "The side of a square image of the same area, in pixels.")
         }
     }
 }
@@ -1804,8 +1828,7 @@ private struct AdvancedSection: View {
                 // An upscale has one step, and its size is its picture's, times the scale.
                 if !family.isUpscaler {
                     StepsRow(settings: $settings, model: model)
-                    // A 3D object and a song have no size.
-                    if family.media != .model3D, family.media != .audio { SizeRows(settings: $settings, family: family) }
+                    if family.media == .image { SizeRows(settings: $settings, family: family) }
                 }
                 OutputRows(settings: $settings, family: family)
                 MemoryRows(settings: $settings, family: family)
@@ -1859,8 +1882,7 @@ private struct StepsRow: View {
     }
 }
 
-/// A width and height of the image's own in place of the format's aspect ratio and resolution,
-/// sides rounded to the family's multiple (a clip's to 64), and the size that makes.
+/// The exported size, with editable dimensions when Custom size is selected.
 private struct SizeRows: View {
     @Binding var settings: GenerationSettings
     let family: ModelFamily
@@ -1868,7 +1890,7 @@ private struct SizeRows: View {
     private var video: Bool { family.media == .video }
 
     var body: some View {
-        Toggle("Custom size", isOn: $settings.usesCustomSize)
+        if !video { Toggle("Custom size", isOn: $settings.usesCustomSize) }
 
         if settings.usesCustomSize {
             HStack {
@@ -1877,7 +1899,6 @@ private struct SizeRows: View {
                 TextField("Height", value: $settings.customHeight, format: .number.grouping(.never))
             }
             .multilineTextAlignment(.center)
-            .labelsHidden()
         }
 
         let size = settings.size(for: family)
