@@ -46,6 +46,9 @@ public struct GenerationParams: Decodable {
     /// Video families: frame count, frame rate, and the image the clip starts from.
     public let frames: Int?
     public let fps: Double?
+    /// Optional MP4 dimensions inside the aligned render size. The writer uses a centered crop.
+    public let videoWidth: Int?
+    public let videoHeight: Int?
     /// LTX-2.5: the length predicted from the prompt, at most `frames`.
     public let autoDuration: Bool?
     public let image: String?

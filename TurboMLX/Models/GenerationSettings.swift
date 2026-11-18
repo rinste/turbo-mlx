@@ -12,6 +12,11 @@ nonisolated struct PixelSize: Hashable, Codable, Sendable {
     static func snapped(_ value: Double, multiple: Int = 16) -> Int {
         max(256, min(4096, Int((value / Double(multiple)).rounded()) * multiple))
     }
+
+    /// LTX generates on a 64-pixel grid. Pad before generation so the export can be cropped to size.
+    var ltxRenderSize: PixelSize {
+        PixelSize(width: ((width + 63) / 64) * 64, height: ((height + 63) / 64) * 64)
+    }
 }
 
 nonisolated enum AspectRatio: String, CaseIterable, Codable, Identifiable, Sendable {
@@ -101,6 +106,7 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
     static let resolutions = [512, 768, 1024, 1536, 2048]
     /// Video: 640 gives 768 × 512 at 3:2 and 768 gives 1024 × 576 at 16:9, the sizes LTX-2 is at ease with.
     static let videoResolutions = [512, 640, 768]
+    static let hdVideoResolutions = [1080, 1440, 2160]
     static let videoDurations = 1.0...10.0
     static let videoFrameRates = [24, 25, 30]
     static let guidanceRange = 1.0...7.0
@@ -169,11 +175,20 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
             : aspect.size(base: resolution)
     }
 
-    /// A clip's size: sides multiples of 64.
+    /// The clip's exported size. The HD presets specify the short side in pixels.
     var videoSize: PixelSize {
-        usesCustomSize
-            ? PixelSize(width: PixelSize.snapped(Double(customWidth), multiple: 64), height: PixelSize.snapped(Double(customHeight), multiple: 64))
-            : aspect.size(base: videoResolution, multiple: 64)
+        if usesCustomSize {
+            return PixelSize(width: PixelSize.snapped(Double(customWidth), multiple: 2),
+                             height: PixelSize.snapped(Double(customHeight), multiple: 2))
+        }
+        return Self.videoSize(aspect: aspect, resolution: videoResolution)
+    }
+
+    private static func videoSize(aspect: AspectRatio, resolution: Int) -> PixelSize {
+        guard hdVideoResolutions.contains(resolution) else { return aspect.size(base: resolution, multiple: 64) }
+        let ratio = aspect.ratio
+        let longSide = PixelSize.snapped(Double(resolution) * max(ratio, 1 / ratio), multiple: 2)
+        return ratio >= 1 ? PixelSize(width: longSide, height: resolution) : PixelSize(width: resolution, height: longSide)
     }
 
     func size(for family: ModelFamily) -> PixelSize {
@@ -305,9 +320,10 @@ nonisolated struct GenerationSettings: Codable, Equatable, Sendable {
 
     /// Picks the preset that produced `size`, or switches to a custom size.
     mutating func apply(size: PixelSize, video: Bool = false, multiple: Int = 16) {
+        let resolutions = video ? Self.videoResolutions + Self.hdVideoResolutions : Self.resolutions
         for aspect in AspectRatio.allCases {
-            for resolution in video ? Self.videoResolutions : Self.resolutions
-            where aspect.size(base: resolution, multiple: video ? 64 : multiple) == size {
+            for resolution in resolutions
+            where (video ? Self.videoSize(aspect: aspect, resolution: resolution) : aspect.size(base: resolution, multiple: multiple)) == size {
                 self.aspect = aspect
                 if video { videoResolution = resolution } else { self.resolution = resolution }
                 usesCustomSize = false

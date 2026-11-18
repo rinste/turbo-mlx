@@ -119,7 +119,16 @@ nonisolated enum WorkerCommand: Sendable {
             "upcoming_prompts": upcomingPrompts,
         ]
         if let negativePrompt = request.negativePrompt { params["negative_prompt"] = negativePrompt }
-        if let frames = request.frames { params["frames"] = frames }
+        if let frames = request.frames {
+            params["frames"] = frames
+            let renderSize = request.size.ltxRenderSize
+            if renderSize != request.size {
+                params["width"] = renderSize.width
+                params["height"] = renderSize.height
+                params["video_width"] = request.size.width
+                params["video_height"] = request.size.height
+            }
+        }
         if let fps = request.fps { params["fps"] = Double(fps) }
         if request.autoDuration == true { params["auto_duration"] = true }
         if let upscale = request.upscale { params["upscale"] = upscale }

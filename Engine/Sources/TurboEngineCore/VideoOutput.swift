@@ -113,6 +113,19 @@ public final class VideoOutput {
         CMTime(value: CMTimeValue((Double(index) * Double(timescale) / fps).rounded()), timescale: timescale)
     }
 
+    /// Crop the decoded batch before encoding so both the MP4 and its poster have the same size.
+    static func crop(frames: MLXArray, width: Int?, height: Int?) throws -> MLXArray {
+        if width == nil, height == nil { return frames }
+        guard let width, let height, width > 0, height > 0,
+              width.isMultiple(of: 2), height.isMultiple(of: 2),
+              width <= frames.shape[2], height <= frames.shape[1] else {
+            throw OutputError.cannotWrite("the video dimensions must be even and fit inside the rendered frame")
+        }
+        let x = (frames.shape[2] - width) / 2
+        let y = (frames.shape[1] - height) / 2
+        return frames[0..., y ..< y + height, x ..< x + width, 0...]
+    }
+
     /// Appends frames [N, H, W, 3] uint8.
     public func append(frames: MLXArray) throws {
         let count = frames.shape[0]
