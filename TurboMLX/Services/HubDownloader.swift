@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Downloads a Hugging Face repository into the hub cache, in the layout `huggingface_hub` uses:
@@ -28,6 +29,7 @@ nonisolated final class HubDownloader: Sendable {
         case revisionGone(String, revision: String)
         case malformedListing
         case truncated(String, expected: Int64, got: Int64)
+        case checksumMismatch(String)
 
         var errorDescription: String? {
             switch self {
@@ -46,6 +48,8 @@ nonisolated final class HubDownloader: Sendable {
                 "Hugging Face returned an unexpected file listing."
             case .truncated(let path, let expected, let got):
                 "\(path) is incomplete: \(got) of \(expected) bytes. The download resumes next time."
+            case .checksumMismatch(let path):
+                "\(path) does not match its checksum on Hugging Face and was deleted. Download again."
             }
         }
     }
@@ -268,8 +272,37 @@ nonisolated final class HubDownloader: Sendable {
             counter.add(-download.written)
             throw error
         }
+        guard try Self.matchesChecksum(partial, etag: file.etag, size: file.size) else {
+            try? fileManager.removeItem(at: partial)
+            counter.add(-file.size)
+            throw DownloadError.checksumMismatch(file.path)
+        }
         if fileManager.fileExists(atPath: destination.path) { try fileManager.removeItem(at: destination) }
         try fileManager.moveItem(at: partial, to: destination)
+    }
+
+    /// Whether the file is the one the hub named: the etag is the sha256 of an LFS file, and the
+    /// git blob id (sha1 of `blob <size>\0` and the bytes) of any other. Other etags are not checked.
+    static func matchesChecksum(_ url: URL, etag: String, size: Int64) throws -> Bool {
+        let expected = etag.lowercased()
+        guard expected.allSatisfy(\.isHexDigit) else { return true }
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        func digest<H: HashFunction>(_ hash: inout H) throws -> String {
+            while let chunk = try handle.read(upToCount: 8 << 20), !chunk.isEmpty { hash.update(data: chunk) }
+            return hash.finalize().map { String(format: "%02x", $0) }.joined()
+        }
+        switch expected.count {
+        case 64:
+            var hash = SHA256()
+            return try digest(&hash) == expected
+        case 40:
+            var hash = Insecure.SHA1()
+            hash.update(data: Data("blob \(size)\0".utf8))
+            return try digest(&hash) == expected
+        default:
+            return true
+        }
     }
 
     /// Runs `attempt` again after a failure of the network or the server, waiting longer each
