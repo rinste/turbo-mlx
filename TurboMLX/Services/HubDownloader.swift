@@ -152,6 +152,12 @@ nonisolated final class HubDownloader: Sendable {
             if let close = match.firstIndex(of: ">") {
                 next = String(match[match.index(after: match.startIndex)..<close])
             }
+            // The next page gets the token too: follow it only on the hub itself.
+            if let next {
+                guard let url = URL(string: next), url.scheme == "https", url.host() == "huggingface.co" else {
+                    throw DownloadError.malformedListing
+                }
+            }
         }
         return (entries, next)
     }
