@@ -118,7 +118,7 @@ nonisolated final class HubDownloader: Sendable {
             _ = try await json(from: "https://huggingface.co/api/models/\(repo)")
             throw DownloadError.revisionGone(repo, revision: revision)
         }
-        guard let commit = info["sha"] as? String else { throw DownloadError.malformedListing }
+        guard let commit = info["sha"] as? String, Self.isHexID(commit) else { throw DownloadError.malformedListing }
         let regexes = patterns.map(Self.regex(fnmatch:))
         var files: [RemoteFile] = []
         var page: String? = "https://huggingface.co/api/models/\(repo)/tree/\(commit)?recursive=true"
@@ -131,6 +131,8 @@ nonisolated final class HubDownloader: Sendable {
                 let lfs = entry["lfs"] as? [String: Any]
                 let size = ((lfs?["size"] as? NSNumber) ?? (entry["size"] as? NSNumber))?.int64Value ?? 0
                 guard let etag = (lfs?["oid"] as? String) ?? (entry["oid"] as? String) else { continue }
+                // Both end up in local paths: refuse anything that could leave the repository's folder.
+                guard Self.isSafeRelativePath(path), Self.isHexID(etag) else { throw DownloadError.malformedListing }
                 files.append(RemoteFile(path: path, size: size, etag: etag))
             }
             page = next
@@ -163,6 +165,17 @@ nonisolated final class HubDownloader: Sendable {
             throw DownloadError.malformedListing
         }
         return object
+    }
+
+    /// A git commit or blob id (40 hex digits) or an LFS sha256 (64).
+    static func isHexID(_ id: String) -> Bool {
+        (id.count == 40 || id.count == 64) && id.allSatisfy(\.isHexDigit)
+    }
+
+    /// A path inside the snapshot: relative, without empty, `.` or `..` components.
+    static func isSafeRelativePath(_ path: String) -> Bool {
+        guard !path.isEmpty, !path.hasPrefix("/"), !path.contains("\0") else { return false }
+        return path.split(separator: "/", omittingEmptySubsequences: false).allSatisfy { $0 != "" && $0 != "." && $0 != ".." }
     }
 
     /// Python's fnmatch as a regular expression: `*` (and `**`) match anything, `?` one character.
